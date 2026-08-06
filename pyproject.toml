@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "emailcheck"
+version = "0.0.0"
+description = "Conservative evidence-based email deliverability checker"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Project maintainers" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.15,<2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+  "pytest-cov>=6,<7",
+  "ruff>=0.11,<1",
+]
+phase1 = [
+  "idna>=3.10,<4",
+]
+phase2 = [
+  "dnspython>=2.7,<3",
+]
+phase6 = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "pydantic>=2.10,<3",
+  "typer>=0.15,<1",
+  "uvicorn[standard]>=0.34,<1",
+]
+service = [
+  "asyncpg>=0.30,<1",
+  "redis>=5.2,<6",
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "structlog>=25.1,<26",
+]
+
+[project.scripts]
+emailcheck = "emailcheck.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/emailcheck"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+asyncio_mode = "strict"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "B",
+  "UP",
+  "SIM",
+  "RUF",
+  "ASYNC",
+  "S",
+]
+ignore = [
+  "S101",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["emailcheck"]
+warn_unused_configs = true

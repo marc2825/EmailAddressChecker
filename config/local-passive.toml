@@ -1,0 +1,12 @@
+profile = "local-passive"
+active_probes_enabled = false
+
+[cache]
+backend = "memory"
+
+[storage]
+backend = "none"
+
+[logging]
+level = "INFO"
+redact_addresses = true

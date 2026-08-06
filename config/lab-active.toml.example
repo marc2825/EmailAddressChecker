@@ -1,0 +1,28 @@
+profile = "lab-active"
+active_probes_enabled = true
+destination_allowlist = [
+  "mx.test.example",
+]
+
+[smtp]
+port = 25
+connect_timeout_seconds = 3.0
+command_timeout_seconds = 3.0
+session_timeout_seconds = 12.0
+max_reply_line_bytes = 2048
+max_reply_lines = 40
+require_static_sender_identity = true
+
+[sender]
+helo = "probe.example.net"
+mail_from = "probe@example.net"
+
+[rate_limit]
+global_concurrency = 2
+per_mx_concurrency = 1
+per_domain_interval_seconds = 60
+
+[logging]
+level = "DEBUG"
+redact_addresses = true
+store_raw_smtp_evidence = false

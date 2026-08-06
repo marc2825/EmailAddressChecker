@@ -1,0 +1,30 @@
+profile = "service-active"
+active_probes_enabled = false
+
+[api]
+authentication_required = true
+active_checks_async_only = true
+
+[smtp]
+port = 25
+connect_timeout_seconds = 5.0
+command_timeout_seconds = 5.0
+session_timeout_seconds = 20.0
+max_reply_line_bytes = 2048
+max_reply_lines = 40
+
+[rate_limit]
+global_concurrency = 20
+per_mx_concurrency = 1
+unverified_domain_interval_seconds = 60
+unverified_domain_daily_limit = 20
+same_address_ttl_seconds = 86400
+
+[retention]
+request_plaintext_hours = 24
+raw_evidence_hours = 24
+account_history_days = 30
+
+[logging]
+level = "INFO"
+redact_addresses = true

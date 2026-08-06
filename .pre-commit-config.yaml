@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: forbidden-smtp-commands
+        name: Check forbidden SMTP commands
+        entry: python scripts/check_forbidden_smtp.py
+        language: system
+        pass_filenames: false
