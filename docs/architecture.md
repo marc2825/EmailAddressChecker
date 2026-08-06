@@ -48,6 +48,40 @@ that one construction path validates every target. A future syntax policy
 change, such as SMTPUTF8 support, is added as a domain policy rather than behind
 an I/O port. See ADR 0005.
 
+### Mail route
+
+DNS answers become a `MailRoute`, never a verdict. The distinctions it keeps are
+the ones later aggregation cannot recover:
+
+| Observation | Outcome | Later status |
+|---|---|---|
+| Authoritative NXDOMAIN | `domain_not_found` | hard invalid |
+| RFC 7505 Null MX alone | `null_mx` | hard invalid |
+| No MX and no A/AAAA | `no_mail_route` | hard invalid |
+| SERVFAIL, timeout, refused | `temporary_failure` | temporary |
+| MX records exist, none usable | `configuration_anomaly` | unknown |
+| A malformed answer anywhere | `configuration_anomaly` | unknown |
+| Every candidate address refused | `unsafe_destination` | unknown |
+| This project failed | `internal_error` | unknown, never about the domain |
+| Usable MX host | `mx_route` | a route, not a mailbox |
+| No MX, usable A/AAAA | `implicit_mx_route` | a route, not a mailbox |
+
+Only an authoritative absence on both address families reaches `no_mail_route`.
+A malformed answer, a refusal, a timeout, or a failure of this project's own
+proves nothing about the domain and never becomes a hard-invalid result.
+
+A route carries ordered candidates, each with its own status, so an exchanger
+that will not resolve is reported separately from a domain that cannot receive
+mail. `connectable_candidates` is empty for every outcome except the two route
+outcomes, so a Null MX cannot yield a destination later, and every candidate it
+does return carries at least one allowed address for Phase 4 to connect to.
+`MailRoute.reason` is derived from the outcome, so a route cannot report the
+reason code of a different outcome.
+
+Each resolved address passes the destination policy in `security/` before it
+becomes a candidate. That policy is a pure function and runs again in Phase 4
+against the address a socket actually connected to.
+
 ### Evidence
 
 An immutable observation produced by one layer. Evidence records:

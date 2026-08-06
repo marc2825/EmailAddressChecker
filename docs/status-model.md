@@ -122,6 +122,7 @@ under different statuses depending on the other evidence present.
 | `no_mail_route` | `dns` | No MX and no implicit A/AAAA route. |
 | `mx_available` | `dns` | Ordered MX candidates exist; a route, not recipient evidence. |
 | `implicit_mx_available` | `dns` | No MX; A/AAAA is used as the implicit route. |
+| `mx_configuration_anomaly` | `dns` | MX records exist but none is usable; never proof that the domain refuses mail. |
 | `unsafe_destination` | `dns` | The destination policy rejected the resolved address. |
 | `disposable_domain` | `passive_classification` | Domain is on the disposable dataset; risk only. |
 | `role_account` | `passive_classification` | Local part is on the role dataset; risk only. |
@@ -140,7 +141,7 @@ under different statuses depending on the other evidence present.
 | `rcpt_rejected_policy` | `smtp` | RCPT rejected for policy or security reasons (`5.7.x`). |
 | `smtp_temporary_failure` | `smtp` | Explicit `4xx` temporary response. |
 | `smtp_ambiguous_permanent_failure` | `smtp` | Permanent rejection that no enhanced code disambiguates. |
-| `mailbox_full` | `smtp` | Explicitly reported mailbox or storage condition. |
+| `mailbox_full` | `smtp` | Explicitly reported temporary mailbox or storage condition. |
 | `accept_all_suspected` | `accept_all` | The destination appears to accept every recipient (Phase 9). |
 | `internal_error` | `internal` | A local failure prevented a determination; never target invalidity. |
 

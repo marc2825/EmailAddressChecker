@@ -124,7 +124,12 @@ Unsupported syntax produces `unknown` with a specific reason.
 ## 7. DNS behavior
 
 - distinguish NXDOMAIN, NOERROR/no route, SERVFAIL, timeout, and malformed data;
-- detect Null MX and stop before SMTP;
+- detect Null MX and stop before SMTP, recognizing only the RFC 7505 form
+  (preference `0`, exchange `.`) as a refusal;
+- treat any other unusable MX configuration as a configuration anomaly that
+  resolves to `unknown`, never as proof that the domain refuses mail;
+- report an MX host that cannot be resolved separately from a domain that has no
+  mail route;
 - if no MX exists, evaluate A/AAAA as an implicit MX route;
 - respect positive and negative TTLs with configured caps;
 - retain ordered MX candidates;

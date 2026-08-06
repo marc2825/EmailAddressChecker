@@ -31,6 +31,22 @@
 - aggregation is deterministic;
 - adding a risk flag alone does not change deliverability.
 
+### DNS fixtures
+
+A fake resolver answers from a table. Required scenarios:
+
+- one MX; several preferences; equal preferences kept;
+- exchange with a trailing dot;
+- Null MX alone, and Null MX beside a real MX;
+- malformed, empty, and root exchanges;
+- no MX with A, with AAAA, and with both;
+- no MX and no addresses;
+- NXDOMAIN, SERVFAIL, timeout;
+- positive and negative TTL caps, TTL zero, and a missing TTL;
+- an MX host that fails while a sibling succeeds;
+- safe and unsafe addresses on one host;
+- a CNAME chain whose final address is forbidden.
+
 ### Integration
 
 - scripted SMTP server;
@@ -72,6 +88,14 @@ Required scenarios:
 
 ## 4. Invariants
 
+- no test reaches the network. `tests/conftest.py` makes name resolution,
+  stream connections, datagram sends, and the asyncio transports fail for the
+  whole suite, and `tests/test_no_network.py` fails if any of that stops
+  working. Datagram sends matter most: a DNS query needs neither `getaddrinfo`
+  nor `connect`, so blocking only the stream calls once let a real UDP query
+  through. The guard raises an `AssertionError` subclass and the DNS adapter
+  re-raises it rather than converting it into a failure value, so a blocked
+  call fails the test instead of being reported as a DNS result;
 - no forbidden SMTP command;
 - no more than one target RCPT;
 - no connection to unsafe IP;

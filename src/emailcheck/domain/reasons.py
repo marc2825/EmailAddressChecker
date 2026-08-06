@@ -15,6 +15,7 @@ class ReasonCode(StrEnum):
     NO_MAIL_ROUTE = "no_mail_route"
     MX_AVAILABLE = "mx_available"
     IMPLICIT_MX_AVAILABLE = "implicit_mx_available"
+    MX_CONFIGURATION_ANOMALY = "mx_configuration_anomaly"
     UNSAFE_DESTINATION = "unsafe_destination"
 
     DISPOSABLE_DOMAIN = "disposable_domain"

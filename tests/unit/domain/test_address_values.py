@@ -17,6 +17,7 @@ from emailcheck.domain.address import (
     parse_address,
     redact_address_text,
 )
+from emailcheck.domain.dns import HostName
 from emailcheck.ports.dns import DNSResolver
 from emailcheck.ports.smtp import SMTPProber
 
@@ -274,10 +275,17 @@ def test_raw_input_cannot_be_used_as_an_smtp_target() -> None:
     assert not hasattr(raw, "local_part")
 
 
-@pytest.mark.parametrize(
-    ("protocol", "method"),
-    [(DNSResolver, "resolve_mail_route"), (SMTPProber, "probe_recipient")],
-)
-def test_ports_accept_only_a_validated_address(protocol: type, method: str) -> None:
-    hints = get_type_hints(getattr(protocol, method))
+def test_the_smtp_port_accepts_only_a_validated_address() -> None:
+    hints = get_type_hints(SMTPProber.probe_recipient)
     assert hints["address"] is NormalizedAddress
+
+
+@pytest.mark.parametrize("method", ["query_mx", "query_a", "query_aaaa"])
+def test_the_dns_port_accepts_only_validated_values(method: str) -> None:
+    """No external I/O port may take raw text, whatever the query is."""
+    hints = get_type_hints(getattr(DNSResolver, method))
+    parameters = {name: hint for name, hint in hints.items() if name != "return"}
+    assert parameters
+    for name, hint in parameters.items():
+        assert hint in {HostName, NormalizedAddress}, f"{method}({name}) accepts {hint}"
+        assert hint is not str

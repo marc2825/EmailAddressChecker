@@ -62,8 +62,12 @@ Threat: malicious DNS directs the worker to internal services.
 Controls:
 
 - allow only the configured SMTP port;
-- reject private, loopback, link-local, multicast, reserved, documentation, and
-  metadata ranges;
+- reject private, loopback, link-local, multicast, reserved, documentation,
+  benchmark, carrier-grade NAT, and metadata ranges, plus any IPv6 address that
+  carries a forbidden IPv4 address inside it;
+- list the ranges explicitly rather than relying on `ipaddress.is_private` or
+  `is_global`, which would allow carrier-grade NAT, IPv6 multicast, and a NAT64
+  address reaching loopback (ADR 0006);
 - validate all A/AAAA answers and CNAME hops;
 - validate immediately before connect;
 - validate actual peer address;
