@@ -19,6 +19,35 @@ databases, DNS libraries, SMTP sockets, or Redis clients.
 
 ## 2. Core concepts
 
+### Address
+
+Untrusted text becomes a usable value through one path only:
+
+```text
+RawAddressInput
+  → parse_address
+  → AddressAccepted | AddressRejected
+  → NormalizedAddress
+```
+
+`RawAddressInput` holds the submitted text and a redacted display form. It has
+no SMTP target and no parsed parts, so raw input cannot be handed to an external
+I/O port. `parse_address` returns a result rather than raising: user mistakes
+are data, and only a programmer error raises. A rejection carries a specific
+issue, whether the input broke the supported grammar or is merely unsupported,
+and a public reason code, so aggregation never re-parses text.
+
+`NormalizedAddress` is the only address type the DNS and SMTP ports accept. Its
+parts validate themselves on construction, so it cannot exist in a state where
+its target would carry CR, LF, NUL, or a domain that differs from the one it
+displays.
+
+Parsing is pure domain logic, not a port. It performs no I/O and depends on no
+clock or randomness, and a replaceable implementation would weaken the guarantee
+that one construction path validates every target. A future syntax policy
+change, such as SMTPUTF8 support, is added as a domain policy rather than behind
+an I/O port. See ADR 0005.
+
 ### Evidence
 
 An immutable observation produced by one layer. Evidence records:
@@ -46,7 +75,9 @@ A deterministic aggregation of evidence:
 
 ### Ports
 
-- `AddressParser`
+Ports exist for external I/O, storage, and non-determinism: network, database,
+cache, rate limiting, time, and randomness.
+
 - `DNSResolver`
 - `DomainClassifier`
 - `SMTPProber`

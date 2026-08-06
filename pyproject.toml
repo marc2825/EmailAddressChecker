@@ -9,7 +9,11 @@ description = "Conservative evidence-based email deliverability checker"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Project maintainers" }]
-dependencies = []
+# See docs/adr/0005-idna-uts46-domain-encoding.md for why the standard library
+# is not sufficient for domain encoding.
+dependencies = [
+  "idna>=3.10,<4",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -18,9 +22,6 @@ dev = [
   "pytest-asyncio>=0.25,<1",
   "pytest-cov>=6,<7",
   "ruff>=0.11,<1",
-]
-phase1 = [
-  "idna>=3.10,<4",
 ]
 phase2 = [
   "dnspython>=2.7,<3",
