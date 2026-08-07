@@ -28,6 +28,7 @@ only, so a connection that landed on the right host at the wrong port passed.
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
@@ -43,6 +44,16 @@ from emailcheck.security.destination import DestinationDenyReason, evaluate_dest
 ALLOWED_SMTP_PORTS: Final[frozenset[int]] = frozenset({25})
 
 DEFAULT_SMTP_PORT: Final = 25
+
+#: The range a TCP port number may occupy at all. This is a shape check, not a
+#: permission: `ALLOWED_SMTP_PORTS` decides what may be connected to.
+MIN_PORT_NUMBER: Final = 1
+MAX_PORT_NUMBER: Final = 65535
+
+#: Characters that must never appear in an address this project holds, because
+#: an address reaching a command line or a log line carrying one is the
+#: injection this project exists not to have.
+_FORBIDDEN_IN_ADDRESS: Final = ("\r", "\n", "\x00")
 
 
 class DestinationRejection(StrEnum):
@@ -87,10 +98,44 @@ class PeerEndpoint:
     would trust a mapped address as a public IPv4 — gate 4B connects with
     `AF_INET` for an IPv4 candidate and `AF_INET6` for an IPv6 one, never relies
     on `AI_V4MAPPED`, and reports the peer in the family it connected with.
+
+    **The value guarantees the shape; `confirm_peer` decides the permission.**
+    Constructing one fixes that the address is a numeric IP carrying no CR, LF,
+    or NUL and that the port is a real port number — nothing more. Whether that
+    endpoint may be spoken to is `confirm_peer`'s answer, and it re-runs the
+    destination policy to give it. Keeping the two apart is deliberate: a value
+    that judged policy would make the policy skippable by holding a value.
     """
 
     address: str
     port: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.address, str):
+            raise SMTPContractError("a peer address must be text")
+        if not self.address:
+            raise SMTPContractError("a peer address cannot be empty")
+        for character in _FORBIDDEN_IN_ADDRESS:
+            if character in self.address:
+                raise SMTPContractError("a peer address cannot carry CR, LF, or NUL")
+        if isinstance(self.port, bool) or not isinstance(self.port, int):
+            raise SMTPContractError("a peer port must be a whole number, not a boolean")
+        if not MIN_PORT_NUMBER <= self.port <= MAX_PORT_NUMBER:
+            raise SMTPContractError(
+                f"a peer port must be within {MIN_PORT_NUMBER}..{MAX_PORT_NUMBER}"
+            )
+        if "%" in self.address:
+            # `ipaddress` accepts a scoped IPv6 address, but a scope identifier
+            # means the endpoint is meaningful only relative to one interface,
+            # which is a link-local peer. The transport refuses those already;
+            # the value refuses them too so no other caller has to remember.
+            raise SMTPContractError("a peer address cannot carry a scope identifier")
+        try:
+            ipaddress.ip_address(self.address)
+        except ValueError:
+            # A name here would mean the transport resolved something, and a
+            # resolved name could be anywhere. `getpeername()` reports numbers.
+            raise SMTPContractError("a peer address must be a numeric IP address") from None
 
 
 @dataclass(frozen=True, slots=True)

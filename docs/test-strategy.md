@@ -140,6 +140,36 @@ Tested without any transport, in Phase 4A:
 - a wire line whose verb comes from an f-string placeholder, percent
   formatting, `str.format`, or a leading name is refused; the same forms with a
   literal verb are not;
+- the transport picks `AF_INET` for an IPv4 destination and `AF_INET6` for an
+  IPv6 one, and an IPv4-mapped, 6to4, cross-family, or scoped peer is refused
+  rather than unwrapped;
+- a destination the policy refuses at connect time creates no socket at all;
+- the transport exposes `connect` and nothing else, `connect` takes an
+  `ApprovedDestination` and nothing else, and neither the port nor the adapter
+  publishes a write method;
+- a refused peer closes the connection, exactly once, with zero writes recorded;
+- an exception between connecting and confirming still closes;
+- a timeout must be positive, finite, non-boolean, and within a maximum; a limit
+  must be a positive whole number and a total may not be smaller than one line;
+- a `PeerEndpoint` must be a numeric address with no CR, LF, NUL, scope
+  identifier, whitespace, brackets, or port glued on, and a port within
+  1..65535; a boolean port is refused because `True` would mean port one. The
+  value guarantees the shape and nothing else — `confirm_peer` still re-runs the
+  destination policy, and a test hands it an endpoint built with its own
+  validation bypassed to prove the two barriers are independent;
+- an `AsyncioSMTPConnection` cannot be built with a peer that is not a
+  `PeerEndpoint`, with unvalidated limits or timeouts, with a negative or
+  over-limit byte count, or reporting itself closed while holding an open
+  socket;
+- `read_line` never raises. Both an over-long line arriving complete and one
+  arriving in pieces end in a typed bounded-read failure that abandons the
+  connection; **which** failure it is, `line_too_long` or
+  `total_limit_exceeded`, is whichever configured bound is reached first, so it
+  is asserted as one of the two rather than pinned to one;
+- once the total cap is exceeded, a further `read_line` returns the same typed
+  failure immediately and performs no socket read, so a spent connection cannot
+  cost a read deadline per call. Gate 4C treats any `ReadFailed` as terminal and
+  closes;
 - a reply's enhanced code is dropped when its class contradicts the basic code,
   an echoed address never survives into a diagnostic, and a malformed reply is a
   typed defect rather than an exception;
@@ -148,16 +178,55 @@ Tested without any transport, in Phase 4A:
 
 ### SMTP transport testing, from gate 4B
 
-**The default is a fake `SMTPTransport` under `tests/`.** It implements the port
-with scripted reads and writes and opens no socket, so every protocol test in
-section 3 runs deterministically, with no timing flake and no address at all —
-the destination policy is simply not in the path.
+**The default is a fake `SMTPTransport` under `tests/`.** `tests/fake_smtp_transport.py`
+implements the port with a scripted sequence and opens no socket, so every
+protocol test in section 3 runs deterministically, with no timing flake and no
+address at all — the destination policy is simply not in the path. It scripts a
+connect success, each connect failure, a malformed peer, a mismatched peer, a
+denied peer, a wrong peer port, scripted reads, EOF, and close, and it records
+what was asked of it.
 
-A real loopback server is used only for the few tests that must exercise actual
-socket behaviour: cancellation-safe close, a partial read, a peer reset. Those
-tests drive the transport adapter through a constructor that accepts an
-already-open stream, so they never build an `ApprovedDestination` and never
-touch the production policy chain.
+The fake carries a `write_line_calls` counter and a private `_write_line` it
+never needs, so "nothing was written before the peer was confirmed" is a
+measurement rather than an assumption. Structurally it cannot happen either:
+`SMTPConnection` declares no write method.
+
+**The loopback suite is separate, and so is its guard.** `tests/integration/`
+replaces the suite-wide `block_network` fixture with a narrower one that permits
+`127.0.0.1` and `::1` and refuses everything else, including all name
+resolution. Both are measured: the normal suite reports zero calls of every kind,
+and the loopback suite reports zero external calls beside its loopback ones.
+
+Those tests hand `AsyncioSMTPConnection._over_socket` an **already-connected
+socket**, so they never build an `ApprovedDestination`, never call
+`approve_destination` or `confirm_peer`, and never touch the production policy
+chain. That primitive is named privately and is used by `connect` itself, which
+is the honest description of it: an internal I/O primitive rather than a
+test-only door. It is not an authorization bypass — it takes no destination, so
+it grants no reachability a caller did not already have by holding a connected
+socket, and it returns a connection with no write method rather than a session.
+An inspection test fixes that nothing in `src/` outside the transport module
+calls it, and that `connect` is its only production caller.
+
+The fixture binds `127.0.0.1` on an ephemeral port and closes from a `finally`
+so a failing test still releases it. Which host it may bind is a pure function,
+`is_permitted_bind_host`, permitting `127.0.0.1` and `::1` only; it runs in the
+constructor and again in `start`, so `0.0.0.0` is refused before a descriptor
+exists and a test can assert that without binding anything.
+
+They cover only what a fake cannot show: a real partial read, a real EOF, a real
+reset, a real read deadline, the line and total caps against a real peer, that
+close runs on the way out of the block and when an exception passes through, and
+what happens when a read, a close, or the body of the block is cancelled.
+
+**The guard is tested by inspection, never by dialling.** The earlier version
+proved it by connecting to a public address and asserting the refusal, which
+means that on the day the guard breaks, its own negative test is the thing that
+reaches the internet — a mutation check confirmed exactly that. So
+`tests/integration/test_loopback_guard.py` asserts on the pure classifier, on
+the pure bind rule, and on the fact that every outbound entry point carries the
+marker the fixture stamps on what it installs. No test in this repository
+performs the act it exists to prove impossible.
 
 The reason this needs saying: `127.0.0.1` is denied by `evaluate_destination`,
 and `ApprovedDestination` re-runs that check, so a loopback fixture cannot reach

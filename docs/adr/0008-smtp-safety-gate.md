@@ -189,6 +189,29 @@ the address and forget the port. There is no arbitrary-bytes write method.
 
 Only port 25 is reachable, and the peer port is confirmed against it.
 
+**The 4B review found the same gap at the other end of the chain**, and it is
+closed the same way. `AsyncioSMTPTransport.connect` was annotated and nothing
+more, so an object carrying `address`, `port`, and `version` was accepted and
+reached a real socket connect. The policy still applied, so only a *public*
+address was reachable — but that is exactly what `approve_destination` exists to
+prevent: connecting to an address the domain never published. Wrong types also
+surfaced as a bare `AttributeError` from inside the adapter rather than in this
+project's vocabulary. `connect` now checks the type before it evaluates the
+policy and before any socket is created, and a test asserts that a lookalike
+creates no socket at all.
+
+`PeerEndpoint` validates itself for the same reason. It is what the transport
+hands to `confirm_peer`, and it accepted `port=None`, `port="25"`, `port=-1`,
+`port=70000`, `port=True`, an empty address, and a host name. `confirm_peer`
+refused every one of those on the policy, so nothing unsafe was reachable — but
+the guarantee rested on one function rather than on the type, which is not how
+the rest of this project is built. The split is deliberate and stays: **the
+value guarantees the shape, the policy grants the permission.** A value type
+that judged policy would let a caller acquire the permission by constructing the
+value, and the second barrier is only a barrier while it is independent — a test
+hands `confirm_peer` an endpoint built with its own validation bypassed, so both
+layers are shown refusing on their own.
+
 ## Decision: no reply code becomes a status in this Phase
 
 `250` at RCPT does not mean the mailbox exists — an accept-all server says it to
@@ -277,3 +300,60 @@ sender derived from it.
 
 `EnvelopeSender` stays a shape, the provider owns the provenance, and gate 4C
 cannot issue `MAIL FROM` until the provider exists.
+
+## Decision: cleanup runs on the way out, and control flow is never a result
+
+Two of the 4B review's findings were the same mistake in opposite directions,
+and both are about what an exception means.
+
+**A close must not be interruptible part way.** `AsyncioSMTPConnection.close`
+set `_closed`, shut the socket down, awaited a no-op inside `asyncio.timeout`,
+and then closed the descriptor. The `await` was decorative — `socket.close()` on
+a non-blocking socket returns immediately, so there was nothing for the deadline
+to bound — and it was the only point in the function at which a cancellation
+could be delivered. `contextlib.suppress(Exception)` does not suppress
+`CancelledError`, so a cancellation there escaped with `_closed` already true and
+the descriptor still open. The object reported itself closed, so nothing would
+ever try again.
+
+The fix is shape rather than a guard: `close` performs no `await` at all, which
+is a stronger property than a timeout around one, and the release runs from a
+`finally` so it happens whatever arrives. A test drives the coroutine by hand and
+asserts it completes without yielding, so re-introducing an `await` fails rather
+than quietly re-opening the hole.
+
+**Process control is never a transport failure.** `connect` caught
+`BaseException` and re-raised only `CancelledError`, so `KeyboardInterrupt` and
+`SystemExit` became `internal_error`: a `Ctrl-C` during a connect was reported as
+something the network did, and the worker carried on. `GeneratorExit` was the
+same. `AssertionError` joins them on the Phase 2 precedent — the DNS adapter
+re-raises it so the test suite's network guard fails a test rather than being
+recorded as a DNS answer, and a blocked socket call must fail the same way.
+
+The set is named, `_NEVER_A_TRANSPORT_FAILURE`, and pinned by a test, because a
+review found that removing the `CancelledError` re-raise broke nothing at all:
+the property was true and untested. The distinction it draws is worth stating —
+a *bug in this project* still becomes a typed `INTERNAL_ERROR` outcome, because
+that is a fact about a connection attempt; a *cancelled or interrupted process*
+is not. The socket is closed before any of these continue, so re-raising leaks
+nothing.
+
+## Decision: the loopback guard is proved by inspection, not by dialling
+
+`tests/integration/`'s negative test connected to a public address and asserted
+that the guard refused it. A mutation check made the guard permissive, and the
+test did what it was written to do: it opened a connection to the internet. A
+test that proves a prohibition by performing the prohibited act is a test that
+executes it precisely when the prohibition is broken.
+
+The decision function is now pure — `is_loopback` for connecting,
+`is_permitted_bind_host` for binding — and the tests assert on those, on the
+permitted set being exactly `{127.0.0.1, ::1}`, and on the marker every guard the
+fixture installs carries. Nothing dials, and every mutation of the guard fails on
+an assertion.
+
+Two things surfaced while doing it. The fixture's `sock_connect` guard was patched
+onto `asyncio.BaseEventLoop`, which a concrete loop never reaches — the method is
+resolved on `BaseSelectorEventLoop` — so that layer was inert and the socket-level
+guard had been carrying it alone. And the bind host was a comment rather than a
+rule; it is a checked value now, in the constructor and again in `start`.

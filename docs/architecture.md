@@ -157,17 +157,50 @@ asks the second question by requiring the address to be one the candidate
 resolved to, and takes the host from the candidate rather than from a parameter.
 
 `SMTPSession` verifies the peer's type in `__post_init__` rather than trusting
-the annotation: mypy checks `src` only, and `Any` launders a wrong value. The
-transport port takes an `ApprovedDestination` and returns a `PeerEndpoint`, so
-an implementation cannot report the address and forget the port; it has no
-arbitrary-bytes write method. Only port 25 is reachable, and the peer port is
-confirmed against it.
+the annotation, and `SMTPTransport.connect` verifies its destination the same
+way before it evaluates the policy or creates a socket: mypy checks `src` only,
+`Any` launders a wrong value, and an object that merely has an address, a port,
+and a version has passed none of the checks the type stands for.
+
+`PeerEndpoint` validates its own shape — a numeric address with no CR, LF, NUL,
+or scope identifier, and a port within 1..65535 — and stops there. **The value
+guarantees the shape; `confirm_peer` grants the permission.** A value type that
+judged policy would let a caller acquire the permission by constructing the
+value, so the two stay independent and both are tested refusing on their own.
+
+`application/smtp_connect.py` is the only production code that walks that chain,
+and `adapters/smtp/asyncio_transport.py` is the only module that opens a socket.
+The transport is an I/O component and nothing more: it connects, reports the
+peer, reads bounded lines, and closes. It makes no protocol decision and knows
+nothing about `EHLO`, reply codes, or the recipient stage.
+
+Three properties of that split matter more than the code:
+
+- **nothing can be written before the peer is confirmed**, because
+  `SMTPConnection` has no write method. The adapter keeps `_write_line` private
+  for gate 4C to wire to the six encoders; gate 4B writes no bytes at all;
+- **no socket, stream, reader, or file descriptor crosses the port.** The
+  application sees a `PeerEndpoint`, typed read outcomes, and a close;
+- **every path that does not return a session closes the connection**, in a
+  `finally`, so an exception between connecting and confirming leaks nothing.
 
 The transport connects with `AF_INET` for an IPv4 destination and `AF_INET6` for
 an IPv6 one and never relies on `AI_V4MAPPED`, because a dual-stack socket
-reports an IPv4 peer as `::ffff:…`, which the policy refuses on purpose. The
-family is normalized by the transport; the policy is never taught to unwrap a
-mapped address.
+reports an IPv4 peer as `::ffff:…`, which the policy refuses on purpose. A
+mapped or 6to4 peer is refused as `PEER_UNEXPECTED_FAMILY` rather than unwrapped:
+the family is normalized by the transport, and the policy is never taught to
+trust a mapped address. Only port 25 is reachable, and the peer port is
+confirmed against it.
+
+Every read, write, and connect has its own deadline, and a reply is bounded per
+line and per connection. `TransportFailure` is this project's vocabulary for
+what went wrong; a library's exception text never reaches a caller, and no
+transport failure is ever evidence about the address. Cancellation,
+interruption, and this project's own invariant failures are the exception: they
+are re-raised rather than named, because a worker that was told to stop must not
+be answered with a fact about the network. `close` needs no deadline of its own,
+because it performs no `await` — which also means it offers no point at which a
+cancellation could leave the descriptor open.
 
 Sender provenance is a port, not a value. `EnvelopeSender` fixes the shape;
 `SenderIdentityProvider` in `ports/smtp_sender_identity.py` supplies one from

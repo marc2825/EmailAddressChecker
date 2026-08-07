@@ -76,14 +76,26 @@ Controls:
 - validate the actual peer address *and port*, as `ConfirmedPeer`, and refuse a
   peer that is permitted but is not the endpoint that was approved;
 - make each of those a type rather than a step, and check the type at run time:
-  a session requires a `ConfirmedPeer` and verifies it in `__post_init__`, so
-  none of the three checks can be skipped by forgetting it or by passing a
-  value mypy never sees (ADR 0008);
+  a session requires a `ConfirmedPeer` and verifies it in `__post_init__`, and
+  `SMTPTransport.connect` verifies that what it was given is an
+  `ApprovedDestination` before it evaluates anything or creates a socket. An
+  object that merely *has* an address, a port, and a version has passed neither
+  `approve_destination` nor the policy, and duck typing would otherwise walk it
+  straight past both (ADR 0008);
 - connect with the family the destination belongs to and never rely on
   `AI_V4MAPPED`, so a dual-stack socket does not report an IPv4 peer in a mapped
   form the policy must refuse. The transport normalizes; the policy never
-  unwraps a mapped address into a trusted public IPv4;
+  unwraps a mapped address into a trusted public IPv4, and a mapped or 6to4 peer
+  is refused as an unexpected family;
+- re-apply the policy in the transport immediately before creating the socket,
+  and create no socket when it refuses;
+- resolve no name in the transport: the address is already numeric and
+  validated, so a connect that resolved anything would be reaching somewhere the
+  policy never saw;
 - allow only port 25, and confirm the peer reached it;
+- publish no way to write a byte before the peer is confirmed. `SMTPConnection`
+  has no write method at all, so the ordering is a property of the type rather
+  than of the caller's care;
 - isolate worker egress and credentials;
 - cap reads and time.
 
@@ -99,7 +111,35 @@ Controls:
   quadratic pattern over all of it: 153 ms of CPU per reply. Read caps do not
   imply bounded processing, so the sanitizer examines a fixed prefix and its
   pattern is linear (ADR 0008);
-- cancellation-safe resource cleanup;
+- cancellation-safe resource cleanup. The connection is an async context
+  manager and its close is idempotent and never raises, so it is safe in a
+  `finally`; every path in `application/smtp_connect.py` that does not return a
+  session closes first;
+- **a close that cannot be interrupted part way.** `close` performs no `await`,
+  so it offers no point at which a cancellation can be delivered, and the
+  release runs from a `finally` regardless. An earlier version wrapped a no-op
+  `await` in `asyncio.timeout` to look bounded; all it did was create the one
+  cancellation point in the function, and a cancellation there left `is_closed`
+  true with the descriptor still open — a leak that no retry would ever fix,
+  because the object reported itself already closed;
+- **process control is never a transport failure.** `CancelledError`,
+  `KeyboardInterrupt`, `SystemExit`, `GeneratorExit`, and `AssertionError`
+  propagate rather than becoming a `ConnectionFailed`. A worker told to stop
+  must not be handed a result about the network instead, and this project's own
+  invariant failures — including the test suite's network guard — must fail
+  loudly rather than be attributed to a remote host. The socket is closed before
+  the exception continues, so re-raising leaks nothing;
+- per-operation deadlines that are validated values, not free integers: a
+  timeout must be positive, finite, not a boolean, and within a maximum, because
+  a bound nobody would reach is not a bound;
+- bounded reads: a per-line cap, a per-connection total, and a per-read
+  deadline, so a peer that never sends a terminator cannot make a read run
+  forever. Both forms of an over-long line — arriving complete and arriving in
+  pieces — end in a typed bounded-read failure that abandons the connection;
+  which of the two bounds is named depends on which is reached first, and both
+  are equally terminal. Once the total is spent no further socket read is
+  attempted at all, so a spent connection fails immediately rather than costing
+  one read deadline per call;
 - bounded retries;
 - fair queueing.
 
