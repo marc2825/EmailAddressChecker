@@ -48,6 +48,9 @@ packages = ["src/emailcheck"]
 addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
 asyncio_mode = "strict"
+# The forbidden-command scanner is a safety gate, so it has its own regression
+# tests. They import it directly rather than only running it as a subprocess.
+pythonpath = ["scripts"]
 
 [tool.ruff]
 target-version = "py312"

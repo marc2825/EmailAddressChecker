@@ -121,6 +121,69 @@ vocabulary belongs to `security/destination.py` alone. An override file declares
 the `target` it corrects, and an unimplemented target is refused. See ADR 0007
 and `data/passive/README.md`.
 
+### SMTP probe
+
+The command set is closed, and what keeps it closed is the encoder's shape:
+`domain/smtp_command.py` has six functions, one per allowed command, each taking
+typed values, and no function that takes a command name. A caller cannot ask for
+a command the enum does not have, because there is no parameter through which to
+ask. `scripts/check_forbidden_smtp.py` refuses fourteen commands in every
+production SMTP path, reading the first SMTP verb of each string literal rather
+than matching text.
+
+A session is an immutable value in `domain/smtp_session.py`. Two of its refusals
+are product promises rather than protocol details:
+
+| Promise | How it is kept |
+|---|---|
+| At most one `RCPT TO` | The state table gives `RCPT_RESULT_RECEIVED` no way to issue one, **and** a counter refuses one from any state |
+| No plaintext after a TLS failure | Failure moves to `FAILED`, which permits only `QUIT` and has no transition back |
+
+The destination policy runs three times, and each run is a type rather than a
+step:
+
+```text
+RouteCandidate            Phase 2, on the DNS answer
+  → approve_destination()   the address must be one the candidate offered
+  → ApprovedDestination     the policy runs again, before connect
+  → confirm_peer()          the address and port the socket actually reached
+  → ConfirmedPeer           the policy runs a third time
+  → SMTPSession             checks it is a ConfirmedPeer at run time
+```
+
+`approve_destination` is the only path in. The policy answers "is this address
+safe to reach"; it does not answer "did the domain publish it", so the factory
+asks the second question by requiring the address to be one the candidate
+resolved to, and takes the host from the candidate rather than from a parameter.
+
+`SMTPSession` verifies the peer's type in `__post_init__` rather than trusting
+the annotation: mypy checks `src` only, and `Any` launders a wrong value. The
+transport port takes an `ApprovedDestination` and returns a `PeerEndpoint`, so
+an implementation cannot report the address and forget the port; it has no
+arbitrary-bytes write method. Only port 25 is reachable, and the peer port is
+confirmed against it.
+
+The transport connects with `AF_INET` for an IPv4 destination and `AF_INET6` for
+an IPv6 one and never relies on `AI_V4MAPPED`, because a dual-stack socket
+reports an IPv4 peer as `::ffff:…`, which the policy refuses on purpose. The
+family is normalized by the transport; the policy is never taught to unwrap a
+mapped address.
+
+Sender provenance is a port, not a value. `EnvelopeSender` fixes the shape;
+`SenderIdentityProvider` in `ports/smtp_sender_identity.py` supplies one from
+operator configuration, never from the probe target or from user input.
+
+A reply becomes `SMTPReply`: a basic code, a valid enhanced code when there is
+one, and a bounded diagnostic. The remote text is not kept. The sanitizer's
+guarantee is narrow and stated exactly: a token containing a literal ASCII `@`
+is removed and no `@` survives, control and format characters are removed, and
+the result is bounded — it is **not** an RFC mailbox parser or a general PII
+scrubber, and a raw reply must never reach an ordinary log.
+`RecipientObservation` records what was observed and carries no status: `250`
+does not become `likely_deliverable` and `550` does not become `invalid`,
+because an accept-all server says the first to everyone and policy rejections
+share the second. See ADR 0008.
+
 ### Evidence
 
 An immutable observation produced by one layer. Evidence records:

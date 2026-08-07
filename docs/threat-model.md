@@ -69,8 +69,21 @@ Controls:
   `is_global`, which would allow carrier-grade NAT, IPv6 multicast, and a NAT64
   address reaching loopback (ADR 0006);
 - validate all A/AAAA answers and CNAME hops;
-- validate immediately before connect;
-- validate actual peer address;
+- approve only an address the DNS candidate actually resolved to, through
+  `approve_destination`. The policy answers whether an address is safe to reach,
+  not whether the domain published it, and both questions must be asked;
+- validate immediately before connect, as `ApprovedDestination`;
+- validate the actual peer address *and port*, as `ConfirmedPeer`, and refuse a
+  peer that is permitted but is not the endpoint that was approved;
+- make each of those a type rather than a step, and check the type at run time:
+  a session requires a `ConfirmedPeer` and verifies it in `__post_init__`, so
+  none of the three checks can be skipped by forgetting it or by passing a
+  value mypy never sees (ADR 0008);
+- connect with the family the destination belongs to and never rely on
+  `AI_V4MAPPED`, so a dual-stack socket does not report an IPv4 peer in a mapped
+  form the policy must refuse. The transport normalizes; the policy never
+  unwraps a mapped address into a trusted public IPv4;
+- allow only port 25, and confirm the peer reached it;
 - isolate worker egress and credentials;
 - cap reads and time.
 
@@ -81,6 +94,11 @@ Controls:
 - global and per-destination concurrency;
 - connect, banner, command, TLS, and total session timeouts;
 - line, reply, and transcript limits;
+- **bound the work, not only the input.** A reply within the line and count
+  limits is still 80 KB, and reducing it to a 120-character diagnostic used a
+  quadratic pattern over all of it: 153 ms of CPU per reply. Read caps do not
+  imply bounded processing, so the sanitizer examines a fixed prefix and its
+  pattern is linear (ADR 0008);
 - cancellation-safe resource cleanup;
 - bounded retries;
 - fair queueing.
@@ -91,8 +109,49 @@ Controls:
 
 - structured address object;
 - reject CR/LF/NUL/control characters before any network use;
-- command encoder accepts typed values, not arbitrary lines;
-- local part is never interpolated without validation.
+- command encoder accepts typed values, not arbitrary lines. There are six
+  encoder functions, one per allowed command, and none takes a command name, so
+  no caller can name a command the enum does not have;
+- the CRLF is appended in one place, which re-checks the assembled line;
+- local part is never interpolated without validation;
+- `scripts/check_forbidden_smtp.py` refuses fourteen commands in every
+  production SMTP path, reading the first SMTP verb of each string literal so
+  that `AUTH PLAIN ...` and `BDAT 42` are caught while `authentication` and
+  `send_timeout` are not, and refuses a wire line whose verb comes from a
+  run-time value in any of the four ordinary forms — f-string, percent
+  formatting, `str.format`, or leading concatenation (ADR 0008);
+- the scanner defends against accident and drift, **not** against a committer
+  deliberately obfuscating a command. Structure carries that load: the closed
+  enum, the six encoders with no name parameter, the state machine, and a
+  transport port with no arbitrary-bytes method.
+
+### Sender identity misuse
+
+Threat: the envelope sender is derived from the address being probed, or from
+request input, so a probe presents a forged or attacker-chosen return path.
+
+Controls:
+
+- `SenderIdentityProvider` supplies the identity from operator-controlled
+  configuration only, and `current_identity()` takes no argument so it cannot
+  depend on the target;
+- `EnvelopeSender` and `EhloIdentity` fix the shape; the port owns provenance;
+- one stable identity per deployment, never rotated to change an answer.
+
+### Message content submission
+
+Threat: a change adds a path capable of transmitting a message, defeating the
+central product promise.
+
+Controls:
+
+- no message-content command, state, method, or enum member exists;
+- the scanner refuses `DATA`, `BDAT`, `SEND`, `SOML`, `SAML`, and `BURL`, and
+  its own regression tests fail if it stops;
+- the state machine has no transaction-body state to reach;
+- `RecipientObservation.no_message_data_sent` is derived and always true, and is
+  published so that a test can check the promise;
+- at most one `RCPT TO` per session, refused by two independent barriers.
 
 ### False verdicts
 
