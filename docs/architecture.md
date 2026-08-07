@@ -82,6 +82,45 @@ Each resolved address passes the destination policy in `security/` before it
 becomes a candidate. That policy is a pure function and runs again in Phase 4
 against the address a socket actually connected to.
 
+### Passive classification
+
+Four signals that need no network, kept independent because they are wrong in
+different ways:
+
+| Signal | Input | Result |
+|---|---|---|
+| Role account | local part, compared exactly on a lower-cased tag-stripped form | risk flag |
+| Disposable | destination domain, with local overrides | risk flag |
+| Free-mail | destination domain only | risk flag |
+| Provider family | MX host names, label-bounded suffix match | metadata |
+
+`PassiveClassification` has no status field, so this layer cannot express a
+deliverability judgment. Its three reason codes are risk-only, its evidence is
+weak and non-temporary, and provider family is metadata that may select a reply
+parser later but never a verdict.
+
+Free-mail is membership of the destination domain, never an inference from who
+hosts its mail: a company domain behind a large provider is not free-mail.
+Provider inference reads only MX-sourced hosts, abstains with `unknown` when two
+families match, and never attributes `google.com.evil.example` to anyone.
+
+A classification holds a validated `HostName` and, when a role matched, a
+canonical `RoleName` taken from the dataset. Neither can hold a complete
+address or a submitted local part, so what reaches evidence is bounded by the
+types rather than by the caller's care.
+
+Datasets are versioned files loaded explicitly, never at import and never
+downloaded. Each answer carries the dataset version that produced it. The
+document schema is closed: an entries array is mandatory even when empty, an
+unknown top-level field is refused, and metadata values are bounded and free of
+control characters because they become `Evidence.source_version`.
+
+Overrides correct one list. `not_disposable` and `disposable` describe
+membership of the disposable list and never a delivery decision — the allow/deny
+vocabulary belongs to `security/destination.py` alone. An override file declares
+the `target` it corrects, and an unimplemented target is refused. See ADR 0007
+and `data/passive/README.md`.
+
 ### Evidence
 
 An immutable observation produced by one layer. Evidence records:

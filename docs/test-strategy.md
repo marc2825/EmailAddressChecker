@@ -47,6 +47,40 @@ A fake resolver answers from a table. Required scenarios:
 - safe and unsafe addresses on one host;
 - a CNAME chain whose final address is forbidden.
 
+### Passive classification fixtures
+
+Dataset text is built in the test, never fetched. Required scenarios:
+
+- role: case differences, `+tag`, dots, hyphens, prefix and suffix near misses,
+  a one-character difference, and a Unicode local part that Phase 1 already
+  refuses;
+- disposable: hit, miss, case and trailing-dot normalization, IDN and punycode
+  agreement, an override in both directions, a duplicate, a malformed entry;
+- free-mail: hit, miss, independence from disposable, and a company domain
+  hosted by a large provider that must not be flagged;
+- provider: suffix match, several MX hosts, preference order irrelevance, an
+  attacker-controlled lookalike suffix, label boundaries, unknown, ambiguous,
+  and every non-MX route outcome contributing nothing;
+- loader: unknown schema version, missing or unknown metadata field, duplicate,
+  Unicode-normalization duplicate, IP literal, wildcard, wrong kind, oversized
+  input, contradictory override, and a missing file;
+- schema: a missing entries array, a misspelled entries key, an explicitly
+  empty array that must stay valid, an entries array of the wrong type, an
+  unknown top-level field, and one kind's array appearing in another's file. A
+  missing array and an empty array must be distinguishable;
+- metadata: CR, LF, NUL, tab, an escape sequence, a bidirectional override, a
+  zero-width space, a line or paragraph separator, and an over-long value are
+  all refused; an ordinary semantic version, commit hash, URL, SPDX identifier,
+  and timestamp are all accepted;
+- overrides: the `not_disposable` and `disposable` names load, a file using the
+  legacy `allow` or `deny` names is refused by name, a missing or unsupported
+  `target` is refused, both arrays are mandatory, and an override changes
+  disposable membership and nothing else;
+- values: a classification domain cannot be built from a complete address or
+  from text carrying CR, LF, or NUL; a role name cannot be built from the
+  submitted local part, a tagged form, or non-ASCII text; and no string reaching
+  evidence carries a control character, an `@`, or the submitted local part.
+
 ### Integration
 
 - scripted SMTP server;
@@ -96,6 +130,8 @@ Required scenarios:
   through. The guard raises an `AssertionError` subclass and the DNS adapter
   re-raises it rather than converting it into a failure value, so a blocked
   call fails the test instead of being reported as a DNS result;
+- passive classification never produces a status, a hard-invalid result, or a
+  risk flag outside its own four;
 - no forbidden SMTP command;
 - no more than one target RCPT;
 - no connection to unsafe IP;

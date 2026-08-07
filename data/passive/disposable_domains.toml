@@ -1,0 +1,25 @@
+schema_version = 1
+kind = "disposable_domains"
+
+# Intentionally empty. No disposable-domain list with a verified licence and
+# source has been selected, and inventing either would be worse than shipping
+# nothing: a wrong entry publishes "disposable" about a real business domain.
+#
+# `disposable_domains.toml.example` shows the format. `README.md` in this
+# directory describes what must be established before this file is populated.
+# Until then every domain is simply not on the list.
+
+# TOML note: entries appear before the [metadata] table because a bare
+# key after a table header belongs to that table.
+domains = []
+
+[metadata]
+name = "disposable_domains"
+source_url = "none selected"
+license = "none; this file is empty"
+version = "empty-2026-08-07"
+retrieved_at = "2026-08-07"
+checksum = "empty"
+normalization = "trim, drop trailing dot, IDNA/UTS-46 to ASCII, lower-case"
+update_frequency = "not scheduled; requires a licence review first"
+maintainer = "project maintainers"

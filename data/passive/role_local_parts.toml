@@ -1,0 +1,44 @@
+schema_version = 1
+kind = "role_local_parts"
+
+# The only dataset in this directory that ships populated. Its entries are not
+# taken from a third party: they are enumerated in this repository's own work
+# order, so the provenance is verifiable without trusting an outside list.
+#
+# Matching is exact on a lower-cased local part with any "+tag" removed. A
+# compound such as "support-team" is deliberately absent; add it here if a
+# deployment wants it treated as a role.
+
+# TOML note: entries appear before the [metadata] table because a bare
+# key after a table header belongs to that table.
+local_parts = [
+  "abuse",
+  "admin",
+  "administrator",
+  "billing",
+  "contact",
+  "help",
+  "hello",
+  "hostmaster",
+  "info",
+  "marketing",
+  "noc",
+  "office",
+  "postmaster",
+  "privacy",
+  "sales",
+  "security",
+  "support",
+  "webmaster",
+]
+
+[metadata]
+name = "role_local_parts"
+source_url = "https://github.com/marc2825/EmailChecker (prompts/03-passive-classification.md)"
+license = "Same licence as this repository; no third-party data is included."
+version = "2026-08-07.1"
+retrieved_at = "2026-08-07"
+checksum = "not-applicable-authored-in-repository"
+normalization = "trim, lower-case, exact match after removing a +tag"
+update_frequency = "on review, when a role convention is added or removed"
+maintainer = "project maintainers"

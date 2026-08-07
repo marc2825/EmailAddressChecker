@@ -1,0 +1,25 @@
+schema_version = 1
+kind = "disposable_domains"
+
+# ILLUSTRATIVE ONLY. Copy to `disposable_domains.toml` and replace both the
+# metadata and the entries with a real, licence-reviewed snapshot. The domains
+# below are RFC 2606 reserved names and exist here to show the format.
+
+# TOML note: entries appear before the [metadata] table because a bare
+# key after a table header belongs to that table.
+domains = [
+  "disposable.example",
+  "throwaway.example",
+  "10-minute.example",
+]
+
+[metadata]
+name = "disposable_domains"
+source_url = "https://example.invalid/disposable-list"
+license = "REPLACE: the upstream licence, verified, not assumed"
+version = "REPLACE: upstream release, tag, or commit"
+retrieved_at = "REPLACE: YYYY-MM-DD the snapshot was taken"
+checksum = "REPLACE: sha256 of the upstream artifact"
+normalization = "trim, drop trailing dot, IDNA/UTS-46 to ASCII, lower-case"
+update_frequency = "REPLACE: how often the snapshot is refreshed"
+maintainer = "REPLACE: who reviews additions and removals"

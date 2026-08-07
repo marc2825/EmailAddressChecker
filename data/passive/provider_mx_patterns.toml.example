@@ -1,0 +1,38 @@
+schema_version = 1
+kind = "provider_mx_patterns"
+
+# ILLUSTRATIVE ONLY. Copy to `provider_mx_patterns.toml` and replace every row
+# with a suffix you can evidence. The suffixes below are RFC 2606 reserved
+# names and match nothing real.
+#
+# A suffix matches on a label boundary: the host equals it, or ends with a dot
+# followed by it. `mail.provider-a.example` matches `provider-a.example`;
+# `provider-a.example.evil.test` and `notprovider-a.example` do not. Wildcards
+# are rejected by the loader because a suffix already covers every subdomain.
+#
+# `evidence` is where the row is justified: a provider documentation URL, a
+# support article, or an observation with a date. A row without evidence is a
+# guess about someone else's infrastructure.
+
+# TOML note: entries appear before the [metadata] table because a bare
+# key after a table header belongs to that table.
+[[patterns]]
+family = "google"
+suffix = "mx.provider-a.example"
+evidence = "REPLACE: provider documentation URL and date"
+
+[[patterns]]
+family = "microsoft"
+suffix = "mail.provider-b.example"
+evidence = "REPLACE: provider documentation URL and date"
+
+[metadata]
+name = "provider_mx_patterns"
+source_url = "REPLACE: where each suffix was evidenced"
+license = "REPLACE: the licence of any borrowed pattern list, or this repository's"
+version = "REPLACE: snapshot identifier"
+retrieved_at = "REPLACE: YYYY-MM-DD"
+checksum = "REPLACE: sha256 if vendored from upstream"
+normalization = "trim, drop trailing dot, IDNA/UTS-46 to ASCII, lower-case; label-bounded suffix match"
+update_frequency = "REPLACE: review cadence"
+maintainer = "REPLACE: who reviews provider changes"

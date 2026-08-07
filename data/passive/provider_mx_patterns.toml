@@ -1,0 +1,26 @@
+schema_version = 1
+kind = "provider_mx_patterns"
+
+# Intentionally empty. A suffix here decides what this project publishes about
+# who hosts a domain's mail, and each entry needs evidence that can be checked.
+# This environment cannot verify any provider's current MX naming, so no entry
+# is asserted. Provider inference therefore reports `unknown` until an operator
+# populates this file with cited evidence.
+#
+# `provider_mx_patterns.toml.example` shows the format and the `evidence`
+# column each row must carry.
+
+# TOML note: entries appear before the [metadata] table because a bare
+# key after a table header belongs to that table.
+patterns = []
+
+[metadata]
+name = "provider_mx_patterns"
+source_url = "none selected"
+license = "none; this file is empty"
+version = "empty-2026-08-07"
+retrieved_at = "2026-08-07"
+checksum = "empty"
+normalization = "trim, drop trailing dot, IDNA/UTS-46 to ASCII, lower-case; label-bounded suffix match"
+update_frequency = "on review, when a provider publishes a change"
+maintainer = "project maintainers"

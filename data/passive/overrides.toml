@@ -1,0 +1,38 @@
+schema_version = 1
+kind = "overrides"
+
+# Local corrections for the disposable list, applied before it.
+#
+# `target` names the classification these entries correct. Only "disposable" is
+# supported; any other value is rejected at load time rather than ignored.
+#
+# `not_disposable` asserts that a domain is NOT disposable even though the
+# upstream list says it is. `disposable` asserts that a domain IS disposable
+# even though the upstream list does not say so. Neither says anything about
+# whether mail may be sent to or accepted from that domain: this is list
+# membership, not a delivery decision.
+#
+# This is how a false positive is fixed without editing a vendored file or
+# shipping a code change. Every entry must record why it exists, so a later
+# reviewer can tell a considered exception from a forgotten one. A domain
+# corrected in both directions is rejected at load time.
+#
+# Both arrays are mandatory even when empty, so a typo cannot look like an
+# intentionally empty override file.
+
+# TOML note: entries appear before the [metadata] table because a bare
+# key after a table header belongs to that table.
+target = "disposable"
+not_disposable = []
+disposable = []
+
+[metadata]
+name = "disposable_overrides"
+source_url = "https://github.com/marc2825/EmailChecker (operator-maintained)"
+license = "Same licence as this repository."
+version = "empty-2026-08-07"
+retrieved_at = "2026-08-07"
+checksum = "empty"
+normalization = "trim, drop trailing dot, IDNA/UTS-46 to ASCII, lower-case"
+update_frequency = "on report of a false positive or a missed domain"
+maintainer = "project maintainers"

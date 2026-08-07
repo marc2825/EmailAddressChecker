@@ -1,0 +1,23 @@
+schema_version = 1
+kind = "free_mail_domains"
+
+# Intentionally empty, for the same reason as the disposable list.
+#
+# Free-mail membership is a property of the destination domain itself, never of
+# the provider hosting its mail. A company domain whose MX points at a large
+# provider is not free-mail, and must never be added here on that basis.
+
+# TOML note: entries appear before the [metadata] table because a bare
+# key after a table header belongs to that table.
+domains = []
+
+[metadata]
+name = "free_mail_domains"
+source_url = "none selected"
+license = "none; this file is empty"
+version = "empty-2026-08-07"
+retrieved_at = "2026-08-07"
+checksum = "empty"
+normalization = "trim, drop trailing dot, IDNA/UTS-46 to ASCII, lower-case"
+update_frequency = "not scheduled; requires a licence review first"
+maintainer = "project maintainers"
