@@ -344,6 +344,105 @@ reaches a different, named refusal, which is what shows the comparison let it
 through rather than that everything ends the same way. Removing the comparison
 broke no test before this existed.
 
+### SMTP recipient evidence mapping, from gate 4D
+
+The mapper is pure, so its tests need no fixture server at all: a `SessionReport`
+is built directly and the evidence is compared. Replies are built **through the
+Phase 4A parser** rather than by constructing `SMTPReply` by hand, so a test
+cannot assert on an enhanced code the parser would have dropped.
+
+The matrix is the specification in `docs/status-model.md` section 7, row by row:
+
+- every recipient class — `250`, `251`, `252`, `450`, `451`, `452`, `550`, `551`,
+  `552`, `553`, `554` — with its reason, strength, and temporary flag;
+- every enhanced code that changes an answer: none, `2.x.x`, `2.1.5` on a `252`,
+  `4.7.1`, `4.2.2`, `5.1.1`, `5.1.0`, `5.1.6`, `5.2.2`, `5.7.1`, and a
+  contradictory `250 5.1.1` that the parser has already dropped;
+- **a `4xx` carrying an address-shaped enhanced code**, `450 4.1.1`, which must
+  stay temporary. It reads like `550 5.1.1` one component at a time, and a
+  mutation that read the subject and detail before the class turned it into the
+  strongest evidence this project produces. No row noticed until this one existed;
+- every pre-recipient failure at every stage: a `4xx` and a `5xx` banner, a
+  malformed banner, a refused `EHLO` before and after TLS, an unreadable reply
+  after the greeting, a refused `MAIL FROM` in both classes, a lost connection,
+  and an internal failure;
+- all seven TLS reasons, which collapse to one non-target reason while the reason
+  itself survives as metadata;
+- the deadline, mid-dialogue and at the cleanup boundary, distinguished from a
+  transport timeout by the flag rather than by the reason;
+- all four cleanup categories, asserted to change **nothing but the cleanup
+  detail** — comparing only the reason let a mutation that flipped
+  `about_the_target` on a failed cleanup escape;
+- every `TransportFailure` member, so a new one fails rather than defaulting.
+
+**The invariants are tested as invariants**, not inferred from the rows: no
+pre-recipient failure at any stage with any reply ever produces a recipient-stage
+reason; a `MAIL FROM 550 5.1.1` and a `RCPT 550 5.1.1` carry the same enhanced
+code and different evidence; `252` is never in the positive set; a `550 5.1.1` is
+strong evidence and still not a status.
+
+**Each of the three barriers before a recipient rejection is pinned on its own**,
+and this needed deliberately awkward inputs rather than more rows. Removing any
+one of the outcome check, the recipient-count check, or the stage check left the
+entire suite passing, because every test built its report through one of two
+helpers and neither helper can produce a report where a single barrier is
+load-bearing. So three tests construct a `SessionReport` directly:
+
+| Shape | The one barrier that refuses it |
+|---|---|
+| `connection_error` at `cleanup`, carrying `550 5.1.1`, one recipient attempted | the outcome check |
+| `rejected` at `cleanup`, carrying `550 5.1.1`, **none** attempted | the recipient-count check |
+| `rejected` at `mail_from`, carrying `550 5.1.1`, one attempted | the stage check |
+
+All three are legal values, and each test fails when its own barrier alone is
+deleted and passes when either of the others is.
+
+**The published sets are tested as a partition**, because `about_the_target` is
+derived from `RECIPIENT_STAGE_REASONS` and a reason in neither set would
+otherwise be silently non-target: nothing the mapper emits may be missing from
+both sets or present in both, every declared member must actually be emitted, and
+the derivation is asserted directly to be fail-closed on a reason belonging to
+neither. The positive set is checked to exclude `rcpt_unverifiable`,
+`rcpt_rejected_address`, `rcpt_rejected_policy`,
+`smtp_ambiguous_permanent_failure`, `mailbox_full`, and `smtp_temporary_failure`
+by name rather than only by subset.
+
+**`_CONNECT_REASONS` is pinned by mechanism, not only by coverage.** The keys must
+be exactly `TransportFailure`, *and* an unmapped failure must raise rather than
+default — the second is what fails when the subscript becomes a defaulting
+`.get`, which the earlier test could not distinguish because it asserted only
+that the result was a reason code.
+
+**Both entry points are tested against the same input contract.**
+`map_connect_failure` must refuse a negative, boolean, floating-point, or string
+`elapsed_milliseconds`, a non-boolean deadline flag, a failure that is not a
+`TransportFailure`, and an `observed_at` that is naive, `None`, or not a
+datetime. `Evidence` refuses the same timestamps and a detail value that is not a
+safe scalar, so the guarantee holds for every producer rather than only for this
+one, and both layers are tested so neither is load-bearing alone.
+
+**Privacy is measured on the surfaces Phase 6 will publish.** A reply that echoes
+the recipient must not leave it in `repr`, `str`, the details mapping, or the
+diagnostic, and no `@` may survive anywhere. No raw reply, no wire command or
+transcript **this project issued**, no certificate, and no peer address reaches
+the details, and every detail value is a string, an integer, a boolean, or
+`None`.
+
+The distinction in that sentence is deliberate and is asserted from both sides. A
+server's own diagnostic may contain SMTP command words — `550 RCPT TO is not
+allowed here` sanitizes to `RCPT TO is not allowed here` — and that is remote
+prose, bounded and `@`-free, not a wire command. A test that forbade the string
+outright would have been asserting something untrue while passing by accident on
+its fixture's wording.
+
+**Determinism is asserted directly**: the same report twice, two equal reports,
+and a fixed detail key order. Nothing iterates a set.
+
+**Purity is asserted by inspection**, because behaviour cannot show the absence
+of an import: no network, clock, or storage module; no transport, connection,
+limiter, clock, or provider named; no coroutine and no `await`; no environment
+read.
+
 ## 3. SMTP fixtures
 
 Required scenarios:

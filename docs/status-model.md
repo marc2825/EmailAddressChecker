@@ -131,6 +131,7 @@ under different statuses depending on the other evidence present.
 | `smtp_connection_timeout` | `smtp` | A bounded connect, banner, or command deadline expired. |
 | `smtp_connection_refused` | `smtp` | The MX candidate refused the connection. |
 | `smtp_banner_invalid` | `smtp` | The greeting was unusable or not a valid reply. |
+| `smtp_protocol_error` | `smtp` | A reply after the greeting could not be parsed, or a bound on reply size was reached; never target evidence. |
 | `smtp_tls_failure` | `smtp` | STARTTLS or the handshake failed; never mailbox invalidity. |
 | `smtp_policy_blocked` | `smtp` | Reputation, policy, or security rejection unrelated to the target. |
 | `mail_from_rejected` | `smtp` | The envelope sender was rejected; not target-address evidence. |
@@ -216,6 +217,7 @@ section 4 resolves all of them to `unknown` or `temporary_unknown`.
 | The session budget ran out before a dialogue | a refusal carrying `deadline_exhausted` | `smtp_connection_timeout` |
 | The greeting was unusable | `stage_reached` is `banner`, outcome `protocol_error` | `smtp_banner_invalid` |
 | The greeting refused the session | `stage_reached` is `banner`, a `4xx` or `5xx` reply | `smtp_policy_blocked` |
+| A later reply was unreadable | outcome `protocol_error`, `stage_reached` past `banner` | `smtp_protocol_error` |
 | EHLO was refused | `stage_reached` is `ehlo` or `ehlo_after_tls`, a non-2xx reply | `smtp_policy_blocked` |
 | The server advertised no STARTTLS and the policy requires it | outcome `tls_error`, `tls.reason` is `not_offered` | `smtp_tls_failure` |
 | The STARTTLS command was refused | outcome `tls_error`, `tls.reason` is `command_rejected` | `smtp_tls_failure` |
@@ -241,8 +243,39 @@ Three consequences are not negotiable:
 
 ### 7.3 At the recipient stage
 
-Only these rows may produce target-specific evidence, and only when
-`stage_reached` is `rcpt_to`.
+Only these rows may produce target-specific evidence, and only when the report
+has **reached or passed** the `RCPT TO` stage. With the current state model that
+means `stage_reached` is one of:
+
+- `rcpt_to`;
+- `cleanup`.
+
+subject also to both of:
+
+- the outcome is one a recipient answer produces — `accepted`, `rejected`, or
+  `temporary_failure`;
+- `recipients_attempted` is exactly `1`.
+
+> **`cleanup` is the value a real session reports, not `rcpt_to`.** A dialogue is
+> *in* `rcpt_to` only while the command is outstanding; once the reply has been
+> read it moves on, so `application/smtp_dialogue.py` records every completed
+> recipient exchange with `stage_reached = cleanup`. Both a `250` and a
+> `550 5.1.1` arrive that way.
+>
+> **A Phase 5 filter written as `stage_reached == "rcpt_to"` therefore discards
+> every recipient answer this project produces.** An earlier version of this
+> section said the evidence was produced "only when `stage_reached` is
+> `rcpt_to`", which described a state no session reaches; the code was right and
+> this text was wrong. `application/smtp_evidence.py` derives the permitted set
+> from `STAGE_ORDER` rather than listing it, so a stage added after `RCPT_TO` in
+> a later gate is included rather than silently treated as pre-recipient.
+
+The three conditions above are independent barriers, and each is pinned by its
+own test: a `550 5.1.1` carried by a `connection_error`, one with no recipient
+attempted, and one at `mail_from` must each stay non-target evidence, and each
+of those tests fails when its own barrier alone is removed. "A `MAIL FROM 550`
+becomes a recipient rejection" is the worst mistake available here, so no single
+check carries it.
 
 | What was observed | How to recognise it | Phase 4D reason code |
 |---|---|---|
@@ -250,11 +283,24 @@ Only these rows may produce target-specific evidence, and only when
 | Accepted for forwarding | outcome `accepted`, `basic_code` 251 | `rcpt_forwarded` |
 | The server declined to verify | outcome `accepted`, `basic_code` **252** | `rcpt_unverifiable` |
 | Explicit temporary condition | outcome `temporary_failure`, `basic_code` 450, 451, or 452 | `smtp_temporary_failure` |
-| Temporary mailbox or storage condition | a `4xx` reply with enhanced class `4.2.2` | `mailbox_full` |
+| Temporary mailbox or storage condition | enhanced code `4.2.2` **or** `5.2.2` | `mailbox_full` |
 | Recipient explicitly does not exist | outcome `rejected`, enhanced code `5.1.1` | `rcpt_rejected_address` |
 | Policy or security rejection | outcome `rejected`, enhanced class `5.7.x` | `rcpt_rejected_policy` |
 | Permanent rejection nothing disambiguates | outcome `rejected`, no usable enhanced code | `smtp_ambiguous_permanent_failure` |
-| The reply was not a reply | outcome `protocol_error`, a `defect` | `smtp_banner_invalid` is **not** it; use `internal_error` only for this project's own faults, otherwise `smtp_ambiguous_permanent_failure` may not be used either — a malformed reply is `unknown`, and the reason code for it is added by 4D with its own ADR entry |
+| The reply was not a reply | outcome `protocol_error`, a `defect`, at any stage past the greeting | `smtp_protocol_error` |
+
+The branch order is part of the specification, because two rows can match one
+reply. `252` is read first, then `X.2.2`, then the basic class, then the enhanced
+code for a permanent rejection. Only the first two are cases where the enhanced
+code outranks the basic class.
+
+**`X.2.2` is a storage condition in either class.** `docs/requirements.md`
+section 9 names `552` with an explicit `X.2.2` as a *temporary* mailbox or
+storage condition, so `552 5.2.2` is `mailbox_full` and temporary, exactly as
+`452 4.2.2` is. A permanent basic code with an enhanced code that contradicts it
+is the one place in this mapping where the enhanced code wins, and it wins toward
+the conservative answer. A class-2 code cannot: `250 2.2.2` is a success code and
+is read as an ordinary acceptance.
 
 Two rules carried from `docs/requirements.md` section 9:
 
@@ -298,3 +344,134 @@ and only `basic_code` can.
 > as a stop condition, and `tests/unit/application/test_smtp_dialogue.py` pins
 > that the two are indistinguishable without the code, so the danger is visible
 > rather than remembered.
+
+### 7.5 The shape of the evidence Phase 4D produces
+
+`application/smtp_evidence.py` implements the tables above. It is a pure
+function: a `SessionReport` and a timestamp in, `Evidence` out. No socket, no
+clock, no resolver, no rate limiter, no storage, and no retry — even
+`observed_at` is a parameter, because a mapper that read a clock would be a
+mapper whose output depended on when it ran.
+
+**One piece of evidence per session.** The TLS detail, the deadline flag, and the
+cleanup status are carried as *details* on that one item rather than as evidence
+of their own. That is what makes two requirements structural instead of
+remembered: a cleanup failure cannot overwrite the recipient's answer, and
+cleanup cannot reach a verdict on its own, because there is nothing for an
+aggregator to weigh it as.
+
+The return type is a tuple so the shape is stable for Phase 5 and for a later
+gate that may add a second item. Order is fixed: the primary observation first.
+Nothing iterates a set, so the same report always yields the same tuple with the
+same detail keys in the same order.
+
+| Field | How it is chosen |
+|---|---|
+| `layer` | `smtp`, except `internal_error` (`internal`) and `unsafe_destination` (`dns`, because that code belongs to the DNS layer whichever component notices it) |
+| `reason` | the tables in 7.2 and 7.3 |
+| `strength` | `strong` only for `rcpt_rejected_address`; `moderate` for an acceptance, a forward, and an explicit temporary condition; `weak` for everything ambiguous, non-target, or unverifiable |
+| `temporary` | true for `4xx`, for `mailbox_full` in either class, and for a timeout or refused connection; false for everything else |
+| `source_version` | the ruleset version, so a stored result records which rules produced it |
+
+`rcpt_accepted` is never `strong`: section 3 caps an accepted recipient at medium
+confidence, and an accept-all server says `250` to everyone.
+
+**Two published sets accompany the mapping**, so Phase 5 filters rather than
+re-derives: `NON_TARGET_SMTP_REASONS` and `RECIPIENT_STAGE_REASONS`. A third,
+`POSITIVE_RECIPIENT_REASONS`, holds `rcpt_accepted` and `rcpt_forwarded` and
+**not** `rcpt_unverifiable` — the two sets differing by exactly that member is
+section 7.4 expressed as code.
+
+**The two sets partition every reason the mapper emits, and the partition is
+tested.** A reason may be in neither only by mistake, so no reason may be missing
+from both and none may be in both. The `about_the_target` detail is derived
+*from* `RECIPIENT_STAGE_REASONS` rather than from the absence of
+`NON_TARGET_SMTP_REASONS`, which makes an unclassified reason **non-target**
+rather than target evidence: the first form fails closed and the second fails
+open, and they differ exactly when someone has forgotten to update a set.
+
+**What details may contain**: the basic code, a validated enhanced code, the
+bounded sanitized diagnostic, the stage, the reply defect, the TLS reason, the
+deadline flag, the cleanup category, the recipient count, `no_message_data_sent`,
+and bounded timing. Every value is a string, an integer, a boolean, or null, and
+`Evidence` refuses anything else at construction.
+
+**What they may never contain**: a raw reply, a full address or submitted local
+part, **a wire command or transcript this project issued**, a certificate, TLS or
+library exception text, or a peer address.
+
+That last one is stated precisely because the obvious wording claims more than
+holds. The guarantee is:
+
+> No raw reply, and no locally-issued wire command or transcript, is stored.
+> The bounded sanitized remote diagnostic may itself contain SMTP command words,
+> because a server is free to write `RCPT TO is not allowed here` in its own
+> prose.
+
+Remote prose is not a wire command. It is bounded, `@`-free, and stripped of
+control characters by the Phase 4A sanitizer, and it is kept because it is the
+only thing that tells an operator *why* a server answered as it did.
+
+**`observed_at` is a timezone-aware timestamp**, on this and on every other
+evidence producer. `Evidence` refuses a naive one, because comparing a naive
+datetime with an aware one raises rather than answering, and Phase 5 orders
+evidence from four producers. The SMTP mapper takes the timestamp as a parameter
+rather than from a `Clock`, so this is the one producer whose timestamp comes
+from an unvalidated caller — and `map_connect_failure`, which takes raw
+primitives rather than validated domain values, checks its own arguments so that
+both entry points answer to the same contract.
+
+**Phase 4D produces no risk flag and no status.** Risk is orthogonal to
+deliverability (section 1), the four flags belong to passive classification and
+DNS, and nothing an SMTP reply says is one. An inspection test keeps `Status`,
+`Verdict`, `Confidence`, and `RiskFlag` out of every application SMTP module.
+
+### 7.6 Phase 5 stop conditions
+
+Phase 4D publishes vocabulary that is easy to mistake for a decision. Two
+readings are forbidden, and both are forbidden because they are the shortest
+correct-looking code someone could write.
+
+> **Stop condition A. `POSITIVE_RECIPIENT_REASONS` is a semantic category, not
+> an aggregation rule.** Phase 5 **must not** map membership directly to a
+> status:
+>
+> ```python
+> if reason in POSITIVE_RECIPIENT_REASONS:
+>     return Status.LIKELY_DELIVERABLE   # forbidden
+> ```
+>
+> Membership says the server answered positively about the recipient *at that
+> stage*. It does not say the address is deliverable, and an accept-all server
+> says `250` to everyone. Every aggregation must run the section 4 precedence —
+> hard invalid, unsupported input, explicit temporary condition, policy or opaque
+> failure, and only then an accepted recipient.
+
+> **Stop condition B. `EvidenceStrength.STRONG` means strong evidence, never
+> final truth.** Phase 5 **must not** map strength directly to a status:
+>
+> ```python
+> if evidence.strength is EvidenceStrength.STRONG:
+>     return Status.INVALID              # forbidden
+> ```
+>
+> `invalid` requires evidence that is target-specific, non-temporary, and
+> carrying reason semantics that mean the address itself cannot be delivered to.
+> **A reason in `NON_TARGET_SMTP_REASONS` never supports target invalidity,
+> whatever its strength**, and neither does anything the mapper marks temporary.
+
+Two further items are required before Phase 5 rather than before Phase 4E:
+
+- **`RecipientStageOutcome` extension is silent.** A member added to that enum
+  falls through the classifier to the pre-recipient path and is reported as
+  `smtp_connection_timeout`. `TransportFailure` fails loudly and `DialogueStage`
+  is now derived from `STAGE_ORDER`; this one is not covered, and an exhaustive
+  match belongs here before an aggregator starts weighing the result;
+- **`LINE_TOO_LONG` and `TOTAL_LIMIT_EXCEEDED` map by entry point.** Through
+  `map_connect_failure` they are `smtp_protocol_error`; reached mid-dialogue they
+  arrive with no reply and become `smtp_connection_timeout`. This is a
+  consequence of a 4C contract — a `SessionReport` carries no `TransportFailure`,
+  so the session path cannot know which bound was hit — rather than a decision,
+  and both are non-target and temporary-or-not in ways that change no verdict.
+  Phase 5 must either carry the failure through the report or record the
+  collapse deliberately.

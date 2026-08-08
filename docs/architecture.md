@@ -270,6 +270,41 @@ stage reached, the TLS detail, the capability set, the cleanup status, and the
 command transcript — all context for Phase 4D, none of it a verdict. See ADR 0008
 and ADR 0009.
 
+`application/smtp_evidence.py` is where an SMTP observation becomes published
+vocabulary, and it is a **pure function**: a `SessionReport` and a timestamp in,
+`Evidence` out. No socket, no clock, no resolver, no limiter, no storage, no
+retry. `observed_at` is a parameter rather than a `Clock` port — unlike the
+passive and DNS producers — because a mapping whose output depends on when it ran
+is not a mapping, and an inspection test enforces the rest.
+
+It reads the whole report rather than one field. `stage_reached` is what
+separates a rejected sender from a refused greeting, since both are
+`CONNECTION_ERROR`; `basic_code` is what separates `252` from `250`, since both
+are `ACCEPTED`. **`252` is branched on before any generic handling of a 2xx
+reply**, because a mapping written against `outcome` alone turns a server's
+refusal to verify into an acceptance (ADR 0010).
+
+Three independent barriers stand between a `MAIL FROM 550` and a recipient
+rejection — the outcome must be one a recipient answer produces, exactly one
+recipient must have been attempted, and the session must have reached the
+recipient stage — **and each is pinned by a test that fails when that barrier
+alone is removed**. The stage set is derived from `STAGE_ORDER` rather than
+listed, so a stage added after `RCPT_TO` is included instead of being silently
+treated as pre-recipient. Every real recipient answer reports `cleanup` rather
+than `rcpt_to`, because `rcpt_to` is the stage a dialogue is *in* while the
+command is outstanding; `docs/status-model.md` section 7.3 says so, and a Phase 5
+filter written the other way would discard all of it.
+
+One piece of evidence per session. The TLS outcome, the deadline flag, and the
+cleanup status are details on it rather than evidence of their own, which is what
+makes "a cleanup failure never overwrites the recipient's answer" structural
+instead of remembered. `NON_TARGET_SMTP_REASONS` and `RECIPIENT_STAGE_REASONS`
+are published beside the mapping so Phase 5 filters rather than re-derives, and
+they **partition** every reason the mapper emits — a tested property, because
+`about_the_target` is derived from the recipient-stage set so that an
+unclassified reason is non-target rather than target evidence. Phase 4D produces
+no status, no confidence, and no risk flag.
+
 ### Evidence
 
 An immutable observation produced by one layer. Evidence records:
@@ -282,6 +317,22 @@ An immutable observation produced by one layer. Evidence records:
 - safe structured details;
 - observed time;
 - source version.
+
+It validates itself, because an annotation is not a runtime check and this is a
+value assembled from a caller's parameters rather than from values that have
+already validated themselves. **`observed_at` must be timezone-aware**: a naive
+datetime cannot be compared with an aware one without raising, and aggregation
+orders evidence from four producers. Three of them take a `Clock`, which always
+answers aware UTC; `application/smtp_evidence.py` takes the timestamp as a
+parameter so that it stays a function of its input, which makes it the one
+producer whose timestamp arrives unvalidated. Every detail value is a string, an
+integer, a boolean, or null — the bound `docs/status-model.md` section 7.5 puts
+on what may reach a public response, enforced where the value is built.
+
+**`strength` is evidence weight, never a verdict.** `STRONG` may not be mapped to
+`invalid` by aggregation: that needs target-specific, non-temporary evidence with
+the right reason semantics, and a non-target SMTP reason never supports it
+whatever its strength.
 
 ### Verdict
 

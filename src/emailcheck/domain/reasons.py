@@ -26,6 +26,7 @@ class ReasonCode(StrEnum):
     SMTP_CONNECTION_TIMEOUT = "smtp_connection_timeout"
     SMTP_CONNECTION_REFUSED = "smtp_connection_refused"
     SMTP_BANNER_INVALID = "smtp_banner_invalid"
+    SMTP_PROTOCOL_ERROR = "smtp_protocol_error"
     SMTP_TLS_FAILURE = "smtp_tls_failure"
     SMTP_POLICY_BLOCKED = "smtp_policy_blocked"
     MAIL_FROM_REJECTED = "mail_from_rejected"

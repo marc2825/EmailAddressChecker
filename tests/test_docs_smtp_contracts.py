@@ -30,6 +30,17 @@ def text_of(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def flattened(text: str) -> str:
+    """Lower-cased, blockquote-stripped, one-space text.
+
+    A commitment that spans a line break is still the commitment. Matching the
+    raw file would make these tests fail on a reflow and pass on a deletion that
+    happened to keep the wrapping, which is the wrong way round.
+    """
+    without_quotes = re.sub(r"(?m)^\s*>\s?", "", text)
+    return re.sub(r"\s+", " ", without_quotes).lower()
+
+
 def _section(path: Path, start: str, end: str) -> str:
     """The text between two headings, so a check reads the table it means.
 
@@ -122,6 +133,99 @@ def test_the_mapping_row_for_252_binds_it_to_the_unverifiable_code() -> None:
     # And every other 2xx row is a different code, so the three cannot collapse.
     codes = {"rcpt_accepted", "rcpt_forwarded", "rcpt_unverifiable"}
     assert codes <= {code for code in codes if code in recipient_table}
+
+
+# --- section 7.3 names a stage a real session actually reports --------------
+
+
+def test_the_recipient_stage_condition_names_both_stages() -> None:
+    """The old wording described a state no session reaches.
+
+    Section 7.3 said target evidence is produced "only when `stage_reached` is
+    `rcpt_to`", and every real recipient answer reports `cleanup`: `rcpt_to` is
+    the stage a dialogue is *in* while the command is outstanding. The code
+    accepted both and was right. A Phase 5 author filtering as documented would
+    have discarded every recipient answer this project produces, with the whole
+    suite still passing — nothing in the mapping matrix could catch a
+    specification that is wrong about the code it specifies.
+    """
+    section = _section(STATUS_MODEL, "### 7.3", "### 7.4")
+
+    assert "`rcpt_to`" in section
+    assert "`cleanup`" in section
+    assert "reached or passed" in section
+    # And the correction is explicit, so the old contract cannot come back by
+    # someone tidying the prose.
+    assert 'stage_reached == "rcpt_to"' in section
+    assert "discards" in section
+
+
+def test_the_recipient_stage_condition_names_its_other_two_barriers() -> None:
+    """Three barriers, and the document must not describe only the stage."""
+    section = _section(STATUS_MODEL, "### 7.3", "### 7.4")
+
+    assert "recipients_attempted" in section
+    for outcome in ("accepted", "rejected", "temporary_failure"):
+        assert f"`{outcome}`" in section
+
+
+def test_the_documented_stage_set_is_the_one_the_code_uses() -> None:
+    """Substance rather than wording: the document and the module must agree."""
+    from emailcheck.application.smtp_evidence import _AT_OR_PAST_RECIPIENT
+    from emailcheck.domain.smtp_protocol import DialogueStage
+
+    assert set(_AT_OR_PAST_RECIPIENT) == {DialogueStage.RCPT_TO, DialogueStage.CLEANUP}
+
+
+# --- the Phase 5 stop conditions are recorded where a Phase 5 author looks ---
+
+
+@pytest.mark.parametrize("document", [STATUS_MODEL, PLAN, STATUS_FILE])
+def test_the_positive_set_is_recorded_as_a_category_and_not_a_rule(document: Path) -> None:
+    """The shortest correct-looking aggregation an author could write."""
+    body = text_of(document)
+
+    assert "POSITIVE_RECIPIENT_REASONS" in body, document.name
+    flat = flattened(body)
+    assert "semantic category" in flat, document.name
+    assert "not an aggregation rule" in flat, document.name
+    assert "likely_deliverable" in flat, document.name
+
+
+@pytest.mark.parametrize("document", [STATUS_MODEL, PLAN, STATUS_FILE])
+def test_strength_is_recorded_as_evidence_and_never_as_truth(document: Path) -> None:
+    body = text_of(document)
+
+    assert "STRONG" in body, document.name
+    flat = flattened(body)
+    assert "never final truth" in flat, document.name
+    assert "invalid" in flat, document.name
+    assert "non_target_smtp_reasons" in flat, document.name
+
+
+def test_the_strength_type_carries_the_stop_condition_where_it_is_read() -> None:
+    """A document a Phase 5 author may not open; a docstring they will."""
+    from emailcheck.domain.evidence import EvidenceStrength
+
+    assert EvidenceStrength.__doc__ is not None
+    documented = flattened(EvidenceStrength.__doc__)
+    assert "never final truth" in documented
+    assert "non_target_smtp_reasons" in documented
+
+
+def test_the_privacy_guarantee_is_stated_at_the_size_of_what_holds() -> None:
+    """Remote prose containing `RCPT TO` survives, and that is not a leak.
+
+    The wording that forbade "a raw wire command" claimed more than the code
+    does: a server may write `550 RCPT TO is not allowed here` and the bounded
+    sanitized diagnostic keeps it. What may never be stored is a reply or a
+    command *this project issued*.
+    """
+    flat = flattened(_section(STATUS_MODEL, "### 7.5", "### 7.6"))
+
+    assert "locally-issued" in flat
+    assert "remote diagnostic may itself contain smtp command words" in flat
+    assert "remote prose is not a wire command" in flat
 
 
 def test_the_generic_accepted_mapping_is_called_out_as_wrong() -> None:
