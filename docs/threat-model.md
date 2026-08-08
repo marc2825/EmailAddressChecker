@@ -93,9 +93,23 @@ Controls:
   validated, so a connect that resolved anything would be reaching somewhere the
   policy never saw;
 - allow only port 25, and confirm the peer reached it;
-- publish no way to write a byte before the peer is confirmed. `SMTPConnection`
-  has no write method at all, so the ordering is a property of the type rather
-  than of the caller's care;
+- publish no way to write arbitrary bytes at all. `SMTPConnection.write_command`
+  takes a `WireCommand` — one of six enum members plus bytes checked to begin
+  with that verb — so no caller can name a seventh command. The *argument* forms
+  are constrained by the six factories rather than by the type, and an
+  inspection test fixes that production builds a `WireCommand` only through
+  them: three layers, and the reachable set of wire lines is the image of the
+  six only while all three hold (ADR 0009);
+- bind the TLS host name to the destination chain. `TLSUpgradeRequest` takes a
+  `ConfirmedPeer` rather than a host name, so SNI and hostname verification use
+  the MX host the policy already validated, never the recipient's domain and
+  never a caller-supplied string;
+- re-read `getpeername()` before and after a STARTTLS upgrade, resolving nothing,
+  so a connection cannot become a different peer's by being wrapped;
+- acquire a rate-limit budget before a socket is created. `SMTPProbeService`
+  takes a `RateLimiter` with no default, so a caller that has not supplied one
+  cannot construct it, and the budget key is the account, the recipient's domain,
+  and the MX host — never the local part;
 - isolate worker egress and credentials;
 - cap reads and time.
 
@@ -140,6 +154,27 @@ Controls:
   are equally terminal. Once the total is spent no further socket read is
   attempted at all, so a spent connection fails immediately rather than costing
   one read deadline per call;
+- **a total session deadline on top of the per-operation ones, and it
+  dominates.** A per-read deadline bounds one read; a dialogue of eight steps
+  bounds nothing useful, because a peer answering each stage just inside its
+  deadline holds a worker for four minutes without ever timing out. Every awaited
+  step of the dialogue runs inside the remaining `SessionBudget`, measured
+  against a monotonic clock so a wall-clock adjustment cannot move it (ADR 0009);
+- **the connect is inside that budget too.** It starts before the socket does, so
+  one probe costs `SessionBudget` rather than `connect_seconds + SessionBudget`,
+  and the effective connect bound is the smaller of the transport's own timeout
+  and what is left. A budget already spent opens no socket at all. Waiting for a
+  rate-limit lease is outside the budget on purpose, so queue depth is never
+  recorded as a remote timeout;
+- **each awaited step is pinned individually.** A peer that goes silent at one
+  named stage must still end the session, for all sixteen of them, and an
+  inspection requires every `connection` call in the dialogue to sit inside the
+  deadline wrapper. The property held before and nothing tested it: removing the
+  wrapper from the read step, the write step, or the handshake each left the
+  whole suite passing, because whichever step ran next tripped the budget
+  instead;
+- bounded capability parsing: an EHLO keyword is bounded in length, the count is
+  capped, and nothing branches on one;
 - bounded retries;
 - fair queueing.
 
@@ -176,7 +211,54 @@ Controls:
   configuration only, and `current_identity()` takes no argument so it cannot
   depend on the target;
 - `EnvelopeSender` and `EhloIdentity` fix the shape; the port owns provenance;
+- the implementation reads a mapping the caller loaded deliberately. No
+  environment variable, no ambient default, no unknown key accepted, and no
+  default identity — an unconfigured deployment does not probe, because inventing
+  a plausible EHLO name would put an unowned host name on the wire;
+- the configured sender may not be the null reverse path. `docs/requirements.md`
+  section 9 wants SPF, a PTR, and monitored `postmaster` and `abuse` channels,
+  and `MAIL FROM:<>` followed by one `RCPT TO` is the shape a receiving site
+  fingerprints as harvesting (ADR 0009);
+- the EHLO name and the sender's domain must be the same name or one a subdomain
+  of the other. An alignment check, not an ownership proof: it catches the
+  configuration mistake that turns a probe into apparent forgery;
+- a test asserts the wire bytes, not only the type. A mutation that built
+  `MAIL FROM` from the probe target passed every behavioural test until one
+  looked at what the command actually carried;
 - one stable identity per deployment, never rotated to change an answer.
+
+### Plaintext exposure of the recipient
+
+Threat: the address being checked travels in `RCPT TO`, in the clear, to a host
+chosen by a DNS answer.
+
+Controls:
+
+- `TLSPolicy.REQUIRED` by default. A server advertising no `STARTTLS` ends the
+  probe as a non-target `TLS_ERROR` rather than continuing in plaintext;
+- certificate and host name verification always on, with no parameter that can
+  change either. The one seam adds a trust anchor and cannot remove one;
+- **a trust anchor comes from operator configuration only.** `TLSTrust` cannot
+  turn verification off, but it can widen it, and request, user, or API input
+  must never supply a CA file, a PEM body, a trust anchor, or a verification
+  override — choosing who signs the certificate this project trusts is
+  `CERT_NONE` by a longer route. No such path exists today; an inspection test
+  refuses a `TLSTrust` constructed anywhere in `src/` outside the module holding
+  the system-trust default, and refuses any production module that reads the
+  environment. `plans/phase-04-smtp.md` carries it as a Phase 6 stop condition;
+- **a `TLSUpgradeRequest` authorizes one connection, not any connection.** The
+  peer it carries is compared against the endpoint the connection actually
+  reached, before a handshake byte moves, so a request built from another
+  connection's `ConfirmedPeer` cannot supply that host's name as SNI. Two
+  barriers — this comparison and the `getpeername()` re-read — and each has its
+  own test, because the review found that removing this one broke nothing;
+- no plaintext fallback after a failed handshake, under either policy, and no
+  transition back to plaintext in the state machine;
+- the upgrade is refused when anything is already buffered, because those bytes
+  are plaintext an attacker could have injected before it (CVE-2011-0411);
+- **a server without TLS is never an invalid mailbox.** `TLS_ERROR` is in
+  `NON_TARGET_OUTCOMES`, so the conservative default cannot become a wrong
+  answer about an address.
 
 ### Message content submission
 

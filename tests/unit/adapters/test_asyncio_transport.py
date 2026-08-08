@@ -20,14 +20,19 @@ from emailcheck.adapters.smtp.asyncio_transport import (
 )
 from emailcheck.domain.dns import HostName
 from emailcheck.domain.smtp_contract import SMTPContractError
-from emailcheck.domain.smtp_destination import ApprovedDestination, PeerEndpoint
+from emailcheck.domain.smtp_destination import (
+    ApprovedDestination,
+    ConfirmedPeer,
+    PeerEndpoint,
+)
 from emailcheck.domain.smtp_transport import (
     DEFAULT_MAX_TOTAL_BYTES,
+    TLSFailed,
     TransportFailure,
     TransportLimits,
     TransportTimeouts,
 )
-from emailcheck.ports.smtp import ConnectionFailed
+from emailcheck.ports.smtp import ConnectionFailed, TLSUpgradeRequest
 
 PUBLIC_V4 = "93.184.216.34"
 PUBLIC_V6 = "2606:4700:4700::1111"
@@ -242,27 +247,63 @@ def test_the_connection_has_no_public_write_method() -> None:
         assert forbidden not in public
 
 
-def test_the_port_protocol_declares_no_write_method() -> None:
+def test_the_port_protocol_publishes_no_arbitrary_bytes_write() -> None:
+    """Gate 4C added a write capability and did not add an arbitrary-bytes one.
+
+    The published surface is fixed here rather than left to review attention: a
+    `write(payload: bytes)` beside `write_command` would restore exactly the
+    hole `WireCommand` exists to close, and every existing test would still
+    pass.
+    """
     from emailcheck.ports.smtp import SMTPConnection
 
     public = {name for name in dir(SMTPConnection) if not name.startswith("_")}
-    assert public <= {"peer", "read_line", "close"}
+    assert public == {"peer", "tls_active", "read_line", "write_command", "start_tls", "close"}
+    for forbidden in ("write", "write_raw", "write_line", "sendall", "send_line", "raw"):
+        assert forbidden not in public
 
 
-def test_the_adapter_imports_no_tls() -> None:
-    """STARTTLS is gate 4C. No `ssl` reaches this module."""
-    import ast
+def test_the_only_write_capability_takes_a_wire_command() -> None:
+    """No `bytes`, no `str`, and no command name reaches the wire through a port."""
     import inspect
 
-    from emailcheck.adapters.smtp import asyncio_transport
+    from emailcheck.ports.smtp import SMTPConnection
 
-    tree = ast.parse(inspect.getsource(asyncio_transport))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert alias.name.split(".")[0] != "ssl"
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            assert node.module.split(".")[0] != "ssl"
+    for owner in (SMTPConnection, AsyncioSMTPConnection):
+        signature = inspect.signature(owner.write_command)
+        parameters = {
+            name: parameter.annotation
+            for name, parameter in signature.parameters.items()
+            if name != "self"
+        }
+        assert parameters == {"command": "WireCommand"}, owner
+
+
+def test_the_adapter_is_the_only_module_that_imports_ssl() -> None:
+    """TLS lives in the adapter tree, and nowhere the domain can reach.
+
+    Gate 4B asserted that `ssl` was imported nowhere at all. 4C implements
+    STARTTLS, so the invariant becomes a boundary rather than an absence: the
+    domain and the application still may not import it, because a value type or
+    an orchestration step that knew about `SSLContext` would be a value type
+    that could be handed an insecure one.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3] / "src" / "emailcheck"
+    importers: list[str] = []
+    for module in sorted(root.rglob("*.py")):
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            imported: list[str] = []
+            if isinstance(node, ast.Import):
+                imported = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported = [node.module.split(".")[0]]
+            if "ssl" in imported:
+                importers.append(str(module.relative_to(root)))
+    assert set(importers) == {"adapters/smtp/asyncio_transport.py", "adapters/smtp/tls.py"}
 
 
 def test_the_transport_exposes_connect_and_nothing_else() -> None:
@@ -490,32 +531,238 @@ def test_wrapping_a_socket_is_not_a_public_entry_point() -> None:
     public = {
         name for name, _ in inspect.getmembers(AsyncioSMTPConnection) if not name.startswith("_")
     }
-    assert public == {"peer", "is_closed", "read_line", "close"}
+    assert public == {
+        "peer",
+        "tls_active",
+        "is_closed",
+        "read_line",
+        "write_command",
+        "start_tls",
+        "close",
+    }
     assert hasattr(AsyncioSMTPConnection, "_over_socket")
     assert not hasattr(AsyncioSMTPConnection, "over_socket")
 
 
 def test_no_production_code_outside_the_adapter_wraps_a_socket() -> None:
     """The one production caller is `connect`, in the adapter's own module."""
+    assert _external_mentions_of("_over_socket") == []
+    assert _call_sites_in_the_adapter("_over_socket") == 1, "connect is the only caller"
+
+
+def test_no_production_code_outside_the_adapter_upgrades_a_bare_host_name() -> None:
+    """`_start_tls_over` gets the same treatment `_over_socket` already had.
+
+    It is the primitive underneath `start_tls`, and the only thing it skips is
+    the binding of the host name to a `ConfirmedPeer` — verification itself is
+    identical, because both go through `build_client_context`. That is still one
+    barrier fewer, so the symmetric question has to be asked: nothing in `src/`
+    outside this module names it, and inside it there is exactly one caller.
+    """
+    assert _external_mentions_of("_start_tls_over") == []
+    assert _call_sites_in_the_adapter("_start_tls_over") == 1, "start_tls is the only caller"
+
+
+def test_the_tls_primitive_cannot_be_selected_by_configuration() -> None:
+    """No flag, key, or request field chooses between the two entry points.
+
+    `start_tls` calls `_start_tls_over` unconditionally, so there is no branch a
+    deployment could land on the unbound side of.
+    """
     import ast
+    from pathlib import Path
+
+    adapter = (
+        Path(__file__).resolve().parents[3]
+        / "src"
+        / "emailcheck"
+        / "adapters"
+        / "smtp"
+        / "asyncio_transport.py"
+    )
+    tree = ast.parse(adapter.read_text(encoding="utf-8"))
+    (upgrade,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "start_tls"
+    ]
+    calls = [
+        node
+        for node in ast.walk(upgrade)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_start_tls_over"
+    ]
+    assert len(calls) == 1
+    # The call is the function's own return, not the consequent of a branch.
+    assert any(
+        isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Await)
+        and node.value.value is calls[0]
+        for node in ast.walk(upgrade)
+    ), "the primitive is reached unconditionally, never selected"
+
+
+def _external_mentions_of(name: str) -> list[str]:
+    """Every production module outside the transport that names `name`."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[3] / "src" / "emailcheck"
     adapter = root / "adapters" / "smtp" / "asyncio_transport.py"
-    callers: list[str] = []
-    for module in sorted(root.rglob("*.py")):
-        if module == adapter:
-            continue
-        if "_over_socket" in module.read_text(encoding="utf-8"):
-            callers.append(str(module.relative_to(root)))
-    assert callers == [], f"a socket is wrapped outside the transport: {callers}"
+    return [
+        str(module.relative_to(root))
+        for module in sorted(root.rglob("*.py"))
+        if module != adapter and name in module.read_text(encoding="utf-8")
+    ]
 
+
+def _call_sites_in_the_adapter(name: str) -> int:
+    import ast
+    from pathlib import Path
+
+    adapter = (
+        Path(__file__).resolve().parents[3]
+        / "src"
+        / "emailcheck"
+        / "adapters"
+        / "smtp"
+        / "asyncio_transport.py"
+    )
     tree = ast.parse(adapter.read_text(encoding="utf-8"))
-    wrapping = [
-        node.lineno
+    return sum(
+        1
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "_over_socket"
-    ]
-    assert len(wrapping) == 1, "connect is the only production caller"
+        and node.func.attr == name
+    )
+
+
+# --- the upgrade is bound to the peer that was confirmed -------------------
+
+
+def _connection_over_a_pair(peer: PeerEndpoint) -> tuple[AsyncioSMTPConnection, socket.socket]:
+    """A connection over a socket pair, so no address is ever dialled.
+
+    The socket is irrelevant to what these tests measure: the request/peer
+    comparison happens in `start_tls`, before `_start_tls_over` touches
+    anything. The pair exists only because a connection holds a real descriptor.
+    """
+    near, far = socket.socketpair()
+    far.close()
+    return AsyncioSMTPConnection._over_socket(near, peer), near
+
+
+def _confirmed(address: str, host: str = "mx.example.com") -> ConfirmedPeer:
+    approved = ApprovedDestination(host=HostName(host), address=address)
+    return ConfirmedPeer(approved=approved, peer_address=address, peer_port=25)
+
+
+@pytest.mark.parametrize(
+    ("connection_peer", "request_peer_address", "label"),
+    [
+        (PeerEndpoint(PUBLIC_V4, 25), "1.1.1.1", "another connection's confirmed peer"),
+        (PeerEndpoint("1.1.1.1", 25), PUBLIC_V4, "a different public host"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_an_upgrade_request_from_another_connection_is_refused(
+    connection_peer: PeerEndpoint, request_peer_address: str, label: str
+) -> None:
+    """A `ConfirmedPeer` authorizes one connection, not any connection.
+
+    Removing this comparison broke no test when the 4C review mutated it away.
+    `_peer_is_unchanged()` still catches the socket *becoming* a different peer,
+    but it cannot catch a request built from a different connection's peer — and
+    that request is what supplies the SNI name and the name verified against.
+    """
+    connection, held = _connection_over_a_pair(connection_peer)
+    try:
+        await connection.close()
+        outcome = await connection.start_tls(
+            TLSUpgradeRequest(peer=_confirmed(request_peer_address), timeout_seconds=1.0)
+        )
+    finally:
+        held.close()
+
+    assert isinstance(outcome, TLSFailed), label
+    assert outcome.failure is TransportFailure.TLS_PEER_CHANGED
+
+
+@pytest.mark.asyncio
+async def test_an_upgrade_request_naming_a_different_port_is_refused() -> None:
+    """The port is half of an endpoint, and it is compared as well.
+
+    Only port 25 can be approved, so the disagreement can only come from the
+    connection side: a socket that reached the right address on another port.
+    """
+    connection, held = _connection_over_a_pair(PeerEndpoint(PUBLIC_V4, 587))
+    try:
+        await connection.close()
+        outcome = await connection.start_tls(
+            TLSUpgradeRequest(peer=_confirmed(PUBLIC_V4), timeout_seconds=1.0)
+        )
+    finally:
+        held.close()
+
+    assert isinstance(outcome, TLSFailed)
+    assert outcome.failure is TransportFailure.TLS_PEER_CHANGED
+
+
+@pytest.mark.asyncio
+async def test_an_address_written_another_way_is_refused_rather_than_reconciled() -> None:
+    """The comparison is exact, and fails closed when the two forms differ.
+
+    Production never reaches this: `confirm_peer` stores the canonical form the
+    policy returned, and the transport builds its own endpoint from the same
+    normalization, so the two agree. A test pins which way it fails if they ever
+    stop agreeing — refusing an upgrade is recoverable, reconciling two forms is
+    how a mapped or expanded address gets accepted as another.
+    """
+    connection, held = _connection_over_a_pair(PeerEndpoint(PUBLIC_V6, 25))
+    expanded = ConfirmedPeer(
+        approved=ApprovedDestination(host=HostName("mx.example.com"), address=PUBLIC_V6),
+        peer_address="2606:4700:4700:0:0:0:0:1111",
+        peer_port=25,
+    )
+    try:
+        await connection.close()
+        outcome = await connection.start_tls(TLSUpgradeRequest(peer=expanded, timeout_seconds=1.0))
+    finally:
+        held.close()
+
+    assert isinstance(outcome, TLSFailed)
+    assert outcome.failure is TransportFailure.TLS_PEER_CHANGED
+
+
+@pytest.mark.asyncio
+async def test_a_matching_peer_gets_past_the_comparison() -> None:
+    """The refusals above must be the comparison firing, not a shared dead end.
+
+    A closed connection is refused by `_start_tls_over` for a different, named
+    reason, so a matching request reaching that reason is what shows the
+    comparison let it through.
+    """
+    connection, held = _connection_over_a_pair(PeerEndpoint(PUBLIC_V4, 25))
+    try:
+        await connection.close()
+        outcome = await connection.start_tls(
+            TLSUpgradeRequest(peer=_confirmed(PUBLIC_V4), timeout_seconds=1.0)
+        )
+    finally:
+        held.close()
+
+    assert isinstance(outcome, TLSFailed)
+    assert outcome.failure is TransportFailure.CONNECTION_CLOSED
+
+
+@pytest.mark.asyncio
+async def test_an_upgrade_still_requires_a_request_built_from_a_peer() -> None:
+    connection, held = _connection_over_a_pair(PeerEndpoint(PUBLIC_V4, 25))
+    try:
+        for wrong in (None, "mx.example.com", _confirmed(PUBLIC_V4)):
+            with pytest.raises(SMTPContractError, match="TLSUpgradeRequest"):
+                await connection.start_tls(wrong)  # type: ignore[arg-type]
+    finally:
+        await connection.close()
+        held.close()

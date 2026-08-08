@@ -9,13 +9,22 @@ port = 25
 connect_timeout_seconds = 3.0
 command_timeout_seconds = 3.0
 session_timeout_seconds = 12.0
+# `required` refuses to probe a server that advertises no STARTTLS, which is the
+# conservative default; `opportunistic` continues in plaintext when the extension
+# is absent. Neither tolerates a failed handshake.
+tls_policy = "required"
+tls_handshake_timeout_seconds = 5.0
 max_reply_line_bytes = 2048
 max_reply_lines = 40
 require_static_sender_identity = true
 
+# Read by `adapters/smtp/sender_identity.py`. Both keys are required, an unknown
+# key is refused, and there is no default: an unconfigured deployment does not
+# probe. The null reverse path is not configurable, and the EHLO name must be the
+# sender's domain or a subdomain of it (ADR 0009).
 [sender]
-helo = "probe.example.net"
-mail_from = "probe@example.net"
+ehlo_hostname = "probe.example.net"
+envelope_sender = "probe@example.net"
 
 [rate_limit]
 global_concurrency = 2

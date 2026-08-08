@@ -16,9 +16,17 @@ Three rules from ADR 0008 are implemented here rather than merely respected:
   healthy IPv4 connection into an unsafe destination;
 - **the policy runs once more before the socket exists.** `ApprovedDestination`
   checked it at construction, and a worker may pick the job up much later;
-- **nothing is written.** There is no public write method, and gate 4B writes no
-  bytes at all. `_write_line` exists as a private primitive for 4C to wire to
-  the six encoders, and is not on the `SMTPConnection` protocol.
+- **only an encoded command may be written.** `write_command` takes a
+  `WireCommand` — one of six enum members plus bytes that were checked to begin
+  with that verb — and writes its payload unchanged. There is no method taking
+  `bytes`, a string, or a command name, so the reachable set of wire lines is
+  the image of the six encoders. `_write_line` stays private underneath it.
+
+Gate 4C adds TLS, and it is driven through `ssl.SSLObject` over a pair of
+`MemoryBIO`s rather than a wrapped socket. That keeps every actual byte moving
+through `loop.sock_recv` and `loop.sock_sendall`, which is what makes the test
+suite's network guards and counters see TLS traffic exactly as they see
+plaintext: the encryption is a transformation in memory, not a second I/O path.
 """
 
 from __future__ import annotations
@@ -27,10 +35,12 @@ import asyncio
 import contextlib
 import ipaddress
 import socket
+import ssl
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Final
 
+from emailcheck.adapters.smtp.tls import SYSTEM_TRUST, TLSTrust, build_client_context
 from emailcheck.domain.smtp_contract import SMTPContractError
 from emailcheck.domain.smtp_destination import (
     MAX_PORT_NUMBER,
@@ -43,12 +53,24 @@ from emailcheck.domain.smtp_transport import (
     LineRead,
     ReadFailed,
     ReadOutcome,
+    TLSFailed,
+    TLSNegotiated,
+    TLSOutcome,
     TransportError,
     TransportFailure,
     TransportLimits,
     TransportTimeouts,
+    WriteFailed,
+    WriteOutcome,
+    WriteSucceeded,
 )
-from emailcheck.ports.smtp import ConnectionFailed, ConnectionOpened, ConnectionOutcome
+from emailcheck.domain.smtp_wire import WireCommand
+from emailcheck.ports.smtp import (
+    ConnectionFailed,
+    ConnectionOpened,
+    ConnectionOutcome,
+    TLSUpgradeRequest,
+)
 from emailcheck.security.destination import evaluate_destination
 
 #: SMTP frames on CRLF. Reading tolerates a bare LF and strips a trailing CR,
@@ -83,6 +105,12 @@ _NEVER_A_TRANSPORT_FAILURE: Final[tuple[type[BaseException], ...]] = (
     GeneratorExit,
     AssertionError,
 )
+
+#: OpenSSL's verification code for a certificate whose chain is fine and whose
+#: name does not match. Distinguished from every other verification failure
+#: because "the operator pointed at the wrong host" and "the certificate is not
+#: trusted" are different problems, and both must stay non-fatal to the address.
+_HOSTNAME_MISMATCH_VERIFY_CODE: Final = 62
 
 
 def _family_for(destination: ApprovedDestination) -> int:
@@ -139,6 +167,22 @@ def _peer_from_sockaddr(sockaddr: object, family: int) -> PeerEndpoint | Transpo
 
 
 @dataclass(slots=True)
+class _TLSLayer:
+    """An in-memory TLS session over the raw socket.
+
+    `ssl.SSLObject` plus two `MemoryBIO`s rather than `wrap_socket`, so every
+    byte still moves through `loop.sock_recv` and `loop.sock_sendall`. The
+    encryption becomes a transformation in memory instead of a second I/O path,
+    which means the suite's network guard and its outbound-call counter observe
+    an encrypted session exactly as they observe a plaintext one.
+    """
+
+    ssl_object: ssl.SSLObject
+    incoming: ssl.MemoryBIO
+    outgoing: ssl.MemoryBIO
+
+
+@dataclass(slots=True)
 class AsyncioSMTPConnection:
     """One open socket, with bounded reads and a close that always runs.
 
@@ -155,6 +199,8 @@ class AsyncioSMTPConnection:
     _buffer: bytearray
     _total_read: int = 0
     _closed: bool = False
+    _trust: TLSTrust = SYSTEM_TRUST
+    _tls: _TLSLayer | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self._peer, PeerEndpoint):
@@ -171,6 +217,8 @@ class AsyncioSMTPConnection:
             raise SMTPContractError("a connection cannot have read a negative number of bytes")
         if self._total_read > self._limits.max_total_bytes:
             raise SMTPContractError("a connection cannot begin beyond its own total limit")
+        if not isinstance(self._trust, TLSTrust):
+            raise SMTPContractError("a connection must carry a trust configuration")
         if self._closed and self._socket.fileno() != -1:
             raise SMTPContractError("a connection reported as closed cannot hold an open socket")
 
@@ -182,6 +230,7 @@ class AsyncioSMTPConnection:
         *,
         limits: TransportLimits | None = None,
         timeouts: TransportTimeouts | None = None,
+        trust: TLSTrust = SYSTEM_TRUST,
     ) -> AsyncioSMTPConnection:
         """Wrap a socket that is already connected. Internal I/O primitive.
 
@@ -200,11 +249,16 @@ class AsyncioSMTPConnection:
             _limits=limits or TransportLimits(),
             _timeouts=timeouts or TransportTimeouts(),
             _buffer=bytearray(),
+            _trust=trust,
         )
 
     @property
     def peer(self) -> PeerEndpoint:
         return self._peer
+
+    @property
+    def tls_active(self) -> bool:
+        return self._tls is not None
 
     # --- reading -----------------------------------------------------------
 
@@ -212,7 +266,6 @@ class AsyncioSMTPConnection:
         """Read one line, bounded three ways: per line, per connection, in time."""
         if self._closed:
             return ReadFailed(failure=TransportFailure.CONNECTION_CLOSED)
-        loop = asyncio.get_running_loop()
         while True:
             framed = self._take_line()
             if isinstance(framed, TransportFailure):
@@ -231,7 +284,7 @@ class AsyncioSMTPConnection:
 
             try:
                 async with asyncio.timeout(self._timeouts.read_seconds):
-                    chunk = await loop.sock_recv(self._socket, READ_CHUNK_BYTES)
+                    chunk = await self._receive_bytes(READ_CHUNK_BYTES)
             except TimeoutError:
                 return ReadFailed(failure=TransportFailure.READ_TIMEOUT)
             except ConnectionResetError:
@@ -266,26 +319,250 @@ class AsyncioSMTPConnection:
             return TransportFailure.LINE_TOO_LONG
         return framed
 
-    # --- writing: private, and unused in gate 4B ---------------------------
+    # --- moving bytes, plaintext or encrypted ------------------------------
+
+    async def _receive_bytes(self, size: int) -> bytes:
+        """Read up to `size` application bytes. Empty means the peer is done.
+
+        Plaintext is one socket read. Encrypted is a pump: ask the TLS session
+        for plaintext, and when it needs more ciphertext, read the socket and
+        feed it. Raises `OSError` on a TLS error so `read_line`'s existing
+        handling names it without a second failure vocabulary.
+        """
+        loop = asyncio.get_running_loop()
+        layer = self._tls
+        if layer is None:
+            return await loop.sock_recv(self._socket, size)
+
+        while True:
+            try:
+                return layer.ssl_object.read(size)
+            except ssl.SSLWantReadError:
+                await self._flush_tls_output(layer)
+                if not await self._feed_tls_input(layer):
+                    return b""
+            except ssl.SSLZeroReturnError:
+                return b""
+            except ssl.SSLError as error:
+                raise OSError("the TLS session could not be read") from error
+
+    async def _transmit_bytes(self, payload: bytes) -> None:
+        """Put `payload` on the wire, encrypting it first when TLS is active."""
+        loop = asyncio.get_running_loop()
+        layer = self._tls
+        if layer is None:
+            await loop.sock_sendall(self._socket, payload)
+            return
+
+        view = memoryview(payload)
+        while view:
+            try:
+                written = layer.ssl_object.write(view)
+            except ssl.SSLWantReadError:
+                await self._flush_tls_output(layer)
+                if not await self._feed_tls_input(layer):
+                    raise OSError("the peer closed during a TLS write") from None
+                continue
+            except ssl.SSLWantWriteError:
+                await self._flush_tls_output(layer)
+                continue
+            except ssl.SSLError as error:
+                raise OSError("the TLS session could not be written to") from error
+            view = view[written:]
+            await self._flush_tls_output(layer)
+        await self._flush_tls_output(layer)
+
+    async def _flush_tls_output(self, layer: _TLSLayer) -> None:
+        """Move whatever the TLS session produced onto the socket."""
+        payload = layer.outgoing.read()
+        if payload:
+            loop = asyncio.get_running_loop()
+            await loop.sock_sendall(self._socket, payload)
+
+    async def _feed_tls_input(self, layer: _TLSLayer) -> bool:
+        """Give the TLS session more ciphertext. False when the peer is done."""
+        loop = asyncio.get_running_loop()
+        chunk = await loop.sock_recv(self._socket, READ_CHUNK_BYTES)
+        if not chunk:
+            layer.incoming.write_eof()
+            return False
+        layer.incoming.write(chunk)
+        return True
+
+    # --- writing: only what an encoder produced ----------------------------
+
+    async def write_command(self, command: WireCommand) -> WriteOutcome:
+        """Write one encoded command line, and nothing else.
+
+        The entire capability is the argument type. A `WireCommand` names one of
+        six enum members and carries bytes that were checked to begin with that
+        verb, so there is no reachable wire line that is not the output of one
+        of the six encoders. The payload is written unchanged: the encoder
+        already appended the one CRLF this project produces.
+        """
+        if not isinstance(command, WireCommand):
+            # The same reasoning as `connect` and `SMTPSession.peer`: mypy runs
+            # on `src` only, and an `Any` from a caller it never sees would
+            # otherwise carry arbitrary bytes onto the wire.
+            raise SMTPContractError("write_command requires a WireCommand from the encoders")
+        try:
+            await self._write_line(command.payload)
+        except TransportError as error:
+            return WriteFailed(failure=error.failure)
+        return WriteSucceeded(payload_bytes=len(command.payload))
 
     async def _write_line(self, payload: bytes) -> None:
         """Write one already-encoded command line.
 
-        Private on purpose. `SMTPConnection` does not declare it, so no
-        application or domain code can reach it, and gate 4B calls it nowhere.
-        Gate 4C wires it to the output of the six encoders in
-        `domain/smtp_command.py` and to nothing else.
+        Private on purpose, and it stays private now that `write_command`
+        exists: the public capability takes a `WireCommand`, and this takes
+        bytes. Everything that reaches it has come through the six encoders.
         """
         if self._closed:
             raise TransportError(TransportFailure.CONNECTION_CLOSED)
-        loop = asyncio.get_running_loop()
         try:
             async with asyncio.timeout(self._timeouts.write_seconds):
-                await loop.sock_sendall(self._socket, payload)
+                await self._transmit_bytes(payload)
         except TimeoutError as error:
             raise TransportError(TransportFailure.WRITE_TIMEOUT) from error
         except OSError as error:
             raise TransportError(TransportFailure.CONNECTION_RESET) from error
+
+    # --- upgrading to TLS ---------------------------------------------------
+
+    async def start_tls(self, request: TLSUpgradeRequest) -> TLSOutcome:
+        """Negotiate TLS in place over the socket that is already connected.
+
+        Four things happen before a single handshake byte moves, and each of
+        them is a refusal rather than a warning:
+
+        - **the request must be a `TLSUpgradeRequest`**, which carries a
+          `ConfirmedPeer`. The name verified against is `peer.host` — the MX
+          host the destination chain validated — so the recipient's domain and
+          any caller-supplied string are unrepresentable as an SNI value;
+        - **the peer must still be the confirmed one.** `getpeername()` is read
+          again and compared to both the endpoint this connection reported and
+          the one the caller confirmed. Nothing is re-resolved: a name lookup
+          here would reach somewhere the policy never saw;
+        - **the read buffer must be empty.** Anything already received is
+          plaintext an active attacker could have injected before the upgrade,
+          and reading it afterwards would treat it as though it had arrived
+          inside TLS. RFC 3207 says discard it; refusing the upgrade is
+          stricter and leaves no path where injected bytes are used;
+        - **verification is not negotiable.** `build_client_context` sets
+          `check_hostname` and `CERT_REQUIRED` with no parameter that could turn
+          either off.
+
+        A failure is terminal. There is no fallback to plaintext, here or in the
+        state machine, and none of these outcomes is evidence about the address.
+        """
+        if not isinstance(request, TLSUpgradeRequest):
+            raise SMTPContractError("start_tls requires a TLSUpgradeRequest built from a peer")
+        if (
+            request.peer.peer_address != self._peer.address
+            or request.peer.peer_port != self._peer.port
+        ):
+            # The confirmed peer and the endpoint this connection reached are
+            # two records of one fact. If they disagree, one of them is about a
+            # different connection.
+            return TLSFailed(failure=TransportFailure.TLS_PEER_CHANGED)
+        return await self._start_tls_over(request.server_hostname, request.timeout_seconds)
+
+    async def _start_tls_over(self, server_hostname: str, timeout_seconds: float) -> TLSOutcome:
+        """Negotiate TLS against `server_hostname`. Internal I/O primitive.
+
+        `start_tls` is the only production caller and derives the name from a
+        `ConfirmedPeer`, so nothing in `src/` can name a host of its own. The
+        loopback integration tests call this directly for the same reason they
+        call `_over_socket` directly: to exercise real socket behaviour without
+        the authorization chain, which loopback cannot pass.
+
+        It is not a verification bypass. `build_client_context` is used here as
+        everywhere, so the certificate and the name are checked exactly as they
+        are in production; the only thing this skips is the binding of the name
+        to a `ConfirmedPeer`.
+        """
+        if self._closed:
+            return TLSFailed(failure=TransportFailure.CONNECTION_CLOSED)
+        if self._tls is not None:
+            return TLSFailed(failure=TransportFailure.TLS_ALREADY_ACTIVE)
+        if self._buffer:
+            return TLSFailed(failure=TransportFailure.TLS_HANDSHAKE_FAILED)
+        if not self._peer_is_unchanged():
+            return TLSFailed(failure=TransportFailure.TLS_PEER_CHANGED)
+
+        context = build_client_context(self._trust)
+        incoming = ssl.MemoryBIO()
+        outgoing = ssl.MemoryBIO()
+        layer = _TLSLayer(
+            ssl_object=context.wrap_bio(
+                incoming,
+                outgoing,
+                server_side=False,
+                server_hostname=server_hostname,
+            ),
+            incoming=incoming,
+            outgoing=outgoing,
+        )
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                await self._perform_handshake(layer)
+        except TimeoutError:
+            return TLSFailed(failure=TransportFailure.TLS_TIMEOUT)
+        except TransportError as error:
+            return TLSFailed(failure=error.failure)
+        except BaseException as error:
+            if isinstance(error, _NEVER_A_TRANSPORT_FAILURE):
+                raise
+            return TLSFailed(failure=_tls_failure_for(error))
+
+        self._tls = layer
+        if not self._peer_is_unchanged():
+            # Checked again on the other side of the upgrade, so a connection
+            # cannot become a different peer's by being wrapped.
+            return TLSFailed(failure=TransportFailure.TLS_PEER_CHANGED)
+        return TLSNegotiated()
+
+    async def _perform_handshake(self, layer: _TLSLayer) -> None:
+        """Drive the handshake, translating what it raises into this vocabulary."""
+        while True:
+            try:
+                layer.ssl_object.do_handshake()
+            except ssl.SSLWantReadError:
+                await self._flush_tls_output(layer)
+                if not await self._feed_tls_input(layer):
+                    raise TransportError(TransportFailure.TLS_HANDSHAKE_FAILED) from None
+                continue
+            except ssl.SSLWantWriteError:
+                await self._flush_tls_output(layer)
+                continue
+            except ssl.SSLError as error:
+                # The alert the failure produced is still in the outgoing BIO.
+                # Flushing it is a courtesy to the peer and cannot fail the
+                # handshake any further than it already has.
+                with contextlib.suppress(OSError):
+                    await self._flush_tls_output(layer)
+                raise TransportError(_tls_failure_for(error)) from error
+            except OSError as error:
+                raise TransportError(TransportFailure.TLS_HANDSHAKE_FAILED) from error
+            await self._flush_tls_output(layer)
+            return
+
+    def _peer_is_unchanged(self) -> bool:
+        """Whether the socket is still on the endpoint this connection reported.
+
+        Reads `getpeername()` and nothing else. No name is resolved, and the TLS
+        session is never asked who it is talking to: a wrapper's opinion of the
+        peer is not evidence about the socket underneath it.
+        """
+        try:
+            current = _peer_from_sockaddr(self._socket.getpeername(), self._socket.family)
+        except OSError:
+            return False
+        if isinstance(current, TransportFailure):
+            return False
+        return current == self._peer
 
     # --- closing -----------------------------------------------------------
 
@@ -307,8 +584,17 @@ class AsyncioSMTPConnection:
           descriptor is open. `CancelledError` then continues to the caller: the
           resource is cleaned up, and the caller's cancellation is not eaten.
 
-        `close_seconds` is not consumed here. It is the budget for gate 4C's
-        graceful shutdown, where a TLS `close_notify` does involve waiting.
+        **No TLS `close_notify` is sent**, and that is a choice rather than an
+        omission. Sending one means writing to the socket, which means awaiting,
+        which would put back the cancellation point this close exists without.
+        The peer sees a truncated session; the alternative is a close that can
+        be interrupted with the descriptor still open, which is the defect the
+        4B review found. The dialogue has already issued `QUIT`, so nothing is
+        left to say.
+
+        `close_seconds` is therefore consumed nowhere. It stays a validated
+        field so a future graceful shutdown has a budget to use, and
+        `IMPLEMENTATION_STATUS.md` records that it is currently unused.
         """
         if self._closed:
             return
@@ -342,6 +628,9 @@ class AsyncioSMTPTransport:
 
     limits: TransportLimits = field(default_factory=TransportLimits)
     timeouts: TransportTimeouts = field(default_factory=TransportTimeouts)
+    #: Extra certificate anchors, on top of the system trust store. Verification
+    #: itself is not configurable; see `adapters/smtp/tls.py`.
+    trust: TLSTrust = SYSTEM_TRUST
 
     async def connect(self, destination: ApprovedDestination) -> ConnectionOutcome:
         """Connect to `destination`, re-checking the policy first.
@@ -393,9 +682,31 @@ class AsyncioSMTPTransport:
 
         return ConnectionOpened(
             connection=AsyncioSMTPConnection._over_socket(
-                open_socket, peer, limits=self.limits, timeouts=self.timeouts
+                open_socket,
+                peer,
+                limits=self.limits,
+                timeouts=self.timeouts,
+                trust=self.trust,
             )
         )
+
+
+def _tls_failure_for(error: BaseException) -> TransportFailure:
+    """Name a TLS failure without keeping a certificate, a chain, or a message.
+
+    A hostname mismatch is separated from every other verification failure
+    because the two mean different things to an operator — the wrong host was
+    named, versus the chain does not verify — and neither means anything about
+    the recipient. `docs/requirements.md` section 11 forbids library text in a
+    result, so nothing beyond the enum member survives.
+    """
+    if isinstance(error, ssl.SSLCertVerificationError):
+        if getattr(error, "verify_code", None) == _HOSTNAME_MISMATCH_VERIFY_CODE:
+            return TransportFailure.TLS_HOSTNAME_MISMATCH
+        return TransportFailure.TLS_CERTIFICATE_INVALID
+    if isinstance(error, ssl.SSLError | OSError):
+        return TransportFailure.TLS_HANDSHAKE_FAILED
+    return TransportFailure.INTERNAL_ERROR
 
 
 def _connect_failure_for(error: BaseException) -> TransportFailure:

@@ -76,6 +76,20 @@ class TransportFailure(StrEnum):
     LINE_TOO_LONG = "line_too_long"
     TOTAL_LIMIT_EXCEEDED = "total_limit_exceeded"
 
+    # --- upgrading to TLS ---------------------------------------------------
+    #: The handshake failed for a reason that is not the certificate.
+    TLS_HANDSHAKE_FAILED = "tls_handshake_failed"
+    #: The chain did not verify against the configured trust anchors.
+    TLS_CERTIFICATE_INVALID = "tls_certificate_invalid"
+    #: The chain verified and the name did not match the MX host.
+    TLS_HOSTNAME_MISMATCH = "tls_hostname_mismatch"
+    #: The handshake did not finish inside its deadline.
+    TLS_TIMEOUT = "tls_timeout"
+    #: The endpoint underneath the upgrade is not the one that was confirmed.
+    TLS_PEER_CHANGED = "tls_peer_changed"
+    #: A second upgrade was asked for. There is only ever one.
+    TLS_ALREADY_ACTIVE = "tls_already_active"
+
     # --- this project ------------------------------------------------------
     INTERNAL_ERROR = "internal_error"
 
@@ -199,3 +213,40 @@ class ReadFailed:
 
 
 ReadOutcome = LineRead | ReadFailed
+
+
+@dataclass(frozen=True, slots=True)
+class WriteSucceeded:
+    """The command line reached the socket. Nothing is claimed about the peer."""
+
+    payload_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class WriteFailed:
+    """The command line did not go out, and why. The caller closes."""
+
+    failure: TransportFailure
+
+
+WriteOutcome = WriteSucceeded | WriteFailed
+
+
+@dataclass(frozen=True, slots=True)
+class TLSNegotiated:
+    """The connection is now encrypted, verified, and on the same peer."""
+
+
+@dataclass(frozen=True, slots=True)
+class TLSFailed:
+    """The upgrade did not happen, and why, in this project's vocabulary.
+
+    A failed upgrade is terminal. `docs/smtp-state-machine.md` has no transition
+    from a TLS failure back to plaintext, so the caller closes rather than
+    continuing — and none of these is ever evidence about the recipient.
+    """
+
+    failure: TransportFailure
+
+
+TLSOutcome = TLSNegotiated | TLSFailed

@@ -79,8 +79,11 @@ COMMAND_TERMINATOR: Final = "\r\n"
 #: Three rules are visible in the table and are the reason it is data rather
 #: than a chain of conditionals:
 #:
-#: - `TLS_NEGOTIATED` permits only `EHLO`, so the session is re-introduced after
-#:   TLS before anything else happens;
+#: - `TLS_NEGOTIATED` permits `EHLO` and `QUIT`. `EHLO` is the only way forward,
+#:   so the session is re-introduced after TLS before anything else happens, and
+#:   `QUIT` is there so an upgraded session can be ended politely rather than by
+#:   dropping the socket. `QUIT` leads nowhere: no state reachable from it can
+#:   issue `MAIL FROM`;
 #: - `RCPT_RESULT_RECEIVED` does not permit `RCPT TO`, so a second recipient has
 #:   no state to be issued from;
 #: - `RESET_COMPLETED` permits only `QUIT`, so `RSET` cannot start a second

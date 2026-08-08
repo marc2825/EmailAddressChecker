@@ -20,15 +20,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import TracebackType
 
-from emailcheck.domain.smtp_contract import SMTPContractError
+from emailcheck.domain.smtp_contract import SMTPCommand, SMTPContractError
 from emailcheck.domain.smtp_destination import ApprovedDestination, PeerEndpoint
 from emailcheck.domain.smtp_transport import (
     LineRead,
     ReadFailed,
     ReadOutcome,
+    TLSNegotiated,
+    TLSOutcome,
     TransportFailure,
+    WriteOutcome,
+    WriteSucceeded,
 )
-from emailcheck.ports.smtp import ConnectionFailed, ConnectionOpened, ConnectionOutcome
+from emailcheck.domain.smtp_wire import WireCommand
+from emailcheck.ports.smtp import (
+    ConnectionFailed,
+    ConnectionOpened,
+    ConnectionOutcome,
+    TLSUpgradeRequest,
+)
 
 
 @dataclass(slots=True)
@@ -41,8 +51,15 @@ class FakeSMTPConnection:
     close_calls: int = 0
     write_line_calls: int = 0
     written: list[bytes] = field(default_factory=list)
+    transcript: list[SMTPCommand] = field(default_factory=list)
+    tls_requests: list[TLSUpgradeRequest] = field(default_factory=list)
+    tls_negotiated: bool = False
     entered: int = 0
     exited: int = 0
+
+    @property
+    def tls_active(self) -> bool:
+        return self.tls_negotiated
 
     async def read_line(self) -> ReadOutcome:
         self.read_calls += 1
@@ -51,6 +68,22 @@ class FakeSMTPConnection:
         if not self.scripted_reads:
             return ReadFailed(failure=TransportFailure.CONNECTION_CLOSED)
         return self.scripted_reads.pop(0)
+
+    async def write_command(self, command: WireCommand) -> WriteOutcome:
+        """Record the command, exactly as narrowly as the real connection takes it."""
+        if not isinstance(command, WireCommand):
+            raise SMTPContractError("write_command requires a WireCommand from the encoders")
+        self.write_line_calls += 1
+        self.written.append(command.payload)
+        self.transcript.append(command.command)
+        return WriteSucceeded(payload_bytes=len(command.payload))
+
+    async def start_tls(self, request: TLSUpgradeRequest) -> TLSOutcome:
+        if not isinstance(request, TLSUpgradeRequest):
+            raise SMTPContractError("start_tls requires a TLSUpgradeRequest built from a peer")
+        self.tls_requests.append(request)
+        self.tls_negotiated = True
+        return TLSNegotiated()
 
     async def _write_line(self, payload: bytes) -> None:
         """Present only so a test can prove nothing calls it."""

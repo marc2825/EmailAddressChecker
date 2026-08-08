@@ -174,11 +174,35 @@ The transport is an I/O component and nothing more: it connects, reports the
 peer, reads bounded lines, and closes. It makes no protocol decision and knows
 nothing about `EHLO`, reply codes, or the recipient stage.
 
+`application/smtp_dialogue.py` is the protocol on top of it — banner, `EHLO`,
+capability parsing, optional `STARTTLS` with a re-`EHLO`, `MAIL FROM`, one
+`RCPT TO`, then best-effort `RSET` and `QUIT`. It decides *when*, and everything
+it is allowed to say existed before it did.
+`application/smtp_probe.py` owns the order the whole probe happens in:
+
+```text
+rate-limit authorization → start the session deadline → approve destination
+  → connect → confirm peer → session → dialogue → close
+```
+
 Three properties of that split matter more than the code:
 
-- **nothing can be written before the peer is confirmed**, because
-  `SMTPConnection` has no write method. The adapter keeps `_write_line` private
-  for gate 4C to wire to the six encoders; gate 4B writes no bytes at all;
+- **the only thing that can be written is an encoded command**, and three
+  separate layers are what make that true. Stating them separately matters,
+  because the type alone is weaker than it looks:
+
+  | Layer | What it guarantees |
+  |---|---|
+  | `WireCommand` | one CRLF-terminated line, within the 512-octet limit, carrying no other CR, LF, or NUL, and beginning with the verb the value names |
+  | The six factories in `domain/smtp_wire.py` | the only argument forms production approves — each calls the matching encoder on typed values |
+  | An inspection test | production code builds a `WireCommand` **only** through those factories |
+
+  The type constrains the verb, not the argument, so `RCPT TO:<a@b>,<c@d>` and
+  `MAIL FROM:<x@y> AUTH=<victim>` are refused by the second and third layers
+  rather than by the first. Saying the type alone fixes the reachable wire lines
+  would claim more than the code does, which ADR 0008 already established is
+  worse than claiming less. There is no method taking `bytes`, a string, or a
+  command name; `_write_line` stays private inside the adapter (ADR 0009);
 - **no socket, stream, reader, or file descriptor crosses the port.** The
   application sees a `PeerEndpoint`, typed read outcomes, and a close;
 - **every path that does not return a session closes the connection**, in a
@@ -204,7 +228,33 @@ cancellation could leave the descriptor open.
 
 Sender provenance is a port, not a value. `EnvelopeSender` fixes the shape;
 `SenderIdentityProvider` in `ports/smtp_sender_identity.py` supplies one from
-operator configuration, never from the probe target or from user input.
+operator configuration, never from the probe target or from user input, and
+`adapters/smtp/sender_identity.py` implements it from a mapping the caller loaded
+deliberately. It reads no environment variable, refuses an unknown key, refuses
+the null reverse path, and refuses an EHLO name unrelated to the sender's domain.
+
+TLS is `adapters/smtp/tls.py` and `adapters/smtp/asyncio_transport.py`, and
+nothing else imports `ssl` — a value type or an orchestration step that knew
+about `SSLContext` would be one that could be handed an insecure one.
+Verification is not configurable: `check_hostname` and `CERT_REQUIRED` are always
+set and there is no parameter that changes either. The name verified against
+comes from the `ConfirmedPeer`, so the destination chain reaches all the way into
+the handshake, and `start_tls` compares the peer that request carries against the
+endpoint the connection actually reached before anything is negotiated. A failed
+handshake is terminal and is never mailbox evidence.
+
+`TLSTrust` is the one seam and it may only widen trust. **It is operator
+configuration only**: request, user, and API input may never supply a CA file, a
+PEM body, a trust anchor, or a verification override, and that is a stop
+condition on Phase 6 rather than a convention (ADR 0009).
+
+Two deadlines bound a probe and the total dominates: per-operation timeouts in
+`TransportTimeouts`, and a `SessionBudget` in `domain/smtp_deadline.py` measured
+against a `MonotonicClock`. The total starts in `application/smtp_probe.py`
+*before* the connect, so one probe costs one budget rather than
+`connect_seconds + budget`, and the effective connect bound is the smaller of the
+two. Waiting for a rate-limit lease sits outside it, so queueing is never
+recorded as a remote timeout. See ADR 0009.
 
 A reply becomes `SMTPReply`: a basic code, a valid enhanced code when there is
 one, and a bounded diagnostic. The remote text is not kept. The sanitizer's
@@ -215,7 +265,10 @@ scrubber, and a raw reply must never reach an ordinary log.
 `RecipientObservation` records what was observed and carries no status: `250`
 does not become `likely_deliverable` and `550` does not become `invalid`,
 because an accept-all server says the first to everyone and policy rejections
-share the second. See ADR 0008.
+share the second. `SessionReport` in `domain/smtp_protocol.py` wraps it with the
+stage reached, the TLS detail, the capability set, the cleanup status, and the
+command transcript — all context for Phase 4D, none of it a verdict. See ADR 0008
+and ADR 0009.
 
 ### Evidence
 

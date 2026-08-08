@@ -245,6 +245,105 @@ Helpers and fixtures under `tests/` are fine. A test-only capability that
 production code can import is not: the property that makes this safe is that the
 escape lives in a package production code cannot reach.
 
+### SMTP dialogue and STARTTLS, from gate 4C
+
+**The default is `tests/fake_smtp_server.py`**, a scripted peer that opens no
+socket and behaves like a server rather than like a tape: replies are queued when
+a command arrives, so the transcript is the real sequence the dialogue produced
+and a reply that was never triggered is never read.
+
+Required scenarios, all against that peer:
+
+- the plain path and the TLS path, with the transcript asserted exactly —
+  `EHLO, MAIL FROM, RCPT TO, RSET, QUIT` and
+  `EHLO, STARTTLS, EHLO, MAIL FROM, RCPT TO, RSET, QUIT` — and, in both, exactly
+  one `RCPT TO`, at most one `STARTTLS`, at most one `MAIL FROM`, and no
+  forbidden verb anywhere in the bytes;
+- a banner that is `220`, multiline `220`, `4xx`, `5xx`, malformed, absent,
+  oversized, over-long, or too many lines. **No command may be written after any
+  of them**;
+- an `EHLO` that is refused temporarily or permanently, malformed, unterminated,
+  or lost. There is no `HELO` fallback and a test asserts the wire never carries
+  one;
+- capability parsing: case differences, a duplicate, a keyword with parameters, a
+  malformed line, an unknown extension, an over-long keyword, and every lookalike
+  of `STARTTLS` — `STARTTLSX`, `XSTARTTLS`, `START`, `TLS`, `NOSTARTTLS` — none
+  of which is `STARTTLS`;
+- `STARTTLS` absent under both policies, refused by the server, and every
+  handshake failure: certificate, host name, timeout, peer changed, and a generic
+  failure. None of them may be about the target, and none may continue in
+  plaintext;
+- a post-TLS `EHLO` failure, which must stop before `MAIL FROM`;
+- a `MAIL FROM` refused temporarily, refused permanently, or disconnected on.
+  **None produces a recipient observation at all**;
+- every recipient class: `250`, `251`, `252`, `450`, `451`, `452`, `550 5.1.1`,
+  a bare `550`, `550 5.7.1`, `552`, a malformed reply, and a reply that echoes
+  the recipient;
+- a write that fails at each stage, an EOF and a reset at each stage, and a
+  cleanup command that fails — which must not change the observation;
+- the session budget exhausted before anything is written and part way through,
+  driven by a fake clock rather than by sleeping;
+- cancellation at the dialogue boundary: re-raised, never converted, and the
+  connection closed.
+
+**Every awaited step is bounded, and each is pinned on its own.** A test that
+reaches a deadline through some *other* step is not evidence that this one is
+bounded: removing the wrapper from the read step, from the write step, and from
+the TLS handshake each left the entire suite passing, because the clock those
+tests drove advanced on every reading and whichever step ran next tripped the
+budget. So `tests/unit/application/test_smtp_deadline_stages.py` uses a peer that
+**goes silent** at one named point — banner read, `EHLO` write, `EHLO` read,
+`STARTTLS` write, its reply, the handshake, the post-TLS `EHLO` write and read,
+`MAIL FROM` write and read, `RCPT TO` write and read, and each of the four
+cleanup steps — with a clock that never advances, so the only thing that can end
+the await is the wrapper around it. Each test carries its own outer bound, so a
+missing wrapper fails rather than hangs. An inspection test reads the four
+`self.connection.…` call sites out of the source and requires each to sit inside
+`self._bounded(...)`, because behaviour cannot cover a step no scenario reaches.
+
+**The connect is inside the same budget**, and `tests/unit/application/test_smtp_probe.py`
+fixes both directions: a connect that never answers ends on the session budget, a
+connect timeout smaller than the budget stays the transport's own and is named as
+such, time spent connecting comes out of what the dialogue gets, a budget already
+spent opens no socket, and a cancelled connect still releases the lease.
+
+**Sender provenance is tested as provenance**, not only as a type: the wire bytes
+must carry the configured envelope sender and EHLO name, the target must appear
+exactly once and only in `RCPT TO`, and changing the target must not change the
+sender.
+
+**Provider neutrality is tested two ways**, because neither alone is enough. The
+same scripted server must produce an identical transcript and outcome for a
+target at a large provider and at a domain nobody has heard of; and an inspection
+asserts that no production SMTP module names a provider at all, because a test
+cannot enumerate the providers it has not thought of.
+
+**The TLS integration tests are real handshakes over loopback.**
+`tests/fixtures/tls/` holds a throwaway CA, a certificate for `mx.test.example`,
+a certificate for another host signed by the same CA, and a self-signed one. The
+trusted certificate must succeed and then carry commands and replies; the
+untrusted one must fail as `tls_certificate_invalid`; the wrong-name one must
+fail as `tls_hostname_mismatch`. The last two are the tests a client with
+verification quietly off would fail, which is why they exist — and one more test
+asserts that the fixture CA is *not* trusted by the production default, so the
+success cases prove something.
+
+Production trust and test trust are separated by shape rather than by a flag:
+`build_client_context` always sets `check_hostname` and `CERT_REQUIRED`, and the
+only seam adds one certificate authority. There is no setting a test could reach
+that a deployment could reach by accident. An inspection test adds the other
+half — no `TLSTrust` is constructed anywhere in `src/` outside the module that
+defines the system-trust default, and no production module reads the environment
+— so a Phase 6 request field cannot quietly become a trust anchor.
+
+**The upgrade request is bound to its own connection**, and that is tested
+separately from the `getpeername()` re-read. A request carrying another
+connection's `ConfirmedPeer`, one naming a different port, and one whose address
+is written another way are all refused as `tls_peer_changed`; a matching one
+reaches a different, named refusal, which is what shows the comparison let it
+through rather than that everything ends the same way. Removing the comparison
+broke no test before this existed.
+
 ## 3. SMTP fixtures
 
 Required scenarios:
