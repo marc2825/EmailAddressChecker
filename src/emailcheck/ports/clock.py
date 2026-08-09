@@ -28,3 +28,22 @@ class MonotonicClock(Protocol):
     def monotonic(self) -> float:
         """Return a monotonically increasing number of seconds."""
         ...
+
+
+class Sleeper(Protocol):
+    """Suspending for a while, as a port rather than as a call to `asyncio`.
+
+    Waiting is the other half of reading a clock, and it has the same problem: a
+    component that calls `asyncio.sleep` directly can only be tested by actually
+    waiting, which makes a pacing test measure the machine rather than the
+    pacing. `MonotonicClock` already made every deadline deterministic; this
+    makes the delays between them deterministic too.
+
+    It is deliberately not a general scheduler. One method, one duration, no
+    cancellation semantics of its own — a cancellation passes through it exactly
+    as it passes through `asyncio.sleep`.
+    """
+
+    async def sleep(self, seconds: float) -> None:
+        """Suspend for `seconds`, or until cancelled."""
+        ...

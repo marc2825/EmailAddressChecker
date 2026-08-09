@@ -305,6 +305,106 @@ they **partition** every reason the mapper emits — a tested property, because
 unclassified reason is non-target rather than target evidence. Phase 4D produces
 no status, no confidence, and no risk flag.
 
+### Verification orchestration
+
+`application/smtp_verification.py` is the last gate of Phase 4 and the only code
+that runs more than one probe. It takes a `NormalizedAddress` and a Phase 2
+`MailRoute` and returns a `VerificationReport`: attempt records, the `Evidence`
+each attempt produced, and an operational stop reason. No status, no confidence,
+no verdict.
+
+```text
+MailRoute → plan_attempts()  ordered, de-duplicated, capped
+  → for each: rate-limit lease → probe → SessionReport | ProbeRefused
+  → gate 4D mapper → Evidence
+  → stop, or try the next candidate
+```
+
+**One verification issues at most one `RCPT TO`, in total.** Gate 4A's state
+table and counter bound one *session*; this bounds the whole request. Reaching
+the recipient stage ends the verification — not receiving an answer, reaching the
+stage — so a `450`, a `550`, a `252`, a reset after the command went out, and a
+write that failed part way all stop it identically. A second exchanger asked
+about the same recipient is the enumeration pattern `docs/threat-model.md` lists
+first, and it would be a retry, which this gate does not do at all.
+
+Two barriers decide it and each is pinned by its own test: the transcript naming
+`RCPT TO`, and the stage being at or past `RCPT_TO`. A failed write reaches the
+stage without reaching the transcript; a `SessionReport` may carry the transcript
+at an earlier stage. Neither alone is enough.
+
+**Fallback is only for failures before the recipient stage**, and never for a
+failure of this project's own — hiding our bug behind another server's answer is
+what Phase 2 and gate 4B already refuse. Cancellation and interruption propagate
+rather than becoming a fallback.
+
+**The plan is bounded before anything connects.** Candidates come in Phase 2's
+preference order, are expanded in the address order Phase 2 recorded, are
+de-duplicated on `(MX host, address, port)`, and are capped. Nothing is sorted
+again and nothing is randomized. The de-duplication key includes the host name
+because the certificate is verified against it: two exchangers sharing an address
+are two TLS identities, and collapsing them would accept one host's certificate
+for the other's name. See ADR 0011.
+
+### Rate limiting
+
+`adapters/system/rate_limit.py` implements the `RateLimiter` port that
+`SMTPProbeService` has required since gate 4C. Three budgets, acquired in order
+and released in reverse, inside one wait deadline: global concurrency, per-domain
+concurrency, and a per-domain token bucket for pacing. A caller holds all three
+or holds none — a refusal, an exception, and a cancellation all unwind what was
+taken, because a concurrency slot that is not given back removes capacity from
+the process permanently.
+
+All the arithmetic and every bound is in `domain/rate_limit.py` and is pure:
+refill is clamped after the addition so no amount of idling widens a burst, and
+`TokenBucket` refuses a token count outside `0..capacity`. Time comes from
+`MonotonicClock` and waiting from `Sleeper`, so pacing is measurable in a test
+without waiting for it.
+
+**The budget Phase 4 enforces is per recipient domain, and only that.**
+`RateLimiter.acquire` takes an account, the recipient's domain, and the MX host;
+`rate_limit_key` canonicalizes and validates all three, and the limiter then
+partitions its state by the **domain alone**. The account and the MX host are
+carried and checked but do not divide any budget today.
+
+Saying so precisely matters. `docs/requirements.md` section 15 requires
+per-account budgets for the service-active profile, and Phase 4 does **not**
+implement one — because an account identifier only becomes meaningful when
+Phase 6 authenticates it. A caller-supplied `account` string used as a budget
+partition would look like per-account isolation and be bypassable by sending a
+different string, which is worse than not having one. `plans/phase-04-smtp.md`
+carries it as a Phase 6 stop condition.
+
+`rate_limit_key` refuses an `@` in any component rather than stripping one, so
+no component can be a mailbox. That is a **shape** check: it says what the value
+is not, and says nothing about where it came from.
+
+**Per-domain state is bounded** by an idle TTL and a least-recently-used cap, and
+an entry in use — holding a lease *or* waiting for one — is never evicted, in
+either sweep. That guard is a safety barrier rather than tidiness: evicting a
+held entry replaces a spent bucket with a full one, which is a pacing bypass, so
+each sweep's guard has a test that fails when only it is removed. The TTL applies
+to idle entries only and is **not** required to exceed the longest SMTP session.
+
+The bound is `max_tracked_domains` **plus whatever is in flight**. A caller
+registers interest in a domain before it is admitted globally, so in-flight
+entries are bounded by the concurrency of the calling code rather than by this
+table — bounding *that* is Phase 6 admission control, recorded as a stop
+condition. The attack this table closes is the other one: a caller supplying an
+unbounded number of different domains over time.
+
+**The wait is bounded and is not the session budget.** ADR 0009 put the
+rate-limit wait outside the SMTP deadline so queue depth is never recorded as a
+remote timeout; the wait has its own budget, and exceeding it raises
+`RateLimitTimeout` — deliberately not a `TimeoutError` and not an `OSError`, so
+a handler written for a remote timeout cannot catch this project's own queueing.
+A refused verification opens no socket and produces no SMTP evidence.
+
+The limiter is single-process. It bounds one worker rather than a fleet, which is
+what the MVP needs and why the port exists: a shared limiter implements the same
+`acquire`, and nothing above the port learns which one it has.
+
 ### Evidence
 
 An immutable observation produced by one layer. Evidence records:
@@ -360,7 +460,15 @@ cache, rate limiting, time, and randomness.
 - `RateLimiter`
 - `SenderIdentityProvider`
 - `Clock`
+- `MonotonicClock`
+- `Sleeper`
 - `RandomSource`
+
+`MonotonicClock` and `Sleeper` are the two halves of the same problem: a
+component that reads `time.monotonic()` can only be tested against the machine's
+clock, and one that calls `asyncio.sleep` can only be tested by waiting. Both are
+ports so that a deadline test measures the deadline and a pacing test measures
+the pacing.
 
 ## 3. Suggested packages
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,3 +27,16 @@ class SystemMonotonicClock:
 
     def monotonic(self) -> float:
         return time.monotonic()
+
+
+@dataclass(frozen=True, slots=True)
+class SystemSleeper:
+    """Real suspension, for the pacing a production limiter has to do.
+
+    The one line of it is the point: everything that decides *how long* lives in
+    `domain/rate_limit.py` against a `MonotonicClock`, so the only thing a test
+    has to replace is this.
+    """
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)

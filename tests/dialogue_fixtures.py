@@ -7,6 +7,7 @@ test measures the deadline rather than the machine.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from emailcheck.adapters.smtp.sender_identity import (
@@ -20,7 +21,14 @@ from emailcheck.domain.address import (
     parse_address,
 )
 from emailcheck.domain.dns import HostName
-from emailcheck.domain.mail_route import CandidateStatus, RouteCandidate, RouteSource
+from emailcheck.domain.mail_route import (
+    CandidateStatus,
+    MailRoute,
+    MailRouteOutcome,
+    RouteCandidate,
+    RouteSource,
+)
+from emailcheck.domain.rate_limit import RateLimitTimeout
 from emailcheck.domain.smtp_destination import (
     ApprovedDestination,
     ConfirmedPeer,
@@ -71,6 +79,107 @@ class AdvancingClock:
         current = self.value
         self.value += self.step
         return current
+
+
+@dataclass(slots=True)
+class FakeSleeper:
+    """Suspension that advances a clock instead of a wall.
+
+    Every delay the limiter computes is recorded and applied to the fake clock,
+    so "wait 5 seconds for a token" is measured rather than waited out. The
+    `asyncio.sleep(0)` is what makes the deterministic version still a *yield*:
+    another task can release a slot while this one is nominally sleeping, which
+    is what a "wait, then permit" test needs.
+    """
+
+    clock: FakeMonotonicClock
+    slept: list[float] = field(default_factory=list)
+
+    async def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.clock.advance(seconds)
+        await asyncio.sleep(0)
+
+    @property
+    def total_slept(self) -> float:
+        return sum(self.slept)
+
+
+@dataclass(slots=True)
+class BlockingSleeper:
+    """Suspension that never ends, so a test can cancel *during* a wait.
+
+    `FakeSleeper` returns immediately, which is what makes pacing measurable —
+    and it is exactly wrong for a cancellation test, because the wait is over
+    before there is anything to cancel. A mutation check found that: every
+    cancellation test in the limiter suite was cancelling a caller that had not
+    yet acquired anything, so removing the unwind leaked a concurrency slot and
+    nothing failed.
+    """
+
+    calls: list[float] = field(default_factory=list)
+    #: Set as the wait begins, so a test can park a caller mid-wait without
+    #: polling for it. Polling would be the wrong shape here anyway: the point
+    #: is to cancel at a known moment.
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def sleep(self, seconds: float) -> None:
+        self.calls.append(seconds)
+        self.entered.set()
+        await asyncio.get_running_loop().create_future()
+        raise AssertionError("unreachable: the future is never resolved")
+
+
+@dataclass(slots=True)
+class ScriptedRateLimiter:
+    """A limiter a test drives, for the orchestration tests.
+
+    The real budgets are `adapters/system/rate_limit.py` and are tested against
+    their own arithmetic. What an orchestration test needs is to say "the third
+    attempt is refused" without building a bucket that would say so, so this
+    grants by default and refuses on the acquisitions named.
+
+    Production may not import it: it lives under `tests/`, which production code
+    cannot reach, and that is the property that makes a permissive limiter safe
+    to have at all.
+    """
+
+    refuse_on: frozenset[int] = frozenset()
+    cancel_on: frozenset[int] = frozenset()
+    acquisitions: list[tuple[str, str, str]] = field(default_factory=list)
+    entered: int = 0
+    released: int = 0
+
+    def acquire(self, *, account: str, domain: str, mx_host: str) -> RateLimitLease:
+        index = len(self.acquisitions)
+        self.acquisitions.append((account, domain, mx_host))
+        return _ScriptedLease(limiter=self, index=index)
+
+    @property
+    def held(self) -> int:
+        """Leases entered and not yet released. Must be zero when a test ends."""
+        return self.entered - self.released
+
+
+@dataclass(slots=True)
+class _ScriptedLease:
+    limiter: ScriptedRateLimiter
+    index: int
+    _held: bool = False
+
+    async def __aenter__(self) -> None:
+        if self.index in self.limiter.cancel_on:
+            raise asyncio.CancelledError
+        if self.index in self.limiter.refuse_on:
+            raise RateLimitTimeout("a scripted budget")
+        self.limiter.entered += 1
+        self._held = True
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        if not self._held:
+            return
+        self._held = False
+        self.limiter.released += 1
 
 
 @dataclass(slots=True)
@@ -142,10 +251,10 @@ def peer_endpoint(host_address: str = PUBLIC_V4) -> PeerEndpoint:
     return PeerEndpoint(address=host_address, port=25)
 
 
-def candidate(*addresses: str, host: str = MX_HOST) -> RouteCandidate:
+def candidate(*addresses: str, host: str = MX_HOST, preference: int = 10) -> RouteCandidate:
     return RouteCandidate(
         host=HostName(host),
-        preference=10,
+        preference=preference,
         source=RouteSource.MX,
         status=CandidateStatus.USABLE,
         decisions=tuple(
@@ -158,3 +267,17 @@ def candidate(*addresses: str, host: str = MX_HOST) -> RouteCandidate:
             for value in (addresses or (PUBLIC_V4,))
         ),
     )
+
+
+def route(
+    *candidates: RouteCandidate,
+    outcome: MailRouteOutcome = MailRouteOutcome.MX_ROUTE,
+    domain: str = "recipient.test.example",
+) -> MailRoute:
+    """A Phase 2 route, in the order the resolver and preference produced.
+
+    Built rather than resolved: the orchestration tests are about which
+    candidates get attempted and in what order, and a fake resolver would only
+    add a layer between the table and the assertion.
+    """
+    return MailRoute(domain=domain, outcome=outcome, candidates=candidates)

@@ -443,6 +443,78 @@ of an import: no network, clock, or storage module; no transport, connection,
 limiter, clock, or provider named; no coroutine and no `await`; no environment
 read.
 
+### Verification orchestration and rate limiting, from gate 4E
+
+**No test in this gate sleeps, and none opens a socket.** Waiting is a `Sleeper`
+port, so a fake advances a fake `MonotonicClock` and yields: "wait five seconds
+for a token" is a measurement rather than five seconds of CI. Every scenario also
+carries its own outer bound, so a loop that waits when it should stop fails
+rather than hangs.
+
+`tests/fake_smtp_server.py` gains `RoutedSMTPTransport`, which hands out a
+different scripted peer per destination address. The gate 4C fake gives every
+destination the same script, so it cannot express the scenarios that matter here
+— the first candidate refusing and the second accepting. Its `recipient_commands`
+counts `RCPT TO` across every connection it handed out, so the central invariant
+is measured **on the wire** rather than on the report, which is derived from the
+code under test.
+
+Required scenarios:
+
+- a recipient answer on the first candidate: the second is never connected to;
+- a connect failure, a TLS failure, a refused banner, and a rejected `MAIL FROM`
+  each fall through to the next candidate, which then answers;
+- **every recipient answer stops the verification** — `250`, `450`, `451`, `252`,
+  and `550 5.1.1` alike. The `450` and the `252` are the rows that matter: both
+  read like "ask someone else", and both are answers;
+- a `RCPT TO` written and then lost before its reply stops the verification;
+- a `RCPT TO` whose *write* failed stops it too, because this project cannot know
+  what reached the peer;
+- an internal failure stops it and never falls through to another exchanger;
+- twenty candidates and a cap of three: exactly three connections;
+- every candidate failing before the recipient stage produces evidence that is
+  entirely non-target, and no status;
+- a routeless `MailRoute` opens no socket and acquires no budget at all.
+
+**Planning is tested as a pure function**: preference order preserved, addresses
+expanded in Phase 2's order, one endpoint never planned twice, and the same
+address behind two exchanger names planned as two attempts — because the
+certificate is verified against the host name.
+
+**The recipient-touched rule has two barriers and each is pinned**, on the
+precedent gate 4D set. A `SessionReport` whose transcript names `RCPT TO` at an
+earlier stage is caught by the transcript check alone; one that reached the stage
+with an empty transcript is caught by the stage check alone.
+
+**The limiter is tested against its own arithmetic first.** `domain/rate_limit.py`
+is pure, so refill, clamping, key canonicalization, and every bound are asserted
+with no clock and no loop — including that idling for `1e15` seconds still leaves
+a bucket holding exactly its capacity, and that a key refuses an `@` in any
+component.
+
+The adapter is then tested for what it refuses and what it never leaks: global
+and per-domain concurrency, pacing after the burst, a wait budget that bounds the
+whole acquisition, a released slot letting a waiter through, double release,
+re-entry, eviction under pressure, and an entry in use surviving a flood.
+
+**Cancellation is tested against a caller that is actually holding something.**
+This needed a second fake: `FakeSleeper` returns immediately, which is what makes
+pacing measurable and is exactly wrong here, because the wait is over before
+there is anything to cancel. `BlockingSleeper` never returns, so a test can park
+a caller mid-wait and cancel it. Every cancellation test in the gate passed
+before it existed — and a mutation from `except BaseException` to
+`except Exception` passed the whole suite, because each of them was cancelling a
+caller that had not yet acquired a slot.
+
+**Inspection covers what behaviour cannot enumerate**, over the three modules
+this gate added: no retry, backoff, or jitter; no `random`, `uuid`, or
+accept-all recipient generation; no `Status`, `Verdict`, `Confidence`, or
+`RiskFlag`; no transport, connection, or `ApprovedDestination` reachable from the
+loop; no provider named in the limiter; and no wall clock in the pacing
+arithmetic. Those scans read the **syntax tree with docstrings excluded**,
+because both were written against the raw text first and both failed on their own
+prose — the third time this repository has made that mistake.
+
 ## 3. SMTP fixtures
 
 Required scenarios:
@@ -482,6 +554,12 @@ Required scenarios:
 - every operation bounded;
 - no plaintext address in normal logs;
 - rate budget acquired before connect;
+- **at most one `RCPT TO` per verification**, not merely per session, measured on
+  the wire across every connection one request opened;
+- **a bounded number of outbound connections per request**, whatever the DNS
+  answer's length;
+- no rate-limit key carries a complete address, and no limiter state grows
+  without a bound;
 - a temporary result never becomes invalid only due to retry exhaustion.
 
 ## 5. Metrics

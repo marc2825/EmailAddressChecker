@@ -20,6 +20,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 STATUS_MODEL = ROOT / "docs" / "status-model.md"
+ARCHITECTURE = ROOT / "docs" / "architecture.md"
+THREAT_MODEL = ROOT / "docs" / "threat-model.md"
+ORCHESTRATION_ADR = ROOT / "docs" / "adr" / "0011-verification-orchestration-and-rate-limiting.md"
 STATE_MACHINE = ROOT / "docs" / "smtp-state-machine.md"
 DIALOGUE_ADR = ROOT / "docs" / "adr" / "0009-smtp-dialogue-and-tls.md"
 PLAN = ROOT / "plans" / "phase-04-smtp.md"
@@ -299,8 +302,17 @@ def test_trust_anchors_are_operator_configuration_only(document: Path) -> None:
         assert forbidden_source in lowered
 
 
-def test_the_phase_6_stop_condition_is_recorded() -> None:
-    assert "Stop condition for Phase 6" in text_of(PLAN)
+def test_the_phase_6_stop_conditions_are_recorded() -> None:
+    """Plural since the Phase 4 final review: seven, not one.
+
+    Six were added by that review and all of them are about *composition* rather
+    than about a component, which is why they belong in the plan rather than in
+    any module's docstring.
+    """
+    plan = text_of(PLAN)
+    assert "Stop conditions for Phase 6" in plan
+    for number in range(1, 8):
+        assert f"> **{number}. " in plan, f"Phase 6 stop condition {number} is missing"
 
 
 # --- the state table and its description agree -----------------------------
@@ -356,3 +368,177 @@ def test_every_referenced_adr_exists() -> None:
 def test_the_dialogue_adr_is_the_one_the_documents_point_at() -> None:
     assert DIALOGUE_ADR.is_file()
     assert not (ADR_DIRECTORY / "0009-smtp-dialogue-and-starttls.md").exists()
+
+
+# --- Phase 6 stop conditions, from the Phase 4 final review -----------------
+#
+# Seven conditions, all about *composition*: Phase 4 builds components that are
+# safe on their own and leaves no composition root, so Phase 6 writes the wiring
+# from scratch. A stop condition that is not written down is one the next author
+# has no way to find.
+
+PHASE_6_STOP_CONDITIONS = {
+    "high-level entry point": (
+        "smtpverificationservice",
+        "higher-level service",
+    ),
+    "authenticated account provenance": (
+        "authenticated principal",
+        "shape check, not a provenance",
+    ),
+    "shared process-scoped limiter": (
+        "process-scoped production limiter",
+        "one per request resets",
+    ),
+    "production clock and sleeper": ("real monotonic clock and `systemsleeper`",),
+    "bounded admission control": (
+        "admission control",
+        "caller fan-out",
+    ),
+    "verification-total deadline": (
+        "overall request or job deadline",
+        "32 minutes",
+    ),
+    "operator-controlled trust": (
+        "tlstrust",
+        "operator-controlled configuration",
+    ),
+}
+
+
+@pytest.mark.parametrize(("condition", "markers"), sorted(PHASE_6_STOP_CONDITIONS.items()))
+def test_every_phase_6_stop_condition_is_recorded(condition: str, markers: tuple[str, ...]) -> None:
+    """Each one, by substance rather than by heading, so prose may be rewritten."""
+    plan = flattened(text_of(PLAN))
+
+    missing = [marker for marker in markers if marker not in plan]
+    assert missing == [], f"the Phase 6 stop condition for {condition} is not recorded: {missing}"
+
+
+def test_the_forbidden_phase_6_wiring_is_named() -> None:
+    """A rule that names only the right answer does not catch the wrong one.
+
+    An API wired to `SMTPProbeService` is correct-looking code: it probes, it is
+    rate limited, it closes its connection. What it does not have is the
+    one-`RCPT TO` invariant, the attempt cap, or the candidate ordering, because
+    all three live one layer up.
+    """
+    plan = flattened(text_of(PLAN))
+
+    for forbidden in ("api → smtpprobeservice", "api → smtpconnector", "api → smtptransport"):
+        assert forbidden in plan, f"the plan does not forbid {forbidden}"
+
+
+# --- the documented rate-limit semantics match the implementation -----------
+
+
+@pytest.mark.parametrize("document", [ARCHITECTURE, THREAT_MODEL, STATUS_FILE])
+def test_the_documented_budget_is_per_recipient_domain(document: Path) -> None:
+    """Three documents once described a three-part key the code never had.
+
+    `acquire` takes an account, a domain, and an MX host; the limiter partitions
+    on the domain alone. Overclaiming here is the failure ADR 0008 named, and
+    this is the fourth time this project has made it.
+    """
+    flat = flattened(text_of(document))
+
+    assert "domain" in flat
+    assert "per-account" in flat or "account" in flat
+    # The claim that must not come back, in the forms it took.
+    for overclaim in (
+        "the budget key is the account, the recipient's domain, and the mx host",
+        "budgets are keyed by an account, the recipient's domain, and the mx host",
+    ):
+        assert overclaim not in flat, f"{document.name} claims a three-part budget key"
+
+
+def test_the_limiter_partitions_on_the_domain_alone() -> None:
+    """The documentation above is checked against the code, not only itself."""
+    import ast
+    import inspect
+
+    from emailcheck.adapters.system.rate_limit import InProcessRateLimiter
+
+    source = inspect.getsource(InProcessRateLimiter._enter)
+    tree = ast.parse(source.lstrip())
+    claims = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_claim"
+    ]
+    assert len(claims) == 1, "the limiter claims state somewhere unexpected"
+    (claim,) = claims
+    (argument,) = claim.args
+    assert isinstance(argument, ast.Attribute)
+    assert argument.attr == "domain", (
+        "the limiter partitions its state by something other than the domain; "
+        "the documentation says the domain alone"
+    )
+
+
+def test_the_requirements_gap_is_recorded_rather_than_narrowed() -> None:
+    """Section 15 asks for per-account budgets and Phase 4 has none.
+
+    The requirement is right and stays; what was missing is the admission that
+    it is unmet. Closing it with the caller-supplied `account` string would be
+    per-account isolation in appearance only.
+    """
+    plan = flattened(text_of(PLAN))
+
+    assert "per-account abuse isolation required by requirements section 15 is not yet" in plan
+    assert "must not close this gap by partitioning on the caller-supplied" in plan
+
+
+# --- the documented worst case includes the rate-limit waits ----------------
+
+
+@pytest.mark.parametrize("document", [ORCHESTRATION_ADR, STATUS_FILE])
+def test_the_worst_case_latency_counts_the_rate_limit_waits(document: Path) -> None:
+    """ "Three session budgets" left out a term and understated the bound."""
+    flat = flattened(text_of(document))
+
+    assert "wait" in flat and "session budget" in flat
+    assert "120 s" in flat or "120 seconds" in flat
+    assert "32 minutes" in flat
+    assert "a verification's worst case is three session budgets" not in flat
+
+
+def test_the_documented_worst_case_matches_the_configured_bounds() -> None:
+    """The arithmetic in the documents, recomputed from the constants."""
+    from emailcheck.application.smtp_verification import DEFAULT_MAX_ATTEMPTS, MAX_ATTEMPTS_CEILING
+    from emailcheck.domain.rate_limit import DEFAULT_WAIT_BUDGET_SECONDS, MAX_WAIT_BUDGET_SECONDS
+    from emailcheck.domain.smtp_deadline import DEFAULT_SESSION_SECONDS, MAX_SESSION_SECONDS
+
+    assert DEFAULT_MAX_ATTEMPTS * (DEFAULT_WAIT_BUDGET_SECONDS + DEFAULT_SESSION_SECONDS) == 120.0
+    ceiling = MAX_ATTEMPTS_CEILING * (MAX_WAIT_BUDGET_SECONDS + MAX_SESSION_SECONDS)
+    assert ceiling == 1920.0
+    assert ceiling / 60 == 32.0
+
+
+# --- the limiter's memory bound is stated at the size that holds ------------
+
+
+@pytest.mark.parametrize("document", [ARCHITECTURE, STATUS_FILE])
+def test_the_memory_bound_names_in_flight_callers(document: Path) -> None:
+    """The bound is the cap *plus* in-flight callers, and they are not capped.
+
+    Saying "bounded" without the second term would claim more than the code
+    does — in-flight entries are bounded by caller concurrency, which is Phase 6
+    admission control's to fix.
+    """
+    flat = flattened(text_of(document))
+
+    assert "in flight" in flat or "in-flight" in flat
+    assert "admission control" in flat
+
+
+def test_the_ttl_is_documented_as_applying_to_idle_entries_only() -> None:
+    """And therefore as not needing to exceed the longest SMTP session."""
+    flat = flattened(text_of(ARCHITECTURE))
+
+    assert "applies to idle entries only" in flat
+    assert "not** required to exceed the longest smtp session" in flat or (
+        "not required to exceed the longest smtp session" in flat
+    )

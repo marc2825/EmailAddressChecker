@@ -354,6 +354,76 @@ class ScriptedSMTPTransport:
         return all(connection.is_closed for connection in self.connections)
 
 
+@dataclass(slots=True)
+class RoutedSMTPTransport:
+    """A different scripted server per destination address.
+
+    Gate 4E is the first thing that connects to more than one endpoint, and the
+    scenarios that matter are about *which* one answered: the first candidate
+    refuses the connection and the second accepts the recipient, the first fails
+    its handshake and the second does not. `ScriptedSMTPTransport` hands out one
+    template to everybody, so it cannot express those.
+
+    A value in `peers` is either a template peer to clone or a
+    `TransportFailure`, which is a connect that never opens. An address with no
+    entry is refused, so a test that reaches an endpoint it did not script fails
+    on the missing key rather than on a surprising success.
+    """
+
+    peers: dict[str, ScriptedSMTPPeer | TransportFailure]
+    connect_calls: list[ApprovedDestination] = field(default_factory=list)
+    connections: list[ScriptedSMTPPeer] = field(default_factory=list)
+
+    async def connect(self, destination: ApprovedDestination) -> ConnectionOutcome:
+        if not isinstance(destination, ApprovedDestination):
+            raise SMTPContractError("connect requires an ApprovedDestination")
+        self.connect_calls.append(destination)
+        scripted = self.peers.get(destination.address)
+        if scripted is None or isinstance(scripted, TransportFailure):
+            return ConnectionFailed(
+                failure=scripted if scripted is not None else TransportFailure.CONNECTION_REFUSED
+            )
+        connection = _clone(scripted, destination)
+        self.connections.append(connection)
+        return ConnectionOpened(connection=connection)
+
+    @property
+    def addresses_reached(self) -> list[str]:
+        """Every address a socket was asked for, in order."""
+        return [destination.address for destination in self.connect_calls]
+
+    @property
+    def all_closed(self) -> bool:
+        return all(connection.is_closed for connection in self.connections)
+
+    @property
+    def recipient_commands(self) -> int:
+        """`RCPT TO` written across every connection this transport handed out.
+
+        The measurement gate 4E's central invariant is asserted with: one
+        verification may put the recipient on the wire once, and this counts the
+        wire rather than the report.
+        """
+        return sum(connection.recipient_commands for connection in self.connections)
+
+
+def _clone(template: ScriptedSMTPPeer, destination: ApprovedDestination) -> ScriptedSMTPPeer:
+    """A fresh peer with the template's script and this destination's endpoint."""
+    return ScriptedSMTPPeer(
+        peer=PeerEndpoint(address=destination.address, port=destination.port),
+        banner=template.banner,
+        responses={
+            command: list(response) if isinstance(response, list) else response
+            for command, response in template.responses.items()
+        },
+        tls_outcome=template.tls_outcome,
+        write_failure_on=template.write_failure_on,
+        write_failure=template.write_failure,
+        exhausted=template.exhausted,
+        hang=template.hang,
+    )
+
+
 def plain_session_peer(peer: PeerEndpoint, rcpt: Response = RCPT_ACCEPTED) -> ScriptedSMTPPeer:
     """A server with no STARTTLS that accepts everything else."""
     return ScriptedSMTPPeer(

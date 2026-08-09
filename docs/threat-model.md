@@ -29,6 +29,17 @@ Threat: an authenticated or anonymous user discovers likely live addresses.
 
 Controls:
 
+- **one verification issues at most one `RCPT TO`, in total.** Gate 4A bounds one
+  session; `application/smtp_verification.py` bounds the whole request. Reaching
+  the recipient stage ends the verification — not receiving an answer, *reaching
+  the stage* — so a `450`, a `550`, a `252`, a reset after the command went out,
+  and a write that failed part way all stop it. Asking a second exchanger about
+  one recipient, from one identity, within seconds, is the pattern a receiving
+  site fingerprints as harvesting, and the temptation is real: a `450` reads like
+  "ask again". Two independent barriers decide it — the transcript and the stage
+  — and each is pinned by its own test (ADR 0011);
+- **MX fallback is only for failures before the recipient stage**, so the next
+  exchanger asks the question for the first time rather than asking it again;
 - no anonymous active checks;
 - per-account, IP, address, domain, and MX budgets;
 - new-account quotas;
@@ -108,8 +119,23 @@ Controls:
   so a connection cannot become a different peer's by being wrapped;
 - acquire a rate-limit budget before a socket is created. `SMTPProbeService`
   takes a `RateLimiter` with no default, so a caller that has not supplied one
-  cannot construct it, and the budget key is the account, the recipient's domain,
-  and the MX host — never the local part;
+  cannot construct it. `acquire` is given an account, the recipient's domain, and
+  the MX host — never the local part — and `rate_limit_key` refuses an `@` in any
+  component rather than trusting the caller, so no component can be a mailbox.
+  **The budget Phase 4 enforces partitions on the domain alone**: the account and
+  the MX host are validated and carried but divide nothing yet. Per-account
+  isolation waits for an authenticated principal in Phase 6, because a
+  caller-supplied account string used as a partition is bypassed by sending a
+  different string — and refusing an `@` is a shape check, not a provenance
+  guarantee;
+- **bound how many endpoints one request may reach.** A `MailRoute`'s length is
+  whatever a DNS answer says, so `plan_attempts` caps the plan and de-duplicates
+  it on `(MX host, address, port)` before anything connects. Without the cap, one
+  request is as many outbound connections as an attacker's zone cares to publish;
+- **keep Phase 2's candidate ordering and never randomize it.** MX preference is
+  the publisher's instruction; a randomized scan would make a verification
+  unreproducible, and picking a different endpoint to get a different answer is
+  the rotation this project forbids outright;
 - isolate worker egress and credentials;
 - cap reads and time.
 
@@ -175,6 +201,27 @@ Controls:
   instead;
 - bounded capability parsing: an EHLO keyword is bounded in length, the count is
   capped, and nothing branches on one;
+- **a bounded wait for a budget, and it is not the session deadline.** The
+  rate-limit wait sits outside the SMTP budget on purpose, so queue depth is
+  never recorded as a remote timeout — which leaves the wait itself needing a
+  bound. One deadline covers all three acquisitions, so three budgets cannot cost
+  three waits, and pacing refuses *before* suspending when the delay could not
+  fit anyway rather than holding a concurrency slot to wait out a budget it
+  cannot meet. Exceeding it raises `RateLimitTimeout`, which is not a
+  `TimeoutError` and not an `OSError`, so a handler written for a remote timeout
+  cannot catch this project's own scheduling;
+- **a concurrency slot that is always given back.** A refusal, an exception, and
+  a cancellation all unwind whatever was already acquired. A slot held by a
+  cancelled caller removes capacity from the process permanently, and nothing
+  ever counts it again — the same shape as the descriptor leak the 4B review
+  found in `close`. `except BaseException` is deliberate: `CancelledError` does
+  not derive from `Exception`, and a mutation to the narrower clause passed the
+  whole suite until a test cancelled a caller that was actually *holding*
+  something;
+- **bounded limiter state.** Per-domain buckets are evicted on an idle TTL and a
+  least-recently-used cap, and an entry in use is never evicted. Without it, a
+  caller supplying a new domain every time is a memory leak with a remote
+  trigger and nothing in the process would notice;
 - bounded retries;
 - fair queueing.
 

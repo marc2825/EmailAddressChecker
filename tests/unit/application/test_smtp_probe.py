@@ -213,6 +213,13 @@ async def test_the_service_cannot_be_built_without_a_rate_limiter() -> None:
         )
 
 
+#: The one module allowed to implement `acquire`. Gate 4C required this list to
+#: be empty, because a limiter that existed before the budgets did would have
+#: been a permissive default. Gate 4E implements one, so the rule tightens rather
+#: than disappears: exactly one implementation, in the module that was reviewed.
+APPROVED_LIMITER = "adapters/system/rate_limit.py"
+
+
 def _rate_limiter_implementations() -> list[str]:
     """Every `acquire` defined in `src/`, outside the port that declares it."""
     import ast
@@ -226,14 +233,51 @@ def _rate_limiter_implementations() -> list[str]:
         tree = ast.parse(module.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "acquire":
-                found.append(f"{module.relative_to(root)}:{node.lineno}")
+                found.append(f"{module.relative_to(root).as_posix()}:{node.lineno}")
     return found
 
 
-async def test_no_permissive_rate_limiter_ships_in_production() -> None:
-    """A no-op implementation in `src/` would be the default this design refuses."""
+async def test_only_the_reviewed_limiter_ships_in_production() -> None:
+    """A second implementation is how a permissive one arrives unnoticed.
+
+    Gate 4C's version of this test required *no* implementation at all, and it
+    is what made adding one a deliberate act rather than a convenience. The
+    property it protected was never "there is no limiter" but "there is no
+    limiter nobody reviewed", so the assertion narrows to the module 4E added.
+    """
     implementations = _rate_limiter_implementations()
-    assert implementations == [], f"a rate limiter is implemented in production: {implementations}"
+
+    assert [item.split(":")[0] for item in implementations] == [APPROVED_LIMITER], (
+        f"a rate limiter is implemented outside {APPROVED_LIMITER}: {implementations}"
+    )
+
+
+async def test_the_production_limiter_is_not_permissive() -> None:
+    """It has to be able to say no, or the ordering contract buys nothing.
+
+    An implementation that granted everything would satisfy every test in this
+    file — the lease is acquired, entered, and released in the right order — and
+    would be exactly the unmetered path `SMTPProbeService`'s required limiter
+    exists to make impossible. So this asks it for more than it has.
+    """
+    from dialogue_fixtures import FakeSleeper
+    from emailcheck.adapters.system.rate_limit import InProcessRateLimiter
+    from emailcheck.domain.rate_limit import RateLimitSettings, RateLimitTimeout
+
+    clock = FakeMonotonicClock()
+    limits = InProcessRateLimiter(
+        clock=clock,
+        sleeper=FakeSleeper(clock=clock),
+        settings=RateLimitSettings(
+            domain_capacity=1, domain_refill_seconds=60.0, wait_budget_seconds=1.0
+        ),
+    )
+
+    async with limits.acquire(account="a", domain="example.com", mx_host="mx.example.com"):
+        pass
+    with pytest.raises(RateLimitTimeout):
+        async with limits.acquire(account="a", domain="example.com", mx_host="mx.example.com"):
+            pass
 
 
 # --- the target's local part never reaches a budget key --------------------
