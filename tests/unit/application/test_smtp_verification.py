@@ -581,8 +581,17 @@ async def test_the_cleanup_detail_survives_the_wiring() -> None:
     assert details["recipients_attempted"] == 1
 
 
-async def test_no_aggregation_is_called_and_no_status_is_produced() -> None:
-    """Phase 5 is not started, and this is where starting it would be tempting."""
+async def test_the_orchestrator_still_produces_no_status_of_its_own() -> None:
+    """Phase 5 aggregates; gate 4E observes. The separation outlives Phase 5.
+
+    Until Phase 5 existed this test asserted that `aggregate_evidence` raised
+    `NotImplementedError`, which was a fact about the calendar rather than about
+    this module. What it was really protecting is unchanged and is asserted
+    directly instead: a `VerificationReport` carries evidence and an operational
+    stop reason, and no status, confidence, or verdict anywhere in it. An
+    inspection test adds the other half — the orchestration tree imports no
+    aggregation vocabulary at all.
+    """
     transport = RoutedSMTPTransport(peers={FIRST: peer_for(FIRST)})
 
     report, _ = await verify(transport, route(candidate(FIRST)))
@@ -590,10 +599,9 @@ async def test_no_aggregation_is_called_and_no_status_is_produced() -> None:
     rendered = repr(report)
     for vocabulary in ("likely_deliverable", "temporary_unknown", "Confidence", "Verdict"):
         assert vocabulary not in rendered
-    from emailcheck.application import aggregate
-
-    with pytest.raises(NotImplementedError):
-        aggregate.aggregate_evidence(report.evidence)  # type: ignore[attr-defined]
+    assert not hasattr(report, "status")
+    assert not hasattr(report, "confidence")
+    assert not hasattr(report, "verdict")
 
 
 # --- privacy ----------------------------------------------------------------

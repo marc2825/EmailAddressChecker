@@ -42,6 +42,12 @@ parts validate themselves on construction, so it cannot exist in a state where
 its target would carry CR, LF, NUL, or a domain that differs from the one it
 displays.
 
+`application/syntax_evidence.py` turns a rejection into `Evidence`, and there is
+deliberately **no** evidence for an address that parsed: no published reason code
+means "the syntax was fine", and one would be the first thing an aggregation
+mistook for delivery evidence. Strength follows `RejectionKind`, which already
+separates a broken grammar from a form this MVP declines to judge.
+
 Parsing is pure domain logic, not a port. It performs no I/O and depends on no
 clock or randomness, and a replaceable implementation would weaken the guarantee
 that one construction path validates every target. A future syntax policy
@@ -436,15 +442,69 @@ whatever its strength.
 
 ### Verdict
 
-A deterministic aggregation of evidence:
+A deterministic aggregation of evidence: status, confidence level, primary
+reason, ordered reason codes, risk flags, check summaries, the retained evidence,
+and a ruleset version.
 
-- status;
-- confidence level;
-- primary reason;
-- ordered reason codes;
-- risk flags;
-- check summaries;
-- ruleset version.
+`application/aggregate.py` is the only thing that builds one. It implements
+`docs/status-model.md` section 4 as six tiers, and **the lowest non-empty tier
+decides**. Nothing counts observations, weights them by strength, or reads the
+order they arrived in.
+
+**Two gates, and each is in exactly one place.** `invalid` needs an approved
+hard-invalid reason *and* target-specific evidence *and* non-temporary evidence;
+`likely_deliverable` needs no tier 1–4 blocker *and* a usable route *and* a
+qualifying recipient acceptance. An inspection test asserts that no function in
+the module names either status at all — a tier becomes a status in one table —
+because two `if`s producing one status are two conditions that will drift apart.
+
+**Strength is not an input to either gate.** The module does not import
+`EvidenceStrength`, so `if strength is STRONG: return INVALID` is unreachable
+rather than merely absent. Membership of `POSITIVE_RECIPIENT_REASONS` is a
+condition of three, never an answer: an accept-all server says `250` to everyone.
+
+**The route requirement is the one condition section 2 does not state.** A lone
+`rcpt_accepted` is an evidence set the pipeline cannot produce — an acceptance
+implies a route was resolved and connected to — and an aggregator must not assume
+its input is coherent, so a bare acceptance is `unknown`. ADR 0012 records it.
+
+**Confidence is a table on the primary reason**, with no arithmetic anywhere.
+`docs/requirements.md` section 17 permits a probability only after a calibration
+study, and `Confidence` now refuses a score while `calibrated` is false. A table
+also makes duplicate evidence, input order, and unrelated observations
+structurally unable to move the level.
+
+**Duplicates collapse before any rule runs.** Gate 4E can produce three
+pre-recipient failures for one address, and those are three attempts at one
+question rather than three answers to it. Decision-time deduplication and
+audit-time retention are separate: the verdict keeps the whole input tuple in
+the caller's order, unmodified.
+
+**Two contradictions are unconstructible.** `PERMITTED_PRIMARY_REASONS` in
+`domain/verdict.py` refuses an `invalid` verdict naming an accepted recipient and
+a `likely_deliverable` one naming a rejection — including from a Phase 6 that
+assembles a result some other way. The two unknown statuses stay open, because
+section 5 says one reason may appear under different statuses and an aggregator
+that raised on contradictory evidence would be worse than one answering
+`unknown`.
+
+Tier 3 membership is the `Evidence.temporary` flag and nothing else — there is no
+second list of temporary reason codes to keep in step — and it is fail-safe in
+both directions, because neither a wrongly-set nor a wrongly-cleared flag can
+reach `likely_deliverable`. Tier 6 holds route evidence as well as passive
+metadata: residual observations that block nothing and answer nothing.
+
+**The primary reason always leads `reason_codes`, and `Verdict` refuses a result
+where it does not.** The two orderings are computed separately, so the type is
+what keeps them in step.
+
+Risk flags are derived after the status and read by nothing: a disposable
+address may be likely deliverable, and a role address may be invalid.
+
+Pure. No socket, resolver, limiter, storage, retry, or clock —
+`Evidence.observed_at` is input metadata, no document defines a staleness policy,
+and inventing one would silently weaken the evidence a rate-limited SMTP session
+was spent collecting.
 
 ### Ports
 

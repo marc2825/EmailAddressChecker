@@ -67,7 +67,14 @@ MVP confidence is categorical:
 - `low`.
 
 `calibrated` is false and `score` is null until a calibration study is
-completed.
+completed. `Confidence` refuses a score while `calibrated` is false, so the
+number cannot appear without the study being declared.
+
+**The level is a lookup on the primary reason and nothing else** — no sum, no
+average, no product, no count. There is no calibration study, so there is no
+evidence for any arithmetic; a table also makes duplicate evidence, input order,
+and unrelated extra observations structurally unable to move it. Where the table
+below gives a range, the lower level is used. ADR 0012 records each choice.
 
 Guidelines:
 
@@ -91,10 +98,115 @@ The aggregator uses structured evidence, not arbitrary strings.
 3. explicit temporary condition;
 4. policy/opaque failure;
 5. accepted recipient;
-6. passive-only unknown.
+6. residual non-blocking evidence — route and passive metadata, with no
+   qualifying positive answer.
 
 A later network error must not erase a hard passive invalid result because the
 network probe should never have occurred.
+
+> **Tier 6 was called "passive-only unknown" and holds more than passive
+> evidence.** `mx_available` and `implicit_mx_available` land there too: a route
+> is not a blocker and is not an answer, so it belongs with the risk metadata
+> rather than in tier 4. Both readings produce `unknown`, so nothing behavioural
+> ever depended on the label — the document was simply narrower than the code,
+> and the independent review found it that way.
+
+`application/aggregate.py` is the only implementation. Each observation is
+assigned a tier, and **the lowest non-empty tier decides**; nothing counts
+observations, weights them, or reads `EvidenceStrength`.
+
+### 4.1 The two gates
+
+Only two functions can produce a decisive status, and each condition is pinned
+by a test in which the others pass.
+
+> **`invalid` requires all three of:** a reason among the five section 2 lists,
+> an observation that is about the target, and one that is not temporary.
+
+Strength is not one of them. `application/aggregate.py` does not import
+`EvidenceStrength` at all, so section 7.6 stop condition B is closed by absence
+rather than by discipline.
+
+> **`likely_deliverable` requires all three of:** no tier 1–4 evidence, a
+> `mx_available` or `implicit_mx_available` observation, and a qualifying
+> recipient acceptance that is about the target and not temporary.
+
+The route requirement is the one condition not stated in section 2, and ADR 0012
+records why it is required anyway: a lone `rcpt_accepted` is an evidence set the
+pipeline cannot produce — an acceptance implies a route was resolved and
+connected to — and an aggregator must not assume its input is coherent. It is
+also what makes "a bare SMTP `250` is not automatically `likely_deliverable`"
+true of the function rather than only true of how the caller happens to be
+wired. A lone acceptance is `unknown`.
+
+### 4.2 Targetness, and what it is read from
+
+`is_about_the_target` reads the producer's own statement first: gate 4D
+publishes `about_the_target` on every piece of SMTP evidence, and it knows the
+stage the dialogue reached and how many recipients were attempted, which the
+aggregator does not. Absent such a statement, membership of a published
+target-specific set decides, and **an unclassified reason is not target
+evidence**. The positive form is deliberate — the negative one fails open.
+
+### 4.3 Tier 4 is the complement
+
+An observation matching none of tiers 1, 2, 3, 5, or the small explicit tier-6
+set lands in tier 4, which is `unknown` and which blocks a positive verdict. A
+reason code added in a later Phase and forgotten resolves to `unknown` rather
+than being ignored.
+
+### 4.4 What puts an observation in tier 3
+
+**The `Evidence.temporary` flag, and nothing else.** There is no second list of
+"temporary reason codes" to keep in step with the producers; the aggregator reads
+the boolean each producer already publishes, which `docs/status-model.md`
+section 7.5 fixes for the SMTP mapper and the DNS and syntax producers set the
+same way.
+
+That is fail-safe in both directions, which is why one flag is enough. A flag
+wrongly set to true moves an observation *up* into `temporary_unknown`, which
+claims less than `invalid` and less than `likely_deliverable`. A flag wrongly set
+to false drops it into tier 4, which is `unknown` and still blocks a positive
+verdict. **Neither error can reach `likely_deliverable`**, and neither can turn a
+retryable condition into a permanent one, so the disagreement between a reason's
+semantics and its flag is a loss of retry advice rather than a wrong answer.
+
+### 4.5 Duplicates and independence
+
+Distinct reasons are collapsed before any rule runs, so nothing downstream can
+count them: ten copies of one observation decide what one decides. Where two
+observations carry one reason and disagree, the lower tier wins.
+
+Gate 4E produces this shape routinely — three pre-recipient failures for one
+address are three attempts at one question, not three answers to it. Evidence
+from different layers is not treated as independent either: syntax, DNS, SMTP,
+and passive observations of one address are correlated in ways nobody has
+measured, so no Bayesian-looking arithmetic exists. See ADR 0012.
+
+### 4.6 The primary reason
+
+Chosen from the deciding tier by an explicit total order over every published
+reason code, never from the enum's declaration order and never from a set.
+`reason_codes` reports every distinct reason sorted by tier and then by that
+order, so the primary reason is always first and reading only it loses ordering
+rather than information.
+
+**That last property is enforced by `Verdict`, not merely described here.** The
+two orderings are computed by two functions, and the independent review found
+that ranking `reason_codes` by the enum's declaration order left
+`primary_reason` correct, put a different reason at the head of the list, and
+broke no test. A verdict whose reason codes do not lead with its primary reason
+is now unconstructible.
+
+`internal_error` leads tier 4: a failure of this project's own must not hide
+behind a remote server's answer, though it does not outrank a hard invalid or an
+explicit temporary condition.
+
+### 4.7 The empty set
+
+`aggregate_evidence(())` is `unknown` with `primary_reason` of `null`. There is
+no published reason code meaning "nothing was observed", and the absence of
+contradictory evidence is not positive evidence.
 
 ## 5. Public reason codes
 
@@ -460,18 +572,38 @@ correct-looking code someone could write.
 > **A reason in `NON_TARGET_SMTP_REASONS` never supports target invalidity,
 > whatever its strength**, and neither does anything the mapper marks temporary.
 
-Two further items are required before Phase 5 rather than before Phase 4E:
+Both stop conditions are closed. Section 4.1 is stop condition A and B expressed
+as the two gates: the aggregator does not import `EvidenceStrength` at all, and
+membership of `POSITIVE_RECIPIENT_REASONS` is one of three conditions rather than
+an answer.
 
-- **`RecipientStageOutcome` extension is silent.** A member added to that enum
-  falls through the classifier to the pre-recipient path and is reported as
-  `smtp_connection_timeout`. `TransportFailure` fails loudly and `DialogueStage`
-  is now derived from `STAGE_ORDER`; this one is not covered, and an exhaustive
-  match belongs here before an aggregator starts weighing the result;
+Two further items were required before Phase 5 rather than before Phase 4E, and
+both were closed at the start of it:
+
+- ~~**`RecipientStageOutcome` extension is silent.**~~ **Closed in Phase 5.** A
+  member added to that enum fell through the classifier to the pre-recipient
+  path and was reported as `smtp_connection_timeout` — temporary, non-target,
+  and invented. `application/smtp_evidence.py` now names every member in an
+  `assert_never` guard, so a new one fails under mypy *and* raises at run time.
+
+  The guard is deliberately **not** the dispatch. Turning it into one would be
+  tidier and would delete a reviewed barrier: `outcome not in _RECIPIENT_ANSWERS`
+  in `_recipient_reply` is one of the three checks between a `MAIL FROM 550` and
+  a recipient rejection, and a `match` routing `CONNECTION_ERROR` straight to
+  the pre-recipient path would make it unreachable and its test vacuous.
+  Exhaustiveness is worth having; it is not worth paying for with a barrier;
 - **`LINE_TOO_LONG` and `TOTAL_LIMIT_EXCEEDED` map by entry point.** Through
-  `map_connect_failure` they are `smtp_protocol_error`; reached mid-dialogue they
-  arrive with no reply and become `smtp_connection_timeout`. This is a
-  consequence of a 4C contract — a `SessionReport` carries no `TransportFailure`,
-  so the session path cannot know which bound was hit — rather than a decision,
-  and both are non-target and temporary-or-not in ways that change no verdict.
-  Phase 5 must either carry the failure through the report or record the
-  collapse deliberately.
+  `map_connect_failure` they are `smtp_protocol_error` and permanent; reached
+  mid-dialogue they arrive with no reply and become `smtp_connection_timeout`
+  and temporary. The difference reaches the verdict — `unknown` against
+  `temporary_unknown`.
+
+  **The difference is kept, as deliberate entry-point provenance**, and is now
+  pinned by tests rather than left as an accident. Collapsing it would need one
+  of two things and both are worse: making the session path report a protocol
+  error is impossible without changing a reviewed 4C contract, because a
+  `SessionReport` carries no `TransportFailure` and that path genuinely cannot
+  know which bound was hit; making the connect path report a timeout would throw
+  away information the caller has. What bounds the difference is asserted
+  instead: **both readings are non-target and neither can ever produce
+  `invalid`**. See ADR 0012.

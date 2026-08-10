@@ -515,6 +515,119 @@ arithmetic. Those scans read the **syntax tree with docstrings excluded**,
 because both were written against the raw text first and both failed on their own
 prose — the third time this repository has made that mistake.
 
+### Evidence aggregation, from Phase 5
+
+The aggregator is pure, so its tests need no fixture at all: `Evidence` is built
+directly and the verdict is compared. Evidence is **not** driven through a
+producer, deliberately — the contract is *evidence in, verdict out*, and several
+rows are sets no pipeline can produce. The point of those rows is that the
+aggregator answers them conservatively rather than assuming they cannot happen.
+
+The matrix is `docs/status-model.md` section 4, row by row:
+
+- syntax and route: invalid syntax, each unsupported form, NXDOMAIN, Null MX,
+  authoritative no-mail-route, MX-only, implicit-MX-only, DNS temporary, unsafe
+  destination, and a configuration anomaly;
+- passive: role, disposable, free-mail, several flags at once, and the
+  internationalized local part — each raising its flag and deciding nothing;
+- SMTP recipient: `250`, `251`, `252`, `4xx`, `mailbox_full`, `550 5.1.1`,
+  `550 5.7.1`, and a bare `550`, each with its status, primary reason, **and**
+  confidence level;
+- SMTP non-target: banner, EHLO, TLS, `MAIL FROM`, protocol error, timeout,
+  refused connection, unsafe destination, and internal error, none of which
+  reaches `invalid`;
+- conflicts: hard invalid with `250` and with `251`, temporary DNS with `250`,
+  unsupported with `250`, policy with `250`, `250` with `550 5.1.1`, `250` with
+  `252`, a strong non-target beside a positive recipient, and an internal error
+  beside one.
+
+**Several invariants are asserted exhaustively over the vocabulary** rather than
+inferred from the rows, because the rows can only cover what someone thought of:
+exactly five reason codes can ever reach `invalid`, at any strength and in
+either permanence state; no non-target reason ever can; no temporary observation
+ever becomes permanently invalid; and every reason outside the target-specific
+set is non-target.
+
+**Each condition of each gate is pinned where the others pass.** A
+`rcpt_rejected_address` marked temporary is refused by the permanence check
+alone; one whose producer denied targetness is refused by the targetness check
+alone; a policy rejection and a bare `550` are refused by the reason check
+alone. That is the same discipline gates 4A, 4D, and 4E used, and it is the only
+way a mutation of one condition fails.
+
+**Order independence is tested by full permutation**, not by one reversal: every
+conflicting set is aggregated in every order, with the status, confidence,
+primary reason, reason codes, and risk flags all compared. Anything that
+depended on arrival order — a first-match loop, a `dict` in input order, a set
+iterated — passes the row and fails here.
+
+**Duplicates are tested at 1, 2, 3, and 10 copies**, of seven different
+observations, asserting that nothing changes. Separately, the *retained* evidence
+is asserted to keep every copy in the caller's order, because decision-time
+deduplication and audit-time retention are different things.
+
+**Risk separation is tested over every status**: adding every passive risk
+observation to a `likely_deliverable`, an `invalid`, a `temporary_unknown`, and
+an `unknown` verdict changes the status, the confidence, and the primary reason
+not at all, and only adds flags.
+
+**Inspection covers what behaviour cannot.** No forbidden import in any of the
+three modules; no collaborator named that could be asked for more information,
+not even a `Clock`; no coroutine and no `await`; no multiplication, division, or
+exponentiation anywhere; no function naming a decisive status; `.strength` read
+nowhere; and no provider named in any of them, because a behavioural test cannot
+enumerate the providers nobody thought of. Every scan reads the **syntax tree
+with docstrings excluded** — these modules explain at length why they contain no
+retry and no probe, and a text scan fails on its own prose, which this
+repository has now done four times.
+
+**The two Phase 4 stop conditions have their own file.** The exhaustiveness
+guard is tested for what it admits, for failing loudly rather than defaulting,
+for using `assert_never` rather than a `.get`, and for *not* being the dispatch —
+because turning it into one would delete a reviewed 4D barrier and leave that
+barrier's test passing. The `LINE_TOO_LONG` entry-point difference is pinned
+from both entry points, in reason, in permanence, in resulting status, and in
+the bound that makes it safe: neither reading is about the target and neither
+can produce `invalid`.
+
+**Five properties were added after the independent review**, each because a
+mutation of the code changed an answer and nothing failed.
+
+- **The primary reason leads `reason_codes`.** Pinned on a set whose
+  `REASON_PRIORITY` order is the *reverse* of the enum's — `internal_error` is
+  declared last and ranks first — because a fixture where both mechanisms agree
+  proves nothing about which one is used, and most fixtures agree. `Verdict`
+  refuses the inconsistent shape as well, so the property holds however the list
+  was assembled;
+- **unsupported input outranks an explicit temporary condition.** The only
+  combination that can distinguish tier 2 from tier 4, since both produce
+  `unknown` and the unsupported codes already outrank every tier-4 reason. Four
+  rows, in both orders;
+- **the confidence table is pinned by mechanism as well as by coverage**, on the
+  `_CONNECT_REASONS` precedent: it must cover `REASON_PRIORITY`, and no decision
+  table in the module may be read with a defaulting `.get`;
+- **`internal_error` leads tier 4 by position**, not by one pairing. The earlier
+  test compared it only against `smtp_policy_blocked`, so swapping it with the
+  adjacent entry escaped;
+- **the exported `supports_likely_deliverable` is tested on its own.** Its
+  acceptance clause is redundant *inside* the aggregator — tier routing has
+  already established it — so a caller invoking the helper directly is the only
+  thing that can hold that condition.
+
+**Privacy is tested on the `Verdict` surfaces, not only on `Evidence`.** Phase 5
+added `Verdict.evidence`, so `repr(Verdict)` reaches every retained detail — a
+carrier that did not exist when gate 4D wrote its privacy tests. The evidence is
+driven through the real Phase 4D mapper from a session whose reply echoes the
+recipient, so the Phase 4A sanitizer is exercised rather than bypassed, and the
+invariant asserted is the narrow true one: **aggregation reintroduces nothing the
+producers removed**. One test states the limit explicitly — a `Verdict` is
+exactly as private as its input — so the others cannot be read as a promise that
+arbitrary evidence becomes safe by being aggregated.
+
+**The five Phase 6 stop conditions have a docs test**, in the style Phase 4
+established for its seven: on substance rather than on wording, so the prose may
+be rewritten and deleting any one condition fails its own row.
+
 ## 3. SMTP fixtures
 
 Required scenarios:
@@ -548,6 +661,11 @@ Required scenarios:
   call fails the test instead of being reported as a DNS result;
 - passive classification never produces a status, a hard-invalid result, or a
   risk flag outside its own four;
+- **aggregation is deterministic on the multiset**: the same evidence in any
+  order produces the same status, confidence, primary reason, and risk flags;
+- **a risk flag alone never changes a deliverability status**;
+- **only five reason codes can ever produce `invalid`**, and no non-target or
+  temporary observation is one of them, whatever its strength;
 - no forbidden SMTP command;
 - no more than one target RCPT;
 - no connection to unsafe IP;

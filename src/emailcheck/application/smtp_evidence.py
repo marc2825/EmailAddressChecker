@@ -33,7 +33,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import Final, assert_never
 
 from emailcheck.domain.evidence import Evidence, EvidenceLayer, EvidenceStrength
 from emailcheck.domain.reasons import ReasonCode
@@ -289,6 +289,48 @@ def _check_arguments(
 # --- classification --------------------------------------------------------
 
 
+def _require_known_outcome(outcome: RecipientStageOutcome) -> None:
+    """Refuse an outcome this classifier was not written against.
+
+    **Phase 5 stop condition, closed here.** The branches below were written
+    against exactly seven members. A member added to `RecipientStageOutcome`
+    without revisiting them would satisfy none of the named branches, fall
+    through `_recipient_reply` — whose first barrier is membership of
+    `_RECIPIENT_ANSWERS` — and be reported as `smtp_connection_timeout`: a
+    temporary, non-target reason, invented for it silently. Phase 5 then weighs
+    that as a real timeout. `TransportFailure` already fails loudly through the
+    `_CONNECT_REASONS` subscript and `DialogueStage` is derived from
+    `STAGE_ORDER`; this was the one enum left with neither.
+
+    It fails twice over. `assert_never` narrows to `Never`, so **mypy** rejects a
+    new member at this line, and reaching it at run time raises `AssertionError`
+    rather than returning a default — the same "loud beats plausible" choice as
+    the `_CONNECT_REASONS` subscript.
+
+    **This is a guard and deliberately not the dispatch.** Turning it into the
+    dispatch would be tidier and would quietly delete a reviewed barrier: the
+    `outcome not in _RECIPIENT_ANSWERS` check in `_recipient_reply` is one of the
+    three that stand between a `MAIL FROM 550` and a recipient rejection, and it
+    is pinned by a test that fails when that check alone is removed. A `match`
+    that routed `CONNECTION_ERROR` straight to `_pre_recipient_finding` would
+    make that check unreachable, and its test would pass with the check deleted.
+    Exhaustiveness is worth having; it is not worth paying for with a barrier.
+    """
+    match outcome:
+        case (
+            RecipientStageOutcome.ACCEPTED
+            | RecipientStageOutcome.REJECTED
+            | RecipientStageOutcome.TEMPORARY_FAILURE
+            | RecipientStageOutcome.PROTOCOL_ERROR
+            | RecipientStageOutcome.TLS_ERROR
+            | RecipientStageOutcome.CONNECTION_ERROR
+            | RecipientStageOutcome.INTERNAL_ERROR
+        ):
+            return
+        case _ as unreachable:  # pragma: no cover - unreachable while the enum is closed
+            assert_never(unreachable)
+
+
 def _classify(report: SessionReport) -> _Finding:
     """Which reason one session produced. The branch order is the specification.
 
@@ -297,8 +339,12 @@ def _classify(report: SessionReport) -> _Finding:
        whatever reply it carried answered `STARTTLS` rather than the recipient;
     3. the recipient stage, and only when the recipient actually answered;
     4. everything else, which happened before the recipient stage.
+
+    Every member of `RecipientStageOutcome` is accounted for before any of that,
+    so a member added later fails rather than becoming a silent timeout.
     """
     observation = report.observation
+    _require_known_outcome(observation.outcome)
 
     if observation.outcome is RecipientStageOutcome.INTERNAL_ERROR:
         return _Finding(ReasonCode.INTERNAL_ERROR, EvidenceStrength.WEAK, temporary=False)
