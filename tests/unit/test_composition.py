@@ -1,0 +1,226 @@
+"""The production object graph, asserted as a graph.
+
+Four Phase 4 stop conditions are properties of *how the objects are wired*
+rather than of any class, so they can only be checked here: one shared limiter,
+one shared admission gate, the real clock and sleeper, and an SMTP service that
+exists only when a deployment permits probing.
+
+Nothing in this file opens a socket. `build_verification_stack` constructs
+adapters — a resolver object, a transport object — but constructing them
+performs no I/O, and the suite-wide guard would fail the test if it did.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from emailcheck.adapters.observability.logging_sink import LoggingOperatorSink
+from emailcheck.adapters.system.clock import SystemClock, SystemMonotonicClock, SystemSleeper
+from emailcheck.adapters.system.rate_limit import InProcessRateLimiter
+from emailcheck.application.admission import AdmissionSettings
+from emailcheck.composition import Deployment, DeploymentProfile, build_verification_stack
+from emailcheck.domain.principal import Principal
+
+KEY = "k" * 40
+CORRELATION_KEY = b"c" * 32
+
+SENDER = {
+    "ehlo_hostname": "probe.example.test",
+    "envelope_sender": "verify@probe.example.test",
+}
+
+
+def passive_deployment(**kwargs: object) -> Deployment:
+    return Deployment(api_keys={"acct-1": KEY}, correlation_key=CORRELATION_KEY, **kwargs)  # type: ignore[arg-type]
+
+
+def active_deployment(**kwargs: object) -> Deployment:
+    """A probing deployment, which by `docs/requirements.md` section 15 is not
+    the local-passive profile — that one is defined as "no active probes"."""
+    kwargs.setdefault("profile", DeploymentProfile.LAB_ACTIVE)
+    return Deployment(
+        api_keys={"acct-1": KEY},
+        correlation_key=CORRELATION_KEY,
+        sender_identity=SENDER,
+        active_probing=True,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+# --- one process, one limiter, one gate -------------------------------------
+
+
+def test_the_stack_shares_one_limiter_and_one_admission_gate() -> None:
+    """A limiter constructed per request permits everything.
+
+    Its counters start at zero every time, so a per-request limiter is a
+    limiter that has never seen a previous request. The same is true of the
+    admission gate. Asserted by identity rather than by type.
+    """
+    stack = build_verification_stack(active_deployment())
+
+    assert stack.verification.admission is stack.admission
+    assert isinstance(stack.limiter, InProcessRateLimiter)
+    assert stack.verification.smtp is not None
+    assert stack.verification.smtp.probe.rate_limiter is stack.limiter
+
+
+def test_two_verifications_through_one_stack_use_the_same_objects() -> None:
+    """The property the sharing exists for, stated as the graph rather than a run."""
+    stack = build_verification_stack(active_deployment())
+    first = stack.verification.smtp
+    second = stack.verification.smtp
+    assert first is second
+    assert stack.admission is stack.verification.admission
+
+
+def test_two_stacks_are_independent() -> None:
+    """One process shares; two processes do not. A shared *class* would be a bug."""
+    one = build_verification_stack(active_deployment())
+    two = build_verification_stack(active_deployment())
+    assert one.limiter is not two.limiter
+    assert one.admission is not two.admission
+
+
+# --- the real clock and the real sleeper ------------------------------------
+
+
+def test_the_production_graph_binds_the_real_clock_and_sleeper() -> None:
+    """Phase 4 stop condition 4.
+
+    The dependency-injection seam stays — every component still takes a port,
+    which is what makes Phase 4's pacing tests possible without waiting — but
+    the production graph has no argument through which a fake reaches it.
+    """
+    stack = build_verification_stack(active_deployment())
+
+    assert isinstance(stack.limiter.clock, SystemMonotonicClock)
+    assert isinstance(stack.limiter.sleeper, SystemSleeper)
+    assert isinstance(stack.verification.routes.clock, SystemClock)
+    assert isinstance(stack.verification.syntax.clock, SystemClock)
+    assert stack.verification.smtp is not None
+    assert isinstance(stack.verification.smtp.clock, SystemClock)
+    assert isinstance(stack.verification.smtp.probe.clock, SystemMonotonicClock)
+
+
+def test_the_builder_has_no_parameter_for_a_clock_a_sleeper_or_a_limiter() -> None:
+    """The four stop conditions this function exists to close, as a signature.
+
+    A keyword argument for any of them would be the hole each one names, so the
+    absence is asserted rather than left to a reviewer's memory. `operator` is
+    the one seam, and it is write-only.
+    """
+    import inspect
+
+    parameters = set(inspect.signature(build_verification_stack).parameters)
+    assert parameters == {"deployment", "operator"}
+    for forbidden in ("clock", "sleeper", "limiter", "transport", "trust", "tls"):
+        offenders = [name for name in parameters if forbidden in name]
+        assert offenders == [], (forbidden, offenders)
+
+
+# --- the passive profile is a shape, not a flag -----------------------------
+
+
+def test_a_passive_deployment_gets_no_smtp_service_at_all() -> None:
+    """`docs/requirements.md` section 15: local-passive has no active probes."""
+    stack = build_verification_stack(passive_deployment())
+    assert stack.verification.smtp is None
+
+
+def test_an_active_deployment_without_a_sender_identity_refuses_to_start() -> None:
+    """An unconfigured deployment does not probe.
+
+    `adapters/smtp/sender_identity.py` refuses to invent an EHLO name, so this
+    fails at start rather than at the first request.
+    """
+    with pytest.raises(ValueError, match="sender identity"):
+        Deployment(
+            api_keys={"acct-1": KEY},
+            correlation_key=CORRELATION_KEY,
+            active_probing=True,
+        )
+
+
+def test_the_sender_identity_comes_from_operator_configuration() -> None:
+    """Never from a target and never from a request."""
+    stack = build_verification_stack(active_deployment())
+    assert stack.verification.smtp is not None
+    identity = stack.verification.smtp.probe.identity_provider.current_identity()
+    assert identity.ehlo.host.value == "probe.example.test"
+    assert identity.envelope_sender.address.smtp_target == "verify@probe.example.test"
+
+
+# --- TLS trust is operator configuration ------------------------------------
+
+
+def test_the_transport_uses_the_system_trust_and_exposes_no_override() -> None:
+    """Phase 4 stop condition 7.
+
+    `TLSTrust` may only widen trust and comes from `adapters/smtp/tls.py`'s
+    default here. There is no `Deployment` field and no builder parameter that
+    could carry a CA file, a PEM body, or a verification override.
+    """
+    from emailcheck.adapters.smtp.tls import SYSTEM_TRUST
+
+    stack = build_verification_stack(active_deployment())
+    assert stack.verification.smtp is not None
+    assert stack.verification.smtp.probe.transport.trust is SYSTEM_TRUST
+
+    # Substring rather than exact membership: a mutation run added `tls_trust`
+    # and an exact check missed it, because the forbidden thing is a field
+    # *about* TLS trust rather than a field with one particular name.
+    fields = set(Deployment.__dataclass_fields__)
+    for forbidden in ("trust", "ca_file", "tls", "verify", "insecure", "cert", "policy"):
+        offenders = [name for name in fields if forbidden in name]
+        assert offenders == [], (forbidden, offenders)
+
+
+# --- authentication ---------------------------------------------------------
+
+
+def test_the_stack_authenticates_only_configured_keys() -> None:
+    stack = build_verification_stack(passive_deployment())
+    assert stack.authenticator.authenticate(KEY) == Principal(account_id="acct-1")
+    assert stack.authenticator.authenticate("j" * 40) is None
+    assert stack.authenticator.authenticate(None) is None
+
+
+def test_a_deployment_carries_no_secret_into_its_repr() -> None:
+    """A `Deployment` is logged by accident more often than anything else."""
+    stack = build_verification_stack(passive_deployment())
+    rendered = repr(stack.authenticator)
+    assert KEY not in rendered
+
+
+# --- the store --------------------------------------------------------------
+
+
+def test_a_store_is_created_and_initialized_only_when_configured(tmp_path: Path) -> None:
+    assert build_verification_stack(passive_deployment()).store is None
+
+    path = tmp_path / "verdicts.sqlite3"
+    stack = build_verification_stack(passive_deployment(store_path=path))
+    assert stack.store is not None
+    assert path.exists()
+
+
+def test_the_operator_sink_defaults_to_the_logging_one() -> None:
+    stack = build_verification_stack(passive_deployment())
+    assert isinstance(stack.operator, LoggingOperatorSink)
+    assert stack.verification.operator is stack.operator
+
+
+def test_admission_settings_reach_the_gate() -> None:
+    stack = build_verification_stack(
+        passive_deployment(admission=AdmissionSettings(max_in_flight=3, max_per_principal=2))
+    )
+    assert stack.admission.settings.max_in_flight == 3
+    assert stack.admission.settings.max_per_principal == 2
+
+
+def test_a_short_correlation_key_is_refused_at_configuration() -> None:
+    with pytest.raises(ValueError, match="at least"):
+        Deployment(api_keys={}, correlation_key=b"short")

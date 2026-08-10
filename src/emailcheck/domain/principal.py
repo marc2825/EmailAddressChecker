@@ -1,0 +1,69 @@
+"""Who is asking, established by authentication and by nothing else.
+
+Phase 4 carried an `account` string into the rate limiter and deliberately let
+it divide no budget, because a caller-supplied account is per-account isolation
+in appearance only: bypassed by sending a different string.
+`plans/phase-04-smtp.md` records that as a Phase 6 stop condition, and this type
+is the thing that closes it.
+
+**A `Principal` is not a request field, and the type cannot say so.** Nothing
+about a frozen dataclass prevents an API handler writing
+`Principal(account_id=body["account"])`. So the provenance guarantee is carried
+by two things outside the value: `ports/authentication.py` is the only interface
+that produces one, and an inspection test refuses the constructor anywhere in
+`apps/` or `application/`. The value fixes the *shape*; the authenticator grants
+the *identity* — the same split `PeerEndpoint` and `confirm_peer` use.
+"""
+
+from __future__ import annotations
+
+import string
+from dataclasses import dataclass
+from typing import Final
+
+#: Long enough for an opaque operator-issued identifier, short enough that it
+#: cannot be used to smuggle data through a budget key or a log line.
+MAX_ACCOUNT_ID_LENGTH: Final = 64
+
+#: Deliberately narrow. An account identifier is an opaque handle this project
+#: issues, so there is no reason for it to contain anything else — and every
+#: character outside this set is one that could change the meaning of a log
+#: line, a budget key, or a stored row.
+_PERMITTED: Final = frozenset(string.ascii_letters + string.digits + "-_.")
+
+
+@dataclass(frozen=True, slots=True)
+class Principal:
+    """An authenticated caller.
+
+    `account_id` is an opaque operator-issued handle. It is never an email
+    address, never a domain, and never anything the caller chose.
+    """
+
+    account_id: str
+
+    def __post_init__(self) -> None:
+        value = self.account_id
+        if not isinstance(value, str):
+            raise ValueError("an account identifier must be a string")
+        if not value:
+            raise ValueError("an account identifier must not be empty")
+        if len(value) > MAX_ACCOUNT_ID_LENGTH:
+            raise ValueError(
+                f"an account identifier must be at most {MAX_ACCOUNT_ID_LENGTH} characters"
+            )
+        if not _PERMITTED.issuperset(value):
+            # `@` is refused here as well as by `rate_limit_key`, so an
+            # identifier can never be a mailbox even before it reaches a budget.
+            raise ValueError("an account identifier carries an unpermitted character")
+
+    @property
+    def rate_limit_account(self) -> str:
+        """The value the rate limiter partitions this caller's budget by.
+
+        Named rather than passing `account_id` directly, so the inspection test
+        has something specific to require: a call site reading this property is
+        reading an authenticated identity, and a call site reading a request
+        body is visibly not.
+        """
+        return self.account_id

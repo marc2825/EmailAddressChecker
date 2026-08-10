@@ -13,6 +13,18 @@ stream calls would let a UDP query leave the machine.
 adapter re-raises `AssertionError` rather than converting it into a failure
 value, so a blocked call fails the test instead of being reported as a DNS
 result.
+
+**The send guard exempts `AF_UNIX`, and that is a precision fix rather than a
+weakening.** A Unix socket reaches no network by construction — there is no
+address family through which one could — and asyncio's own event loop uses an
+`AF_UNIX` socketpair as its self-pipe: `call_soon_threadsafe` wakes the loop by
+calling `send` on it. Refusing that does not stop a packet leaving the machine;
+it deadlocks any test that uses a worker thread, because the loop is never woken
+and the future never completes. Phase 6 found it with `asyncio.to_thread`.
+
+The exemption is exactly the one the out-of-repo counting harness already draws,
+and `tests/test_no_network.py` pins both halves: an `AF_INET` send is still
+refused, and an `AF_UNIX` one is not.
 """
 
 import asyncio
@@ -29,6 +41,23 @@ class NetworkAccessAttempted(AssertionError):
 
 def _refuse(name: str) -> Any:
     def deny(*args: object, **kwargs: object) -> NoReturn:
+        raise NetworkAccessAttempted(f"test attempted a real network call: {name}")
+
+    return deny
+
+
+def _refuse_unless_local(name: str, original: Any) -> Any:
+    """Refuse a send, unless the socket is one that cannot reach a network.
+
+    `AF_UNIX` is the only exemption, and it is a property of the address family
+    rather than of an address a caller supplied: a Unix socket has nowhere to
+    send *to* except a path on this machine. Everything else — `AF_INET`,
+    `AF_INET6`, and anything added later — is refused.
+    """
+
+    def deny(self: socket.socket, *args: object, **kwargs: object) -> Any:
+        if getattr(self, "family", None) == socket.AF_UNIX:
+            return original(self, *args, **kwargs)
         raise NetworkAccessAttempted(f"test attempted a real network call: {name}")
 
     return deny
@@ -55,10 +84,14 @@ def block_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(socket.socket, "connect_ex", _refuse("socket.connect_ex"))
 
     # Datagram sends, which is how a DNS query actually leaves the machine.
-    monkeypatch.setattr(socket.socket, "sendto", _refuse("socket.sendto"))
-    monkeypatch.setattr(socket.socket, "sendmsg", _refuse("socket.sendmsg"))
-    monkeypatch.setattr(socket.socket, "send", _refuse("socket.send"))
-    monkeypatch.setattr(socket.socket, "sendall", _refuse("socket.sendall"))
+    # Each keeps the original so an `AF_UNIX` send — asyncio's own self-pipe —
+    # still works; see the module docstring.
+    for _name in ("sendto", "sendmsg", "send", "sendall"):
+        monkeypatch.setattr(
+            socket.socket,
+            _name,
+            _refuse_unless_local(f"socket.{_name}", getattr(socket.socket, _name)),
+        )
 
     # The asyncio transports dnspython uses for its async resolver.
     monkeypatch.setattr(

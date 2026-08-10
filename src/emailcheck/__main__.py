@@ -1,30 +1,16 @@
+"""The console entry point.
+
+`pyproject.toml` binds `emailcheck` here, and everything the command does lives
+in `apps/cli.py`. Keeping this file a delegation rather than an implementation
+means the CLI is importable and testable without going through `__main__`, and
+that there is one parser rather than two that drift.
+"""
+
 from __future__ import annotations
 
-import argparse
+from emailcheck.apps.cli import main
 
-from emailcheck import __version__
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="emailcheck",
-        description="Conservative email deliverability checker (Phase 0 baseline).",
-    )
-    parser.add_argument("--version", action="store_true", help="Print the package version.")
-    return parser
-
-
-def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if args.version:
-        print(__version__)
-        return 0
-
-    parser.print_help()
-    return 0
-
+__all__ = ["main"]
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -628,6 +628,133 @@ arbitrary evidence becomes safe by being aggregated.
 established for its seven: on substance rather than on wording, so the prose may
 be rewritten and deleting any one condition fails its own row.
 
+### Production composition, from Phase 6
+
+Phase 6 computes no status, so its tests are about **wiring**. Two measurements
+recur because they are only checkable here: the fake resolver counts what it was
+asked, and the scripted SMTP service counts whether it was called at all.
+
+- syntax: every rejection kind reaches its documented status with **zero** DNS
+  calls and zero SMTP calls;
+- the DNS boundary: Null MX, an authoritative no-mail-route, and a SERVFAIL each
+  reach their status without the SMTP step running — read from
+  `connectable_candidates` rather than from a rule written in Phase 6;
+- every recipient class through the whole pipeline, with the evidence built by
+  the real Phase 4D mapper from a real parsed reply;
+- the account handed to the SMTP layer is `principal.rate_limit_account`, and is
+  neither the target's domain nor anything a caller supplied;
+- an `internal_error` reaches the operator sink while the caller sees `unknown`,
+  and an ordinary verdict reports nothing — a sink that fires every time is one
+  nobody reads.
+
+**The graph is asserted as a graph.** One limiter and one admission gate shared
+by identity, two stacks independent, the real clock and sleeper bound with no
+parameter to replace them, `smtp is None` for a passive deployment, and
+`build_verification_stack`'s signature carrying no seam for a clock, a sleeper,
+a limiter, a transport, or a trust anchor.
+
+**Neither bound is tested by waiting.** Admission is measured by counting who is
+inside the gate; the total deadline is driven by a scripted delay against the
+event loop's own clock. Every scenario carries its own outer bound, so a gate
+that waits when it should refuse fails rather than hangs. Permits are asserted
+returned after an exception, after a cancellation, and after a deadline.
+
+**The twelve stop conditions are inspection tests.** Phase 6's risk is a
+shortcut — a serializer that picks a status, a handler that builds a `Principal`
+from a request field, an entry point reaching past the high-level service — and
+every one of those is short, plausible code that no behavioural test catches
+until the day it is wrong. So the aggregation sets, `EvidenceStrength`, every
+`Status` member, `asdict`, `.details`, `TLSTrust`, `EnvelopeSender`,
+`SMTPProbeService`, `os.environ`, `create_task`, and a numeric confidence are
+each asserted absent from every Phase 6 module.
+
+**The suite-wide network guard gained one exemption**, and every side of it is
+pinned in `tests/test_no_network.py`. Asyncio's event loop wakes itself from a
+worker thread by calling `send` on an `AF_UNIX` socketpair, so refusing it
+deadlocked every test using `asyncio.to_thread` rather than stopping a packet. A
+Unix socket has nowhere to send to except a path on this machine.
+
+The first version pinned only the two halves that motivated it — `AF_INET`
+refused, `AF_UNIX` permitted — and a mutation widening the test from "is
+`AF_UNIX`" to "is not `AF_INET`", which permits IPv6 and **every unknown
+family**, left the whole suite passing. That is the case the guard's own
+docstring says matters most: a DNS query needs neither `getaddrinfo` nor
+`connect`, so an IPv6 `sendto` was the half a widened exemption would have let
+through. The classifier is now exercised directly on stand-in objects — IPv4,
+IPv6, packet, netlink, an unknown number, `None`, a string, and an object whose
+family cannot be read at all — so a future address family can be tested without
+this file being the thing that creates one.
+
+### Asynchronous jobs, the cache, and the remote CLI, from the Phase 6 follow-up
+
+The independent review found that the Phase 6 build implemented composition and
+left the job subsystem `docs/requirements.md` sections 5 and 11 require. These
+are its tests.
+
+**Two counters carry most of the weight.** A `RecordingExecutor` counts what was
+enqueued without running it, and the scripted SMTP service counts whether it was
+called at all — so `prompts/06-api-cli.md`'s "cache hit skips enqueue" is a
+count of zero rather than an observation that the response was fast. The
+executor runs **one pass** over what is pending rather than draining, because a
+retry re-enters it and a draining loop would run the whole chain in one call,
+which is exactly the step "at most one retry" needs taken separately.
+
+Required scenarios:
+
+- submission returns a `pending` job with the SMTP fake uncalled, and the
+  passive result alongside it;
+- every state reachable through `GET`, and a `completed` job carrying the
+  aggregator's verdict through the existing allowlist;
+- the same idempotency key from the same principal returns the same job and
+  enqueues nothing; the same key from another principal is a different job;
+- a cache hit enqueues nothing and probes nothing, and the lookup happens
+  before the executor is touched — asserted as an ordering, because a build that
+  enqueued first would still answer from the cache while having spent the slot;
+- another account neither reads nor cancels the job, and gets the answer an
+  unknown identifier gets;
+- one retry for a temporary condition, none for any recipient answer, and a
+  second retry structurally impossible;
+- a cancellation landing *inside* a running verification does not become
+  `completed`, `failed`, or `retry_scheduled` afterwards. An earlier version of
+  this test cancelled a job that was still queued, so the fake executor simply
+  removed the work and the settling code was never reached — a mutation of its
+  guard escaped the entire suite;
+- the registry evicts finished jobs, never a live one, and forgets their
+  idempotency keys with them.
+
+**The executor is tested as a set of refusals.** Bounds on workers, queue, and
+delay set; a full queue and a full delay set refusing rather than growing; a
+cancelled running job whose coroutine actually sees the cancellation; a pool
+that keeps serving afterwards; a job that raises not stopping the pool; and
+shutdown cancelling what is running. A delayed job is shown holding no worker,
+which needed a **second sleeper**: `AdvancingSleeper` makes a twenty-minute
+delay measurable and is exactly wrong for asserting something is still waiting,
+so `HoldingSleeper` parks the scheduler while the pool is shown serving somebody
+else. Gate 4E needed the same second fake for the same reason.
+
+**The TTL policy is a table test against section 13**, row by row, and the rows
+that matter most are the ones section 13 does *not* price — where the answer
+must be "do not cache" rather than a default. Boundary cases are asserted just
+before, at, and after expiry, against the real SQL rather than a fake, because
+an independent review found the sender-identity and expiry predicates unpinned:
+removing either from the `WHERE` clause left the suite passing.
+
+**The remote CLI is tested against a fake client**, so the polling policy is
+measured rather than waited out: a bounded number of attempts at a bounded
+interval, pending and failed and cancelled each rendered as themselves, and no
+verdict printed before one exists. Every polling test carries its own outer
+bound — a mutation removing the attempt cap **hung** the suite instead of
+failing it, which is the failure mode gate 4C's deadline tests were built to
+avoid. The endpoint policy is a pure function: two permitted schemes by
+allowlist, and `file:`, `data:`, credentials, queries, fragments, and control
+characters all refused.
+
+**The published schema is tested as the acceptance criterion it is.**
+`prompts/06-api-cli.md` requires API examples that state explicitly that no
+existence or delivery guarantee is made; a docs test fails if that sentence
+disappears, if a job state loses its example, or if a published route is
+missing from the document.
+
 ## 3. SMTP fixtures
 
 Required scenarios:

@@ -506,6 +506,197 @@ Pure. No socket, resolver, limiter, storage, retry, or clock —
 and inventing one would silently weaken the evidence a rate-limited SMTP session
 was spent collecting.
 
+### Composition, and the public boundary
+
+`composition.py` is the only module in `src/` that names a concrete adapter, and
+it is where four Phase 4 stop conditions are closed — because each is a property
+of the object graph rather than of any class in it. It builds **one** limiter,
+**one** admission gate, one `SystemClock`, one `SystemMonotonicClock`, and one
+`SystemSleeper`, and hands the same instances to every request: a limiter
+constructed per request has counters that start at zero, which permits
+everything. `build_verification_stack` exposes no parameter for a clock, a
+sleeper, a limiter, a transport, or a `TLSTrust`, and a test asserts the
+signature.
+
+A deployment with no active probing gets a service whose `smtp` is `None` rather
+than one holding an SMTP service behind a boolean. `docs/requirements.md`
+section 15's local-passive profile is "no active probes", and an absent object
+cannot be called by a later edit that forgets a flag.
+
+`application/verification.py` is the high-level service and the only door. A
+rejected address stops before DNS, so an invalid or unsupported input costs zero
+lookups and zero sockets; the SMTP step runs only when
+`MailRoute.connectable_candidates` is non-empty, so Phase 2's decision about
+whether there is anywhere to connect is *read* rather than re-derived. The
+account the limiter partitions by is `principal.rate_limit_account` and nothing
+else.
+
+`Principal` is the value that closes Phase 4 stop condition 2, and the split is
+the one `PeerEndpoint` uses: **the value guarantees the shape,
+`ports/authentication.py` grants the identity**, and an inspection test refuses
+the constructor outside the authenticator adapter. There is no anonymous
+principal and no default account.
+
+**Two bounds Phase 6 owns.** `application/admission.py` caps concurrent
+verifications *and* the queue in front of them — a bounded pool behind an
+unbounded queue moves the growth rather than stopping it — plus a per-principal
+cap. Re-keying the Phase 4 token bucket on the account would have made each
+account's destination pacing independent, which is the opposite of protecting a
+destination.
+
+**What that per-principal cap is and is not.** It bounds *concurrency* per
+account, which is the part of `docs/requirements.md` section 15's per-account
+isolation Phase 6 implements. The waiting queue is bounded globally rather than
+per account, so one account filling it can still crowd another out. That is a
+fairness property, `prompts/07-hardening.md` owns layered per-key and per-source
+budgets, and it is recorded here rather than left to be inferred from the
+absence of a claim.
+
+And a **verification-total deadline** bounds the sum of every per-candidate
+bound. `asyncio.timeout` sits *outside* `admission.admit`, so the wait for a
+permit is inside the same clock: a queue bounded only in depth leaves that wait
+unbounded in time, and an independent review found this module's own
+documentation claiming otherwise.
+
+Capacity, pacing, and the total deadline are **local operational refusals**.
+None produces `Evidence`, none becomes a `Verdict`, and `VerificationRefused`
+derives from neither `TimeoutError` nor `OSError` — the treatment
+`RateLimitTimeout` already gets, for the same reason. ADR 0013 records why a
+partial verdict is not returned instead.
+
+`application/public_result.py` is an allowlist. It reads `verdict.status.value`,
+names no `Status` member, branches on no `ReasonCode`, and imports none of the
+aggregation sets, so Phase 5 stop condition 1 is closed by absence. No
+`Evidence.details` reaches it, the internal layer is not public, and
+`as_json_object` builds no float — Phase 5 leaves the range of a calibrated
+score undefined, so there is nothing a response could carry meaningfully.
+
+`apps/api.py` maps a request to a status code and a body and **imports no web
+framework**: section 1 of this document puts frameworks in `apps/`, and the
+binding from an ASGI route to `handle` holds no policy. A request body may carry
+exactly one key, so every low-level knob is refused by the rule that refuses a
+typo. `apps/cli.py` runs the local-passive profile through the same service and
+the same allowlist, and `--remote` submits to another instance through a
+`RemoteCheckClient` port whose stdlib adapter converts every library failure
+into this project's own vocabulary. **That adapter follows no redirect at all**:
+it carries the operator's API key, and `urllib`'s default opener copies every
+header except `content-length` and `content-type` onto a redirected request — so
+a `302` sent the key cross-origin, and over plaintext `http` if the redirect
+said so, while `security/remote_url.py` validated only the first URL. ADR 0014.
+The key itself is read from a file under a hard size bound, with exactly one
+conventional line ending removed and interior whitespace left alone. `apps/schema.py` publishes the contract, and
+it is **generated**: every example body comes out of the same `public_result`
+and `public_job` a real response does, so there is no second hand-written copy
+to drift.
+
+### Asynchronous active checks
+
+`docs/requirements.md` section 11 makes `POST /v1/checks` create a job, and
+`prompts/06-api-cli.md` states the requirement from the other side: **no
+synchronous waiting for active SMTP in an API worker**. ADR 0014 records the
+decisions.
+
+```text
+POST /v1/checks
+  → authenticate
+  → validate (one key, closed schema)
+  → passive check           parse + DNS; returned immediately, section 11
+  → idempotency lookup      in memory, keyed by (account, key, target HMAC)
+  → cache lookup            one indexed row, ADR 0015
+  → enqueue                 the SMTP half, later
+```
+
+**The passive step comes first**, because both lookups below it are keyed by the
+normalized target and that target does not exist until the address has been
+parsed. So a cache hit and an idempotent repeat both still cost the passive DNS
+work; what they avoid is the enqueue and the SMTP probe — measured on an
+executor that counts, rather than assumed from a fast response. That is the
+property `prompts/06-api-cli.md` requires, and it is the expensive half by
+orders of magnitude.
+
+Saying it that way round matters: an earlier revision of this section put the
+cache above the passive step and claimed a hit cost nothing, and a final
+independent review measured three DNS lookups on one. A document that claims
+more than the code does is worse than one that claims less.
+
+**An idempotency key names one address.** The identity is `(account, key, HMAC
+of the normalized target)` — `docs/architecture.md` section 6's "idempotency key
+and a derived target HMAC", taken under the same operator secret the cache uses.
+Reusing a key for a different address is a `409` conflict rather than a second
+meaning for the key, because answering with the first address's job would be a
+confident verdict about a mailbox nobody asked about. ADR 0014.
+
+**An executor that refuses leaves nothing behind.** A registration is rolled
+back when the work cannot be handed over: a `pending` job the executor never
+accepted can never run, and eviction only removes terminal jobs, so one left
+behind would occupy a registry slot for ever.
+
+`domain/job.py` holds the six states `prompts/06-api-cli.md` publishes —
+`pending`, `running`, `retry_scheduled`, `completed`, `failed`, `cancelled` —
+and the closed transition table between them. A terminal state has no exit, so
+`cancelled → completed` is unreachable rather than merely unused, and a
+forbidden move raises rather than being ignored. **A job that has not completed
+carries no status at all**: `unknown` is a real published status and a pending
+job is genuinely unknown, which makes inventing one there the most tempting and
+most misleading form of the re-derivation Phase 5 stop condition 1 forbids.
+
+Job identifiers come from a `RandomSource` and carry nothing: not a counter, not
+a timestamp, not a digest of the target. **Ownership is checked anyway** — an
+unguessable identifier is a secret that can leak, and the second barrier is what
+makes the leak survivable. A job belonging to another account answers exactly
+what an unknown one does, because `403` would confirm the identifier is real.
+
+`ports/job_executor.py` is the seam to a worker. `InMemoryJobExecutor` is the
+development implementation `prompts/06-api-cli.md` asks for, and it is bounded
+in every dimension: a fixed worker set, a bounded queue that refuses, a bounded
+delay set, and no `create_task` on the job path. It answers `is_isolated` as
+`False`, and the composition root **refuses** to build a service-active
+deployment on it — section 15 requires an isolated worker for that profile, and
+a development fake must not become the production default by omission.
+
+**One retry, and only for what section 14 names.** `application/retry.py` maps
+section 14's conditions onto reason codes and is a closed, explicit set:
+`smtp_temporary_failure`, `mailbox_full`, and `dns_temporary_failure` are
+retried, and `smtp_connection_timeout` is not — section 14 permits that one only
+"if service health is otherwise normal", and this project does not model service
+health, so retrying anyway would be implementing half a rule and calling it the
+rule.
+
+**The classification is the reason code's, never the reply's first digit.**
+`mailbox_full` arises from `452 4.2.2` and from `552 5.2.2`, and section 9 calls
+the latter a temporary storage condition — so a `552 5.2.2` is a 5xx that is
+retried while a `550 5.7.1` is a 5xx that is not. There is no `if temporary:
+retry` shortcut either: a reason added to the vocabulary later is not retryable
+until somebody puts it in the table on purpose, and an exhaustiveness test fails
+until one side or the other is chosen for it.
+
+A retry is a whole new verification through `AddressVerificationService`, so
+admission, DNS, the limiter, the destination policy, the one-`RCPT TO` bound,
+and the total deadline all apply again. Phase 4E's rule is untouched and the
+distinction is worth keeping sharp: a second exchanger or a second `RCPT TO`
+*inside one verification* is the enumeration pattern `docs/threat-model.md`
+lists first and gate 4E refuses; one whole new verification twenty minutes
+later, capped at one, is what section 14 authorizes. The budget lives on the
+job, so a second retry cannot be arranged by re-enqueueing.
+
+### The result cache
+
+`application/verdict_cache.py` and `domain/cache_policy.py`, decided in ADR
+0015. The key is every input that could change the answer — the normalized
+target, the sender identity the answer was obtained through, the aggregation
+ruleset, and the account — as HMACs under the operator's correlation key, all of
+them in the `WHERE` clause along with the expiry.
+
+The lifetime is **the shortest among the evidence that decided the verdict**,
+composed from `docs/requirements.md` section 13's per-class defaults. Section 13
+prices evidence classes and not aggregated verdicts, so the composition is the
+decision: a positive answer is only as current as the route it was obtained
+through, and a verdict whose decisive evidence includes a class section 13 does
+not price is **not cached at all**. That last part has a cost worth naming —
+`252` and a bare `550` are common answers and are re-probed — and the
+alternative was to invent a duration nobody wrote down, which is how a caching
+rule becomes an unreviewed deliverability rule.
+
 ### Ports
 
 Ports exist for external I/O, storage, and non-determinism: network, database,
@@ -523,6 +714,12 @@ cache, rate limiting, time, and randomness.
 - `MonotonicClock`
 - `Sleeper`
 - `RandomSource`
+- `Authenticator`
+- `OperatorSink`
+- `VerdictStore`
+- `JobExecutor`
+- `RandomSource`
+- `RemoteCheckClient`
 
 `MonotonicClock` and `Sleeper` are the two halves of the same problem: a
 component that reads `time.monotonic()` can only be tested against the machine's
