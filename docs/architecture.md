@@ -546,11 +546,21 @@ destination.
 
 **What that per-principal cap is and is not.** It bounds *concurrency* per
 account, which is the part of `docs/requirements.md` section 15's per-account
-isolation Phase 6 implements. The waiting queue is bounded globally rather than
-per account, so one account filling it can still crowd another out. That is a
-fairness property, `prompts/07-hardening.md` owns layered per-key and per-source
-budgets, and it is recorded here rather than left to be inferred from the
-absence of a claim.
+isolation Phase 6 implements.
+
+Phase 6 bounded the waiting queue **globally** and this document recorded what
+that left open: one account filling it could crowd another out. Phase 7 closed
+it. A principal may hold at most `AdmissionSettings.queue_share` of the waiting
+slots, so a caller issuing requests faster than they are served can no longer
+make every other account answer `AdmissionRefused` while holding no capacity at
+all. The share is *derived* from the queue length when it is not set, because a
+fixed default larger than a short queue would bound nothing — and the only other
+honest option was to refuse configurations that already existed.
+
+That is the smallest thing that closes the property: not a fair queue, not
+round-robin, not a reservation per known account. `docs/operations.md` section 5
+asks that fair scheduling stop one *domain* occupying all worker capacity, which
+is Phase 4's pacing; this is the caller-side half.
 
 And a **verification-total deadline** bounds the sum of every per-candidate
 bound. `asyncio.timeout` sits *outside* `admission.admit`, so the wait for a
@@ -697,6 +707,68 @@ not price is **not cached at all**. That last part has a cost worth naming —
 alternative was to invent a duration nobody wrote down, which is how a caching
 rule becomes an unreviewed deliverability rule.
 
+### Abuse controls, privacy, and observability
+
+Phase 7. `prompts/07-hardening.md` is the scope and ADR 0016 records the
+decisions. Three things are worth stating here because they are properties of
+the graph rather than of any module in it.
+
+**There are three control layers and they answer different questions.**
+`application/admission.py` bounds how many verifications run at once,
+`adapters/system/rate_limit.py` bounds how fast one destination is approached,
+and `application/abuse.py` bounds how many a caller may ask for in a window.
+None is re-keyed onto another's dimension: re-keying the Phase 4 token bucket
+per account would give every account its own destination pacing, which protects
+nobody. The prompt's "global concurrency" layer is admission's and is
+deliberately not re-implemented — a reviewed bound with a second implementation
+is two bounds that will disagree.
+
+**Every budget key, metric label, and audit field is an opaque digest, a
+canonical host, or a closed enumeration value.** `MetricLabels` is a closed
+dataclass whose subject must be a value one of this project's enums already
+declares, so a target, a local part, a job identifier, an API key, and a source
+address are *unrepresentable* as labels rather than merely absent. Domain-level
+analytics live in the operator event stream, which is redacted and retained
+under a policy, rather than in a monitoring label that is kept for ever.
+
+**A budget unit is a verification, not a request.** One submitted active check
+spends the caller's layers twice — the submission's passive pass and the active
+verification — and three times with section 14's retry. `per_account = 5000` is
+therefore about 2500 active submissions per window. ADR 0016 decision 5c.
+
+**Source identity stops at a type.** No header is read and none is trusted:
+without a trusted-proxy list, `X-Forwarded-For` is written by whoever sent the
+request, and a spoofable value in a budget key turns a per-source limit into a
+per-claimed-source limit. A `SourceIdentity` comes from a transport boundary's
+own peer address or it does not exist, and the source layer is simply not
+counted when it does not. `ApiRequest.body` accepts exactly one key, so a body
+cannot carry one.
+
+**The administrative interface has no route.** `application/admin.py` publishes
+the six controls `prompts/07-hardening.md` requires and binds to nothing:
+putting an interface that can disable a security control behind whatever
+authenticates the public API is what the phrase "non-public interface" exists to
+prevent.
+
+#### Stop conditions on the ASGI binding
+
+Recorded here rather than left to be discovered by whoever writes it:
+
+- **trusted client IP provenance.** The binding is the only thing that knows the
+  peer address, and it is the only thing that may construct a `SourceIdentity`;
+- **proxy header policy.** No `X-Forwarded-For` or `Forwarded` hop may be
+  trusted without an operator-configured list of proxies that may set it. Until
+  that list exists, the source layer stays uncounted;
+- **request body size.** `VerificationLimits.max_submitted_length` bounds the
+  address; the *body* needs a bound before it is parsed, which is middleware;
+- **request logging redaction.** `prompts/06-api-cli.md`'s middleware, using
+  `security/redaction.py` rather than a second implementation;
+- **one `Deployment` per process, built at startup.** Not per request: a guard,
+  a limiter, and an admission gate rebuilt per request permit everything;
+- **no request-local limiter, quota store, or admin state**, for the same
+  reason;
+- **the administrative interface is not mounted on the public application.**
+
 ### Ports
 
 Ports exist for external I/O, storage, and non-determinism: network, database,
@@ -720,6 +792,8 @@ cache, rate limiting, time, and randomness.
 - `JobExecutor`
 - `RandomSource`
 - `RemoteCheckClient`
+- `QuotaStore`
+- `MetricsSink`
 
 `MonotonicClock` and `Sleeper` are the two halves of the same problem: a
 component that reads `time.monotonic()` can only be tested against the machine's

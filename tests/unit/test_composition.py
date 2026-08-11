@@ -183,7 +183,10 @@ def test_the_transport_uses_the_system_trust_and_exposes_no_override() -> None:
 
 def test_the_stack_authenticates_only_configured_keys() -> None:
     stack = build_verification_stack(passive_deployment())
-    assert stack.authenticator.authenticate(KEY) == Principal(account_id="acct-1")
+    principal = stack.authenticator.authenticate(KEY)
+    assert principal is not None
+    assert principal.account_id == "acct-1"
+    assert principal == Principal(account_id="acct-1", key_id=principal.key_id)
     assert stack.authenticator.authenticate("j" * 40) is None
     assert stack.authenticator.authenticate(None) is None
 

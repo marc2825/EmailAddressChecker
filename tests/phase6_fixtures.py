@@ -240,6 +240,7 @@ def build_service(
     operator: RecordingOperatorSink | None = None,
     admission: AdmissionControl | None = None,
     limits: VerificationLimits | None = None,
+    guard: object | None = None,
 ) -> tuple[AddressVerificationService, FakeResolver, RecordingOperatorSink]:
     """A service wired from fakes, shaped exactly like the production graph."""
     clock = FakeClock()
@@ -253,6 +254,7 @@ def build_service(
         operator=sink,
         smtp=smtp,
         limits=limits if limits is not None else VerificationLimits(),
+        guard=guard,  # type: ignore[arg-type]
     )
     return service, used_resolver, sink
 

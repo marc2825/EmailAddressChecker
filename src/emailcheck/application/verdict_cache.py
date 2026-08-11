@@ -29,7 +29,7 @@ that `aggregate_evidence` produced, or read back out of the row that copy wrote.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 from emailcheck.application.public_result import PublicCheck, PublicResult, public_result
@@ -61,7 +61,14 @@ class VerdictCache:
     clock: Clock
     random: RandomSource
     #: The operator's HMAC secret. Never logged, never returned, never stored.
-    correlation_key: bytes
+    #: `repr=False`, for the reason every other holder of this secret carries
+    #: it: the key is what makes a stored digest irreversible, and this object
+    #: is reachable from `VerificationStack.cache`, so a `repr` of the stack
+    #: printed the operator secret in full beside the database it protects. An
+    #: independent review measured it. Every other holder was redacted in Phase
+    #: 7 and this one was missed, because the privacy corpus built a stack with
+    #: no store and therefore no cache at all.
+    correlation_key: bytes = field(repr=False)
     #: A stable description of the envelope sender and EHLO name this deployment
     #: probes from, taken from operator configuration.
     sender_identity: str = NO_SENDER_IDENTITY

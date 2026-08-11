@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Final
 
 from emailcheck.domain.principal import Principal
@@ -31,6 +31,28 @@ from emailcheck.domain.principal import Principal
 #: The shortest credential this adapter will accept at configuration time. A
 #: short API key is a guessable one, and the digest hides that from a reviewer.
 MIN_KEY_LENGTH: Final = 32
+
+#: How much of the key-identity digest is kept. Sixteen bytes of a keyed-domain
+#: digest is far past collision-resistance for the number of keys one
+#: deployment issues, and a shorter identifier is a shorter log line.
+KEY_ID_LENGTH: Final = 32
+
+#: Domain separation, so a `key_id` cannot be confused with — or derived back
+#: into — the verifier it comes from. The verifier is what authenticates; the
+#: identity is what a budget and an audit event name.
+_KEY_ID_DOMAIN: Final = b"emailcheck/api-key-id/v1"
+
+
+def key_identity_for(verifier: str) -> str:
+    """The opaque per-credential handle for one stored verifier.
+
+    Derived from the verifier rather than from the key, so this function never
+    sees key material, and domain-separated so the result cannot be replayed as
+    a verifier. It is stable across restarts because the verifier is, which is
+    what a budget counter and a suspension list both need.
+    """
+    digest = hashlib.sha256(_KEY_ID_DOMAIN + verifier.encode("ascii")).hexdigest()
+    return digest[:KEY_ID_LENGTH]
 
 
 class ApiKeyConfigurationError(ValueError):
@@ -59,7 +81,13 @@ class StaticApiKeyAuthenticator:
     Nothing in this class reads a file, an environment variable, or a request.
     """
 
-    verifiers: Mapping[str, Principal]
+    #: `repr=False`. Not one of the values the review named, and found by the
+    #: sweep those findings prompted: a verifier is a digest rather than a key,
+    #: so printing one authenticates nobody — but the table maps every account
+    #: to its verifier, and `key_identity_for` derives the suspension and budget
+    #: handles from exactly that value. It serves no debugging purpose and there
+    #: is no reason for it to travel.
+    verifiers: Mapping[str, Principal] = field(repr=False)
 
     def authenticate(self, credential: str | None) -> Principal | None:
         """The caller this credential proves, or `None`.
@@ -67,6 +95,11 @@ class StaticApiKeyAuthenticator:
         The comparison is constant-time over the digest, and an unknown key and
         a wrong key are indistinguishable to the caller: both are `None`, and
         the caller answers `401` for both.
+
+        **Every credential is compared, including after a match.** Returning
+        early on the first hit makes the work depend on where in the mapping the
+        key sits, which is a timing signal about the configuration. The loop
+        runs to the end and the answer is chosen afterwards.
         """
         if not isinstance(credential, str) or not credential:
             return None
@@ -77,24 +110,41 @@ class StaticApiKeyAuthenticator:
             # been configured with. Refused as unknown rather than reported as
             # malformed, so probing cannot learn the minimum length.
             return None
+        found: Principal | None = None
         for known, principal in self.verifiers.items():
             if hmac.compare_digest(known, digest):
-                return principal
-        return None
+                found = principal
+        return found
 
 
-def build_authenticator(configuration: Mapping[str, str]) -> StaticApiKeyAuthenticator:
-    """Build an authenticator from `{account_id: api_key}`.
+def build_authenticator(
+    configuration: Mapping[str, str | Sequence[str]],
+) -> StaticApiKeyAuthenticator:
+    """Build an authenticator from `{account_id: api_key}` or `{account_id: [keys]}`.
+
+    **One account may hold several keys.** `prompts/07-hardening.md` budgets and
+    suspends per key *and* per account, which are two layers only if a key is
+    not simply another name for the account. Each key gets its own `key_id`, so
+    a leaked credential is containable without suspending the account that owns
+    it, and the account's own budget still covers all of them together.
 
     The key is hashed here and the plaintext is not retained by the returned
     object. Every account identifier is validated by `Principal`, so a
     configuration carrying an address or a control character fails at load.
     """
     verifiers: dict[str, Principal] = {}
-    for account_id, key in configuration.items():
-        principal = Principal(account_id=account_id)
-        digest = verifier_for(key)
-        if digest in verifiers:
-            raise ApiKeyConfigurationError("two accounts may not share one API key")
-        verifiers[digest] = principal
+    for account_id, configured in configuration.items():
+        keys = (configured,) if isinstance(configured, str) else tuple(configured)
+        if not keys:
+            raise ApiKeyConfigurationError("an account with no key cannot authenticate")
+        for key in keys:
+            if not isinstance(key, str):
+                raise ApiKeyConfigurationError("an API key must be a string")
+            digest = verifier_for(key)
+            if digest in verifiers:
+                # Across accounts this would hand one account another's
+                # identity; within one account it is a configuration mistake
+                # that would make a key look revocable when it is duplicated.
+                raise ApiKeyConfigurationError("two accounts may not share one API key")
+            verifiers[digest] = Principal(account_id=account_id, key_id=key_identity_for(digest))
     return StaticApiKeyAuthenticator(verifiers=verifiers)

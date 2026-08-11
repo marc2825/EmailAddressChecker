@@ -47,9 +47,16 @@ from emailcheck.ports.verdict_store import StoredVerdict
 #:
 #: Version 2 adds the sender-identity component of the section 13 key and the
 #: expiry ADR 0015 decided. `prompts/06-api-cli.md` says not to overbuild
-#: migrations and no document requires a development database to survive, so a
-#: version-1 file is refused at start rather than migrated.
-SCHEMA_VERSION: Final = 2
+#: migrations and no document requires a development database to survive, so an
+#: older file is refused at start rather than migrated.
+#:
+#: Version 3 carries no shape change at all: Phase 7 put
+#: `docs/privacy.md` section 5's `canonical_input_version` inside the HMAC
+#: input, so **every digest in a version-2 file addresses a row that can no
+#: longer be found**. A store whose rows are unreachable is worse than one that
+#: refuses to open, because it looks like a cache that never hits — so the
+#: version moves even though the columns do not. ADR 0016.
+SCHEMA_VERSION: Final = 3
 
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -99,7 +106,16 @@ SELECT record_id, account_digest, target_digest, sender_identity_digest, status,
  LIMIT 1
 """
 
-_PURGE: Final = "DELETE FROM verdicts WHERE expires_at <= ?"
+#: Bounded, because an unbounded `DELETE` holds a write lock for as long as the
+#: backlog is. `LIMIT` on `DELETE` needs a compile-time SQLite option that is
+#: not always present, so the bound is a sub-select over the same index the
+#: lookup uses — portable, and still one statement.
+_PURGE: Final = """
+DELETE FROM verdicts
+ WHERE record_id IN (
+       SELECT record_id FROM verdicts WHERE expires_at <= ? LIMIT ?
+ )
+"""
 
 _VERSION: Final = "SELECT version FROM schema_version"
 
@@ -154,14 +170,21 @@ class SQLiteVerdictStore:
             now,
         )
 
-    async def purge_expired(self, *, now: datetime) -> int:
-        """Delete rows the clock has passed. Returns how many.
+    async def purge_expired(self, *, now: datetime, limit: int = 1_000) -> int:
+        """Delete rows the clock has passed, at most `limit` of them.
 
         A cache that only ever grows is a retention policy nobody wrote:
         `docs/requirements.md` section 16 bounds what this project keeps, and an
         expired row is one no lookup can answer with anyway.
+
+        The bound is what makes this safe to schedule. Returning a full batch
+        tells `application/retention.py` that more remain, so a backlog is
+        cleared over several runs rather than in one statement that blocks
+        every write until it finishes.
         """
-        return await asyncio.to_thread(self._purge_expired, now)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("a purge batch must be a positive whole number")
+        return await asyncio.to_thread(self._purge_expired, now, limit)
 
     # --- the blocking half, run in a worker thread --------------------------
 
@@ -235,7 +258,7 @@ class SQLiteVerdictStore:
             expires_at=datetime.fromisoformat(row[12]),
         )
 
-    def _purge_expired(self, now: datetime) -> int:
+    def _purge_expired(self, now: datetime, limit: int) -> int:
         with self._connect() as connection:
-            cursor = connection.execute(_PURGE, (now.isoformat(),))
+            cursor = connection.execute(_PURGE, (now.isoformat(), limit))
             return int(cursor.rowcount)

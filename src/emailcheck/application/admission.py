@@ -49,6 +49,19 @@ MAX_WAITING_CEILING: Final = 4096
 #: measures in order to add something a separate gate does better.
 DEFAULT_MAX_PER_PRINCIPAL: Final = 4
 
+#: How many of the waiting slots one principal may hold. Phase 6 bounded the
+#: queue globally and `docs/architecture.md` recorded what that left open: one
+#: account filling every waiting slot makes another account's request answer
+#: `AdmissionRefused` while that account holds no capacity at all. Phase 6's
+#: review carried it as F11 and `prompts/07-hardening.md` owns the layered
+#: budgets it belongs to.
+#:
+#: This is the smallest thing that closes it. Not a fair queue, not round-robin,
+#: not a reservation per known account — a share of the queue nobody may exceed,
+#: which is enough for the property the queue has to have and adds no scheduling
+#: policy `docs/operations.md` section 5 did not ask for.
+DEFAULT_MAX_QUEUED_PER_PRINCIPAL: Final = 8
+
 
 class AdmissionError(ValueError):
     """A misconfigured admission gate."""
@@ -73,6 +86,12 @@ class AdmissionSettings:
     max_in_flight: int = DEFAULT_MAX_IN_FLIGHT
     max_waiting: int = DEFAULT_MAX_WAITING
     max_per_principal: int = DEFAULT_MAX_PER_PRINCIPAL
+    #: `None` derives the share from the queue, which is what makes this
+    #: setting safe to add to configurations that already chose a queue length.
+    #: A fixed default would have been larger than a short queue, and the only
+    #: honest responses to that are to refuse the configuration or to bound
+    #: nothing — so the default is *derived* and an explicit value is checked.
+    max_queued_per_principal: int | None = None
 
     def __post_init__(self) -> None:
         _check("max_in_flight", self.max_in_flight, MAX_IN_FLIGHT_CEILING)
@@ -82,6 +101,25 @@ class AdmissionSettings:
             # Otherwise the per-principal bound is decorative: one caller could
             # occupy every slot and still be inside its own limit.
             raise AdmissionError("a per-principal bound above the global one bounds nothing")
+        if self.max_queued_per_principal is None:
+            return
+        _check("max_queued_per_principal", self.max_queued_per_principal, MAX_WAITING_CEILING)
+        if self.max_queued_per_principal > self.max_waiting:
+            # The same shape one level out: a queue share larger than the queue
+            # leaves the queue bounded only globally, which is the state F11
+            # describes.
+            raise AdmissionError("a per-principal queue share above the queue bounds nothing")
+
+    @property
+    def queue_share(self) -> int:
+        """How many waiting slots one principal may hold, always a real bound.
+
+        Never larger than the queue itself, so the property F11 needs holds for
+        every configuration rather than only for the ones an operator tuned.
+        """
+        if self.max_queued_per_principal is not None:
+            return self.max_queued_per_principal
+        return min(DEFAULT_MAX_QUEUED_PER_PRINCIPAL, self.max_waiting)
 
 
 def _check(name: str, value: int, ceiling: int) -> None:
@@ -106,6 +144,7 @@ class AdmissionControl:
     _in_flight: int = 0
     _waiting: int = 0
     _per_principal: Counter[str] = field(default_factory=Counter)
+    _queued_per_principal: Counter[str] = field(default_factory=Counter)
     _released: asyncio.Event = field(default_factory=asyncio.Event)
 
     @property
@@ -118,6 +157,9 @@ class AdmissionControl:
 
     def held_by(self, account: str) -> int:
         return self._per_principal[account]
+
+    def queued_by(self, account: str) -> int:
+        return self._queued_per_principal[account]
 
     @asynccontextmanager
     async def admit(self, account: str) -> AsyncIterator[None]:
@@ -144,13 +186,28 @@ class AdmissionControl:
             # failure this bound exists for.
             raise AdmissionRefused("the request queue")
 
+        if self._queued_per_principal[account] >= self.settings.queue_share:
+            # F11. The global bound above says how long the queue may be; this
+            # says how much of it one caller may be. Without it a caller that
+            # can issue requests faster than they are served occupies the whole
+            # queue, and every other account is refused while holding nothing —
+            # a denial of service that stays inside every other budget.
+            #
+            # A separate scope, so the operator event distinguishes "the service
+            # is busy" from "this caller is queueing"; the public answer is the
+            # same `503` either way, because which bound was reached is
+            # operator information rather than the caller's.
+            raise AdmissionRefused("this caller's queue share")
+
         self._waiting += 1
+        self._queued_per_principal[account] += 1
         try:
             while not self._admissible(account):
                 released = self._released
                 await released.wait()
         finally:
             self._waiting -= 1
+            self._leave_queue(account)
         self._take(account)
 
     def _admissible(self, account: str) -> bool:
@@ -162,6 +219,20 @@ class AdmissionControl:
     def _take(self, account: str) -> None:
         self._in_flight += 1
         self._per_principal[account] += 1
+
+    def _leave_queue(self, account: str) -> None:
+        """Give back one queue share, removing the entry at zero.
+
+        Removed rather than left at zero for the reason `_release` removes its
+        own: a counter keyed by account that is never deleted grows with the
+        number of accounts that have ever queued, which is a memory leak with a
+        remote trigger.
+        """
+        remaining = self._queued_per_principal[account] - 1
+        if remaining <= 0:
+            del self._queued_per_principal[account]
+        else:
+            self._queued_per_principal[account] = remaining
 
     def _release(self, account: str) -> None:
         self._in_flight -= 1

@@ -369,7 +369,104 @@ Required controls before service-active:
 - delete unnecessary submitted data;
 - investigate remote complaints.
 
-## 5. Residual risk
+## 5. Phase 7 control checklist
+
+`prompts/07-hardening.md`'s acceptance criterion: each implemented control
+mapped to its code and its tests. Read with section 3, which says *why* each
+exists; this says where it is and what fails when it stops working.
+
+### Layered budgets
+
+| Layer | Code | Test |
+|---|---|---|
+| API key | `application/abuse.py`, `BudgetLayer.API_KEY` | `test_abuse_budgets.py` |
+| Account | `application/abuse.py`, `BudgetLayer.ACCOUNT` | `test_abuse_budgets.py` |
+| Source IP | `application/abuse.py` + `domain/source.py` | `test_abuse_budgets.py`, `test_source_identity.py` |
+| Target address HMAC | `application/abuse.py`, `BudgetLayer.TARGET` | `test_abuse_budgets.py` |
+| Target domain | `application/abuse.py` **and** Phase 4 pacing | `test_abuse_budgets.py` |
+| Target MX | `application/abuse.py`, preferred exchanger | `test_abuse_budgets.py` |
+| Sender identity | `application/abuse.py` | `test_abuse_budgets.py` |
+| Global concurrency | `application/admission.py`, since Phase 6 | `test_admission_and_deadline.py` |
+| Daily total | `application/abuse.py`, a day-long window | `test_abuse_budgets.py` |
+
+Spending is all-or-nothing, so a refusal by one layer spends none of the others.
+Every verification charges the caller's layers and every verification that will
+probe also charges the destination layers, so neither a cache hit nor section
+14's retry is free. ADR 0016.
+
+### Queue fairness
+
+One principal may hold at most `queue_share` of the waiting slots, so a caller
+that can issue requests faster than they are served cannot make every other
+account's request answer `AdmissionRefused` while holding no capacity at all.
+Phase 6's review carried this as F11. `application/admission.py`;
+`tests/unit/application/test_queue_fairness.py`.
+
+### Administrative controls
+
+| Control | Code | Test |
+|---|---|---|
+| Disable active globally | `AdminControl.set_active_probing` | `test_admin_controls.py` |
+| Suspend key / account | `suspend_key`, `suspend_account` | `test_admin_controls.py` |
+| Block domain / MX | `block_domain`, `block_exchanger` | `test_admin_controls.py` |
+| Disable sender identity | `disable_sender` | `test_admin_controls.py` |
+| Inspect safe audit events | `audit_events` | `test_admin_controls.py` |
+| Trigger deletion | `application/retention.py` | `test_retention.py` |
+
+The kill switch stops the enqueue **and** the worker: a switch that stopped only
+new work would leave the queue connecting to remote hosts after an operator said
+stop. Suspension is immediate because the state is read on every decision and is
+replaced whole rather than mutated.
+
+### Privacy
+
+| Control | Code | Test |
+|---|---|---|
+| Versioned HMAC correlation | `security/identifiers.py` | `test_identifiers.py` |
+| Ordinary log redaction | `security/redaction.py` | `test_redaction.py` |
+| No address in logs, events, metrics, audit | every surface | `test_privacy_corpus.py` |
+| Scheduled deletion | `application/retention.py` | `test_retention.py` |
+| Deletion failure alerting | `MetricName.DELETION_FAILURE` | `test_retention.py` |
+| Admin access audit | `application/admin.py` | `test_admin_controls.py` |
+
+Raw SMTP diagnostics are **not retained at all**, so `docs/privacy.md` section
+3's encrypted-diagnostic retention has nothing to encrypt. That is the
+privacy-preserving half holding by absence; ADR 0016 records it as a Phase 8
+stop condition rather than as a gap.
+
+### Observability
+
+Metric labels are closed enumerations, so a target, a local part, a job
+identifier, an API key, an idempotency key, and a source address are all
+unrepresentable rather than merely absent. `ports/metrics.py`;
+`tests/unit/test_metrics_cardinality.py`.
+
+### Abuse indicators
+
+Five, all pure, all reporting-only: numeric sequences, dictionary-style
+attempts when configured, concentrated same-domain enumeration, multiple keys
+from one source, and exploration after a positive result. `domain/indicators.py`;
+`tests/unit/domain/test_indicators.py`. They hold shapes rather than addresses,
+and an admin summary shows a count and a name.
+
+### Failure behaviour
+
+| Failure | Behaviour | Test |
+|---|---|---|
+| Quota store unavailable | active refused, passive still served | `test_abuse_budgets.py` |
+| Quota table full of live counters | refused, never evicts a live budget | `test_quota_store.py` |
+| Operator sink raises | never changes a verdict | `test_failure_injection.py` |
+| Metrics sink raises | never changes a verdict | `test_failure_injection.py` |
+| Retention run fails | counted and audited, never propagated | `test_retention.py` |
+
+### Provider neutrality
+
+No abuse threshold, budget, indicator, or administrative default is keyed to a
+provider's identity. An inspection test refuses a provider name in every Phase 7
+module, because a behavioural test cannot enumerate the providers nobody thought
+of — the same control section 3 applies to reply parsing.
+
+## 6. Residual risk
 
 Even a carefully limited service may be treated as a harvesting source by
 remote operators. Active probing must remain optional, rate limited, monitored,

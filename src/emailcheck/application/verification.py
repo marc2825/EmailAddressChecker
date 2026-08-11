@@ -52,9 +52,10 @@ admission was claiming more than the code did.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
+from emailcheck.application.abuse import AbuseGuard, AbuseRefused
 from emailcheck.application.admission import AdmissionControl, AdmissionRefused
 from emailcheck.application.aggregate import aggregate_evidence
 from emailcheck.application.mail_route import MailRouteService
@@ -76,6 +77,7 @@ from emailcheck.domain.evidence import Evidence
 from emailcheck.domain.mail_route import MailRoute
 from emailcheck.domain.principal import Principal
 from emailcheck.domain.reasons import ReasonCode
+from emailcheck.domain.source import SourceIdentity
 from emailcheck.domain.verdict import Verdict
 from emailcheck.ports.observability import OperatorEvent, OperatorEventKind, OperatorSink
 
@@ -194,9 +196,21 @@ class AddressVerificationService:
     operator: OperatorSink
     smtp: SMTPVerificationService | None = None
     limits: VerificationLimits = field(default_factory=VerificationLimits)
+    #: Phase 7's abuse controls. `None` is a deployment with none configured —
+    #: the local-passive profile — and every call site checks, so an absent
+    #: guard is visibly absent rather than a silently permissive one.
+    guard: AbuseGuard | None = None
+    #: Which sender identity this deployment probes from, as the budget and the
+    #: kill switch name it. Operator configuration, never a request field.
+    sender_identity: str = "none"
 
     async def verify(
-        self, submitted: str, *, principal: Principal, active: bool = True
+        self,
+        submitted: str,
+        *,
+        principal: Principal,
+        active: bool = True,
+        source: SourceIdentity | None = None,
     ) -> VerificationOutcome:
         """Run the whole pipeline for one address, bounded and admitted.
 
@@ -216,7 +230,13 @@ class AddressVerificationService:
             # depth leaves that wait unbounded in time.
             async with asyncio.timeout(self.limits.total_deadline_seconds):
                 async with self.admission.admit(account):
-                    return await self._run(submitted, account=account, active=active)
+                    return await self._run(
+                        submitted,
+                        principal=principal,
+                        account=account,
+                        active=active,
+                        source=source,
+                    )
         except AdmissionRefused as refusal:
             self.operator.record(
                 OperatorEvent(kind=OperatorEventKind.ADMISSION_REFUSED, detail=refusal.scope)
@@ -232,6 +252,15 @@ class AddressVerificationService:
                 )
             )
             raise VerificationRefused("the verification deadline") from None
+        except AbuseRefused as refusal:
+            # An abuse control refused. Local and operational, exactly like
+            # capacity: no `Evidence`, no `Verdict`, and a category the operator
+            # sees rather than the caller — which of nine budgets was reached is
+            # information about this deployment, not about the address.
+            self.operator.record(
+                OperatorEvent(kind=OperatorEventKind.RATE_LIMITED, detail=refusal.category)
+            )
+            raise VerificationRefused("an abuse control") from None
 
     def _check_length(self, submitted: str) -> None:
         if not isinstance(submitted, str):
@@ -242,8 +271,21 @@ class AddressVerificationService:
                 f"submitted input exceeds {self.limits.max_submitted_length} characters"
             )
 
-    async def _run(self, submitted: str, *, account: str, active: bool) -> VerificationOutcome:
-        """The pipeline itself, inside admission and inside the deadline."""
+    async def _run(
+        self,
+        submitted: str,
+        *,
+        principal: Principal,
+        account: str,
+        active: bool,
+        source: SourceIdentity | None,
+    ) -> VerificationOutcome:
+        """The pipeline itself, inside admission and inside the deadline.
+
+        `account` is passed in rather than re-read from `principal`, so the
+        value the limiter partitions by is derived in exactly one place — the
+        property an inspection test counts.
+        """
         parsed = parse_address(RawAddressInput(submitted))
         if isinstance(parsed, AddressRejected):
             # **Stops here.** No resolver, no socket. A broken grammar and an
@@ -256,6 +298,16 @@ class AddressVerificationService:
 
         assert isinstance(parsed, AddressAccepted)
         target = parsed.address
+        if self.guard is not None:
+            # After parsing, so the target layer is keyed by a normalized
+            # address, and **before** DNS, so a refused caller costs no lookup.
+            # A rejected address never reaches here, which is why a syntax error
+            # is not chargeable: there is no target to charge it against, and
+            # charging one caller's budget for another's typo would be a way to
+            # spend somebody else's allowance.
+            await self.guard.authorize_submission(
+                principal=principal, target=target, source=source, active=active
+            )
         route = await self.routes.resolve(target)
         route_evidence = self.routes.evidence(route)
 
@@ -299,6 +351,50 @@ class AddressVerificationService:
             return (), False
         if not route.connectable_candidates:
             return (), False
+        if self.guard is not None:
+            # **The domain and sender switches first**, because they refuse the
+            # whole verification rather than one host.
+            self.guard.check_destination(
+                domain=target.domain.ascii_form, sender_identity=self.sender_identity
+            )
+
+            # **Then every blocked exchanger is removed before Phase 4E plans.**
+            # An independent review measured the earlier build consulting the
+            # switch for the preferred candidate alone, so a blocked second
+            # exchanger was still reached whenever the first failed before the
+            # recipient stage. Filtering the route is the least invasive fix:
+            # `plan_attempts` reads `connectable_candidates`, Phase 4E's
+            # ordering, cap, de-duplication, and one-`RCPT TO` bound are
+            # untouched, and no destination-safety logic is duplicated — this
+            # removes candidates, it never adds or approves one.
+            route = replace(
+                route,
+                candidates=tuple(
+                    candidate
+                    for candidate in route.candidates
+                    if not self.guard.exchanger_blocked(candidate.host.value)
+                ),
+            )
+            if not route.connectable_candidates:
+                # Every exchanger this domain publishes is blocked. There is
+                # nowhere to connect, so nothing is probed and no destination
+                # budget is spent — the answer Phase 2 already gives a domain
+                # with no usable route.
+                return (), False
+
+            # The destination layers, charged once per verification that will
+            # actually connect. The exchanger *charged* is the preferred one
+            # among those that survived, which is the one Phase 4E approaches
+            # first and — unless it fails before the recipient stage — the only
+            # one. A request that does fall through has under-charged the second
+            # exchanger by at most `max_attempts - 1`, and the domain budget
+            # above it covers the total either way. That approximation is the
+            # **budget's** alone: the block above is exact for every candidate.
+            await self.guard.authorize_destination(
+                domain=target.domain.ascii_form,
+                mx_host=route.connectable_candidates[0].host.value,
+                sender_identity=self.sender_identity,
+            )
         report = await self.smtp.verify(target, route, account=account)
         self._report_pacing(report, target)
         return report.evidence, True

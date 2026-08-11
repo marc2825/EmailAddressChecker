@@ -48,6 +48,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Final
 
+from emailcheck.application.abuse import AbuseGuard
 from emailcheck.application.public_result import PublicResult, public_result
 from emailcheck.application.retry import jitter_span_seconds, retry_delay_seconds
 from emailcheck.application.verdict_cache import VerdictCache
@@ -66,6 +67,7 @@ from emailcheck.domain.job import (
     check_transition,
 )
 from emailcheck.domain.principal import Principal
+from emailcheck.domain.source import SourceIdentity
 from emailcheck.ports.clock import Clock
 from emailcheck.ports.job_executor import JobExecutor
 from emailcheck.ports.observability import OperatorEvent, OperatorEventKind, OperatorSink
@@ -144,7 +146,9 @@ class CheckJob:
     retries_used: int = 0
     result: PublicResult | None = None
     failure: JobFailure | None = None
-    idempotency_key: IdempotencyKey | None = None
+    #: Caller-chosen text, so `repr=False`: an address is a legal idempotency
+    #: key and a job printed into a log would carry it. See `JobService`.
+    idempotency_key: IdempotencyKey | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.state, JobState):
@@ -248,11 +252,23 @@ class JobService:
     operator: OperatorSink
     #: The operator secret the target HMAC is taken under. The same key the
     #: cache uses, so one address has one digest across both.
-    correlation_key: bytes
+    correlation_key: bytes = field(repr=False)
     cache: VerdictCache | None = None
+    #: Phase 7's abuse controls, used here only for the early administrative
+    #: refusal. Every budget is charged by the verification itself, so this
+    #: field cannot become a second, divergent accounting of the same work.
+    guard: AbuseGuard | None = None
     settings: JobSettings = field(default_factory=JobSettings)
-    _jobs: OrderedDict[str, CheckJob] = field(default_factory=OrderedDict)
-    _by_key: dict[tuple[str, str], _KeyBinding] = field(default_factory=dict)
+    #: `repr=False` on both, and it is a privacy property rather than tidiness.
+    #: An idempotency key is **caller-chosen text** — `IdempotencyKey` requires
+    #: it to be printable and space-free and permits `@`, so
+    #: `alice@example.test` is a legal key — and the generated `repr` of this
+    #: service printed every one of them along with every job. Phase 7's privacy
+    #: corpus found it. `docs/requirements.md` section 16 forbids a full address
+    #: in an ordinary log, and a key a caller chose is exactly as sensitive as
+    #: whatever they chose to put in it.
+    _jobs: OrderedDict[str, CheckJob] = field(default_factory=OrderedDict, repr=False)
+    _by_key: dict[tuple[str, str], _KeyBinding] = field(default_factory=dict, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # --- submission ---------------------------------------------------------
@@ -263,6 +279,7 @@ class JobService:
         *,
         principal: Principal,
         idempotency_key: IdempotencyKey | None = None,
+        source: SourceIdentity | None = None,
     ) -> SubmitOutcome:
         """Accept one active check. Returns without running the SMTP half.
 
@@ -272,10 +289,18 @@ class JobService:
         """
         account = principal.rate_limit_account
 
+        if self.guard is not None:
+            # The kill switch, before anything is spent. `docs/operations.md`
+            # section 2 wants disabling active checks to be immediate, and a
+            # deployment that has stopped probing should not resolve DNS to
+            # discover it. The same check runs again inside the verification, so
+            # this is an early exit rather than the barrier.
+            self.guard.check_caller(principal=principal, active=True)
+
         # The passive half first: both lookups below are keyed by the normalized
         # target, and that target does not exist until the address is parsed.
         passive_outcome = await self.verification.verify(
-            submitted, principal=principal, active=False
+            submitted, principal=principal, active=False, source=source
         )
         target = passive_outcome.target
         passive = public_result(passive_outcome.verdict)
@@ -566,6 +591,39 @@ class JobService:
 
     def _digest(self, value: str) -> str:
         return correlation_digest(self.correlation_key, value)
+
+    def purge_finished(self, *, before: datetime, limit: int) -> int:
+        """Forget terminal jobs older than `before`. Returns how many went.
+
+        `docs/privacy.md` section 3 gives plaintext request data 24 hours, and a
+        finished job record is the only thing here that outlives the request
+        that made it. `application/retention.py` owns the schedule and the
+        lifetime; this owns the rule about *which* records may go.
+
+        **Only terminal jobs, and their idempotency bindings with them.** A
+        `pending` or `running` job removed by a sweep is work that stops
+        existing while something is still waiting for it, and a binding left
+        behind would point at a job nobody can fetch — the same pairing
+        `_evict` already keeps, for the same two reasons.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise JobError("a purge batch must be a positive whole number")
+        removed = 0
+        for job_id, job in list(self._jobs.items()):
+            if removed >= limit:
+                break
+            if not job.is_terminal or job.updated_at > before:
+                continue
+            del self._jobs[job_id]
+            self._forget_bindings(job_id)
+            removed += 1
+        return removed
+
+    def _forget_bindings(self, job_id: str) -> None:
+        """Drop every idempotency binding naming this job."""
+        for binding_key, binding in list(self._by_key.items()):
+            if binding.job_id == job_id:
+                del self._by_key[binding_key]
 
     def _evict(self) -> None:
         """Drop the oldest terminal jobs to make room. Never a live one.

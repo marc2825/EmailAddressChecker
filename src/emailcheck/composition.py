@@ -42,7 +42,7 @@ ships.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -51,6 +51,7 @@ from emailcheck.adapters.auth.api_keys import StaticApiKeyAuthenticator, build_a
 from emailcheck.adapters.dns.dnspython_resolver import DNSPythonResolver
 from emailcheck.adapters.execution.memory_executor import ExecutorSettings, InMemoryJobExecutor
 from emailcheck.adapters.observability.logging_sink import LoggingOperatorSink
+from emailcheck.adapters.observability.metrics import InMemoryMetrics
 from emailcheck.adapters.smtp.asyncio_transport import AsyncioSMTPTransport
 from emailcheck.adapters.smtp.sender_identity import (
     ConfiguredSenderIdentityProvider,
@@ -58,20 +59,27 @@ from emailcheck.adapters.smtp.sender_identity import (
 )
 from emailcheck.adapters.storage.sqlite_store import SQLiteVerdictStore
 from emailcheck.adapters.system.clock import SystemClock, SystemMonotonicClock, SystemSleeper
+from emailcheck.adapters.system.quota import InProcessQuotaStore
 from emailcheck.adapters.system.random_source import SystemRandomSource
 from emailcheck.adapters.system.rate_limit import InProcessRateLimiter
+from emailcheck.application.abuse import AbuseGuard
+from emailcheck.application.admin import AdminControl
 from emailcheck.application.admission import AdmissionControl, AdmissionSettings
 from emailcheck.application.jobs import JobService, JobSettings
 from emailcheck.application.mail_route import MailRouteService
 from emailcheck.application.passive import PassiveClassifier
+from emailcheck.application.retention import RetentionService, RetentionSettings
 from emailcheck.application.smtp_probe import SMTPProbeService
 from emailcheck.application.smtp_verification import SMTPVerificationService
 from emailcheck.application.syntax_evidence import SyntaxEvidenceProducer
 from emailcheck.application.verdict_cache import NO_SENDER_IDENTITY, VerdictCache
 from emailcheck.application.verification import AddressVerificationService, VerificationLimits
 from emailcheck.classification.repository import PassiveDatasets
+from emailcheck.domain.abuse import QuotaSettings
+from emailcheck.domain.admin import AdminState
 from emailcheck.domain.rate_limit import RateLimitSettings
 from emailcheck.ports.authentication import Authenticator
+from emailcheck.ports.metrics import MetricsSink
 from emailcheck.ports.observability import OperatorSink
 from emailcheck.ports.smtp_sender_identity import SenderIdentity
 from emailcheck.security.identifiers import check_correlation_key
@@ -100,19 +108,41 @@ class Deployment:
     it is a type rather than a pile of parameters.
     """
 
-    #: `{account_id: api_key}`. Hashed at load; the plaintext is not retained.
-    api_keys: Mapping[str, str]
+    #: `{account_id: api_key}` or `{account_id: [api_keys]}`. Hashed at load;
+    #: the plaintext is not retained by the authenticator.
+    #:
+    #: **`repr=False`, and that is a security property rather than tidiness.**
+    #: A `Deployment` is the object most likely to be logged by accident — it is
+    #: what a start-up path holds — and a frozen dataclass's generated `repr`
+    #: prints every field, so this one printed the API keys and the correlation
+    #: secret in full. Phase 7's privacy corpus found it. `__repr__` below names
+    #: each as redacted rather than omitting it, so a reader can see that
+    #: something is there.
+    api_keys: Mapping[str, str | Sequence[str]] = field(repr=False)
     #: The secret an HMAC correlates under. Never logged, never returned.
-    correlation_key: bytes
+    correlation_key: bytes = field(repr=False)
     #: The EHLO name and envelope sender, as `adapters/smtp/sender_identity.py`
     #: reads them. An unconfigured deployment does not probe.
-    sender_identity: Mapping[str, object] | None = None
+    sender_identity: Mapping[str, object] | None = field(default=None, repr=False)
     passive_datasets: PassiveDatasets = field(default_factory=PassiveDatasets)
     rate_limits: RateLimitSettings = field(default_factory=RateLimitSettings)
     admission: AdmissionSettings = field(default_factory=AdmissionSettings)
     verification: VerificationLimits = field(default_factory=VerificationLimits)
     executor: ExecutorSettings = field(default_factory=ExecutorSettings)
     jobs: JobSettings = field(default_factory=JobSettings)
+    #: Phase 7's layered budgets. `prompts/07-hardening.md`.
+    quotas: QuotaSettings = field(default_factory=QuotaSettings)
+    #: How long finished records live. Deliberately separate from the verdict
+    #: TTLs ADR 0015 fixed: one is a freshness rule, the other a privacy one.
+    retention: RetentionSettings = field(default_factory=RetentionSettings)
+    #: The switches an operator starts with. Normally every control off and
+    #: probing enabled; a deployment recovering from an incident may start with
+    #: the kill switch already thrown.
+    admin_state: AdminState = field(default_factory=AdminState)
+    #: Local parts an operator considers dictionary-style, for the sequence
+    #: indicators. Empty unless configured — `prompts/07-hardening.md` says
+    #: "when configured", and this project licenses no name dataset.
+    common_names: frozenset[str] = frozenset()
     store_path: Path | None = None
     profile: DeploymentProfile = DeploymentProfile.LOCAL_PASSIVE
     #: Whether this deployment may open SMTP connections at all.
@@ -139,6 +169,22 @@ class Deployment:
             # deployment claiming both is a misconfiguration, not a preference.
             raise ValueError("the local-passive profile does not probe")
 
+    def __repr__(self) -> str:
+        """Everything an operator needs, and no secret material.
+
+        The counts are deliberate: "how many keys are configured" is the
+        question a start-up log is actually asked, and answering it does not
+        require printing one.
+        """
+        return (
+            f"Deployment(profile={self.profile.value!r}, "
+            f"active_probing={self.active_probing!r}, "
+            f"api_keys=<{len(self.api_keys)} configured>, "
+            f"correlation_key=<redacted>, "
+            f"sender_identity=<{'configured' if self.sender_identity else 'none'}>, "
+            f"store_path={self.store_path!r})"
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class VerificationStack:
@@ -155,10 +201,17 @@ class VerificationStack:
     limiter: InProcessRateLimiter
     admission: AdmissionControl
     store: SQLiteVerdictStore | None
-    correlation_key: bytes
+    #: Redacted for the reason `Deployment`'s fields are: this object is held
+    #: for the process's lifetime and reaches a log the moment anything prints
+    #: the stack it belongs to.
+    correlation_key: bytes = field(repr=False)
     executor: InMemoryJobExecutor | None = None
     jobs: JobService | None = None
     cache: VerdictCache | None = None
+    guard: AbuseGuard | None = None
+    admin: AdminControl | None = None
+    metrics: MetricsSink | None = None
+    retention: RetentionService | None = None
 
     async def start(self) -> None:
         """Start the executor, if this deployment has one.
@@ -197,10 +250,33 @@ def build_verification_stack(
     random = SystemRandomSource()
     sink = operator if operator is not None else LoggingOperatorSink()
 
+    metrics = InMemoryMetrics()
+
     limiter = InProcessRateLimiter(
         clock=monotonic, sleeper=sleeper, settings=deployment.rate_limits
     )
     admission = AdmissionControl(settings=deployment.admission)
+
+    # **One guard, one quota store, one admin control.** The same reason the
+    # limiter and the admission gate are built once: counters that start at zero
+    # for every request permit everything, and an administrative state that is
+    # rebuilt per request has never been suspended.
+    guard = AbuseGuard(
+        quota=InProcessQuotaStore(),
+        clock=clock,
+        metrics=metrics,
+        operator=sink,
+        correlation_key=deployment.correlation_key,
+        settings=deployment.quotas,
+        state=deployment.admin_state,
+        common_names=deployment.common_names,
+    )
+    admin = AdminControl(
+        guard=guard,
+        clock=clock,
+        metrics=metrics,
+        correlation_key=deployment.correlation_key,
+    )
 
     routes = MailRouteService(resolver=DNSPythonResolver(), clock=clock)
     passive = PassiveClassifier(datasets=deployment.passive_datasets, clock=clock)
@@ -221,6 +297,8 @@ def build_verification_stack(
         operator=sink,
         smtp=smtp,
         limits=deployment.verification,
+        guard=guard,
+        sender_identity=_sender_identity_key(deployment),
     )
 
     cache = None
@@ -251,8 +329,18 @@ def build_verification_stack(
             operator=sink,
             correlation_key=deployment.correlation_key,
             cache=cache,
+            guard=guard,
             settings=deployment.jobs,
         )
+
+    retention = RetentionService(
+        clock=clock,
+        admin=admin,
+        settings=deployment.retention,
+        store=store,
+        jobs=jobs,
+        quota=guard.quota,
+    )
 
     return VerificationStack(
         verification=verification,
@@ -265,6 +353,10 @@ def build_verification_stack(
         executor=executor,
         jobs=jobs,
         cache=cache,
+        guard=guard,
+        admin=admin,
+        metrics=metrics,
+        retention=retention,
     )
 
 

@@ -755,6 +755,87 @@ existence or delivery guarantee is made; a docs test fails if that sentence
 disappears, if a job state loses its example, or if a published route is
 missing from the document.
 
+### Abuse controls, privacy, and observability, from Phase 7
+
+Phase 7 computes no status either, so its tests are about **refusals** and about
+what is *absent*. Three measurements carry most of the weight, and all three are
+counters rather than assertions about behaviour being "safe":
+
+- `CountingQuotaStore` records which budget requests the guard built, so "the
+  account layer refused" and "the guard asked about the account layer at all"
+  are separate claims with separate tests;
+- `InMemoryMetrics.rendered_keys()` is the surface the privacy scan reads, so
+  "no address in metrics" is a scan over something real;
+- `RecordingOperator` keeps every event, for the same reason.
+
+Required scenarios:
+
+- **each budget enforced on its own**, with every other layer raised far above
+  it — testing them together only ever exercises whichever is narrowest;
+- one account's budget is not another's, one key's is not its sibling's, and one
+  source's is not another's;
+- a refusal by one layer spends none of the others, measured on the real store
+  rather than inferred;
+- a window boundary refills a budget, and the daily total does not refill at the
+  configured window;
+- an absent source is **skipped rather than defaulted**, because every caller
+  without a known source sharing one counter is a budget any two of them can
+  exhaust for each other;
+- rate storage failure fails closed for active checks and leaves passive ones
+  working;
+- the guard is reached **from the pipeline**, and where: a refused caller costs
+  no DNS lookup and no probe, a rejected address is never charged, a route with
+  nowhere to connect charges no destination layer, a cache hit still charges the
+  caller, and a retry charges the destination layers again;
+- suspension is immediate, applies to a passive check, and a suspended key
+  leaves its account's other key working;
+- the kill switch stops a job that was **already queued**, not only new ones;
+- a block is exact and never a suffix match;
+- deletion removes expired verdicts in bounded batches, never a live job, and
+  forgets an idempotency binding with the job it named;
+- a deletion failure is counted, audited, and never propagated.
+
+**Queue fairness has its own file**, and one of its tests uses the *derived*
+default rather than an explicit share — every other test set the share
+explicitly, and a mutation making the derived default equal to the whole queue
+passed all of them. That is the configuration a deployment which tunes nothing
+actually runs.
+
+**Cardinality is tested as a bound on values, not on counts.** Ten thousand
+distinct targets must create no new series, and a label that is not published
+enumeration vocabulary is refused — so an address, a job identifier, a
+credential, and a source address are unrepresentable rather than merely absent.
+
+**The privacy corpus is adversarial and end to end.** Distinctive values —
+`very.secret.localpart+tag@…`, `Bearer-SUPERSECRET…`, `idempotency-SUPERSECRET…`
+— are driven through the real application path over fakes, and every published
+surface is then scanned: both responses, captured logs, operator events, metric
+series, the audit trail, and the `repr` of the guard, the job registry, the
+authenticator, and the deployment. It found three real leaks on its first run:
+the `Deployment` `repr` printed the API keys and the correlation key, the
+indicator window retained the local part, and the job registry printed
+caller-chosen idempotency keys — which `IdempotencyKey` permits to contain an
+`@`, so an address is a legal one.
+
+The domain is deliberately **not** in the forbidden list.
+`docs/requirements.md` section 16 permits analytics aggregated by domain and
+`docs/privacy.md` section 1 makes the normalized domain its own category, so
+forbidding it would assert a rule this project does not have.
+
+**Two properties are pinned by inspection because behaviour cannot show them.**
+The authenticator compares every configured credential before answering — an
+early `return` makes the work depend on where in the mapping a key sits, which
+is a timing signal, and a timing test would be flaky. And no Phase 7 module
+names a provider, because an abuse threshold that differed by provider is
+`docs/threat-model.md`'s neutrality control failing with higher stakes, and a
+behavioural test cannot enumerate the providers nobody thought of.
+
+Every scan reads the **syntax tree with docstrings excluded**. These modules
+explain at length which headers they do not trust, and the first version of the
+forwarding-header test failed on `domain/source.py`'s own prose — the sixth time
+this repository has made that mistake, and the first time it was made inside the
+test written to prevent it.
+
 ## 3. SMTP fixtures
 
 Required scenarios:

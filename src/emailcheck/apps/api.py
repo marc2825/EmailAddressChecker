@@ -50,6 +50,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
+from emailcheck.application.abuse import AbuseRefused
 from emailcheck.application.jobs import (
     CheckJob,
     IdempotencyConflict,
@@ -65,6 +66,7 @@ from emailcheck.application.verification import (
 )
 from emailcheck.domain.job import IdempotencyKey, JobError, JobId
 from emailcheck.domain.principal import Principal
+from emailcheck.domain.source import SourceIdentity
 from emailcheck.ports.authentication import Authenticator
 from emailcheck.ports.job_executor import ExecutorFull
 from emailcheck.ports.observability import OperatorEvent, OperatorEventKind, OperatorSink
@@ -132,11 +134,37 @@ class ApiRequest:
 
     path: str
     method: str = "POST"
-    body: Mapping[str, object] = field(default_factory=dict)
-    #: The API key, as presented. Never logged and never echoed.
-    credential: str | None = None
-    #: The `Idempotency-Key` header, as presented.
-    idempotency_key: str | None = None
+    #: `repr=False` as well, and not because the review named it: the body
+    #: carries the submitted address, and `docs/requirements.md` section 16
+    #: forbids a full address in an ordinary log just as firmly as it forbids a
+    #: credential. Hiding only the two fields a review pointed at would leave
+    #: the same object leaking the same class of value through a different
+    #: field. `path`, `method`, and `source` survive, which is what a debugger
+    #: actually wants.
+    body: Mapping[str, object] = field(default_factory=dict, repr=False)
+    #: The API key, as presented.
+    #:
+    #: **`repr=False`, which is what makes "never logged" true.** The field said
+    #: so and the generated `repr` printed it anyway, and the ASGI
+    #: request-logging middleware `docs/architecture.md` records as a stop
+    #: condition is precisely the code that logs a request object. An
+    #: independent review measured it.
+    credential: str | None = field(default=None, repr=False)
+    #: The `Idempotency-Key` header, as presented. Caller-chosen text, and
+    #: `IdempotencyKey` permits `@` — so `alice@example.test` is a legal key and
+    #: this is exactly as sensitive as whatever a caller put in it. Redacted for
+    #: the reason `CheckJob.idempotency_key` is.
+    idempotency_key: str | None = field(default=None, repr=False)
+    #: Where the request came from, when the transport boundary knows.
+    #:
+    #: **Set by the binding from the connection, never parsed out of `body`.**
+    #: `PERMITTED_REQUEST_KEYS` holds exactly `email`, so a body carrying
+    #: `source_ip` or `x_forwarded_for` is refused as a malformed request rather
+    #: than believed — a spoofable source turns a per-source budget into a
+    #: per-*claimed*-source budget, which an attacker resets by changing a
+    #: string. `None` is the honest answer when nothing trustworthy knows, and
+    #: the source layer is then simply not counted.
+    source: SourceIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +227,9 @@ class CheckApi:
         if submitted is None:
             return _invalid_body()
         try:
-            outcome = await self.verification.verify(submitted, principal=principal, active=False)
+            outcome = await self.verification.verify(
+                submitted, principal=principal, active=False, source=request.source
+            )
         except SubmittedInputTooLong:
             return _error(_STATUS_BAD_REQUEST, ERROR_INVALID_REQUEST, "the address is too long")
         except VerificationRefused as refusal:
@@ -231,7 +261,9 @@ class CheckApi:
             )
 
         try:
-            outcome = await self.jobs.submit(submitted, principal=principal, idempotency_key=key)
+            outcome = await self.jobs.submit(
+                submitted, principal=principal, idempotency_key=key, source=request.source
+            )
         except SubmittedInputTooLong:
             return _error(_STATUS_BAD_REQUEST, ERROR_INVALID_REQUEST, "the address is too long")
         except VerificationRefused as refusal:
@@ -246,6 +278,13 @@ class CheckApi:
                 ERROR_IDEMPOTENCY_CONFLICT,
                 "this idempotency key was already used for a different address",
             )
+        except AbuseRefused:
+            # An administrative control refused before any work began. Answered
+            # as unavailable and with the same body every capacity refusal
+            # uses: which of nine budgets was reached, and whether this caller
+            # is suspended at all, is operator information. A distinct code
+            # would let anyone probe the deployment's control state.
+            return _error(_STATUS_UNAVAILABLE, ERROR_CAPACITY, "the service is at capacity")
         except (ExecutorFull, JobsFull):
             return _error(_STATUS_UNAVAILABLE, ERROR_CAPACITY, "the service is at capacity")
         except Exception:

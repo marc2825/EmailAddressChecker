@@ -42,7 +42,9 @@ CORRELATION_KEY = b"c" * 32
 def test_a_known_key_authenticates_to_its_account() -> None:
     authenticator = build_authenticator({"acct-1": KEY})
     principal = authenticator.authenticate(KEY)
-    assert principal == Principal(account_id="acct-1")
+    assert principal is not None
+    assert principal.account_id == "acct-1"
+    assert principal == Principal(account_id="acct-1", key_id=principal.key_id)
 
 
 @pytest.mark.parametrize(
@@ -62,11 +64,23 @@ def test_anything_else_authenticates_to_nobody(credential: str | None) -> None:
 
 
 def test_the_plaintext_key_is_not_retained() -> None:
-    """A dump of the configuration must not let anyone authenticate."""
+    """A dump of the configuration must not let anyone authenticate.
+
+    The evidence moved. This used to read the digest *out of the `repr`* as
+    proof that the plaintext had been replaced — which was fine while the table
+    was printed, and became the wrong instrument when Phase 7 stopped printing
+    it. The property was never about the `repr`: it is about what the object
+    stores, so that is what is asserted, and the `repr` is asserted separately
+    to carry neither.
+    """
     authenticator = build_authenticator({"acct-1": KEY})
+
+    assert verifier_for(KEY) in authenticator.verifiers
+    assert KEY not in authenticator.verifiers
+
     rendered = repr(authenticator)
     assert KEY not in rendered
-    assert verifier_for(KEY) in rendered
+    assert verifier_for(KEY) not in rendered
 
 
 def test_an_empty_configuration_authenticates_nobody_rather_than_everybody() -> None:
@@ -377,8 +391,69 @@ async def test_expired_rows_can_be_purged(tmp_path: Path) -> None:
 
 
 def test_the_schema_version_moved_with_the_shape() -> None:
-    """A version-1 database is refused rather than misread: it has no sender
-    identity column and no expiry, so every lookup against it would be wrong."""
+    """An older database is refused rather than misread.
+
+    Version 2 added the sender-identity column and the expiry, so a version-1
+    file answers every lookup wrongly. Version 3 changed no column at all —
+    Phase 7 put the canonicalization version inside the HMAC input, so every
+    digest in a version-2 file addresses a row nothing will ever find again. A
+    store full of unreachable rows looks like a cache that never hits, which is
+    a worse failure than refusing to open, so the version moved with the
+    *addressing* rather than only with the shape.
+    """
     from emailcheck.adapters.storage.sqlite_store import SCHEMA_VERSION
 
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
+
+
+# --- Phase 7: one account, several credentials ------------------------------
+
+
+def test_one_account_may_hold_several_keys_each_with_its_own_identity() -> None:
+    """`prompts/07-hardening.md` budgets and suspends per key *and* per account,
+    which are two layers only if a key is not another name for the account."""
+    from emailcheck.adapters.auth.api_keys import build_authenticator
+
+    first, second = "k" * 40, "j" * 40
+    authenticator = build_authenticator({"acct-1": [first, second]})
+
+    one = authenticator.authenticate(first)
+    other = authenticator.authenticate(second)
+    assert one is not None and other is not None
+    assert one.account_id == other.account_id == "acct-1"
+    assert one.key_id != other.key_id
+
+
+def test_a_key_identity_is_domain_separated_from_the_verifier() -> None:
+    """The verifier is what *authenticates*; the identity is what a budget key,
+    a metric label, a suspension list, and an audit event name.
+
+    Deriving the identity as a prefix of the verifier would put half of the
+    stored authentication material into all four. A mutation doing exactly that
+    escaped the whole suite until this existed.
+    """
+    from emailcheck.adapters.auth.api_keys import key_identity_for, verifier_for
+
+    key = "k" * 40
+    verifier = verifier_for(key)
+    identity = key_identity_for(verifier)
+
+    assert identity != verifier[: len(identity)]
+    assert identity not in verifier
+    assert verifier not in identity
+    assert key not in identity
+
+
+def test_a_key_identity_is_stable_across_restarts() -> None:
+    """A budget counter and a suspension list both need it to be."""
+    from emailcheck.adapters.auth.api_keys import key_identity_for, verifier_for
+
+    verifier = verifier_for("k" * 40)
+    assert key_identity_for(verifier) == key_identity_for(verifier)
+
+
+def test_an_account_configured_with_no_key_is_refused() -> None:
+    from emailcheck.adapters.auth.api_keys import ApiKeyConfigurationError, build_authenticator
+
+    with pytest.raises(ApiKeyConfigurationError):
+        build_authenticator({"acct-1": []})
