@@ -286,6 +286,39 @@ class AbuseGuard:
         requests = self._destination_requests(domain, mx_host, sender_identity)
         await self._spend(requests, active=True)
 
+    async def authorize_accept_all(
+        self, *, domain: str, mx_host: str | None, sender_identity: str
+    ) -> None:
+        """May Phase 9's control probe be made against this domain?
+
+        The ordinary destination layers **plus** `BudgetLayer.ACCEPT_ALL_DOMAIN`,
+        which `prompts/09-accept-all.md` and `docs/requirements.md` section 10
+        both require to be *separate*. An experiment is contact a caller did not
+        ask for — they asked about one mailbox — so it is paid for out of its own
+        budget, and exhausting that budget stops experiments without touching
+        ordinary verification of the same domain.
+
+        Spending stays all-or-nothing: a refusal by the experiment layer spends
+        none of the ordinary ones, which is what makes "the experiment ran out"
+        and "the domain ran out" different facts.
+        """
+        for decision in (
+            self.state.decide_destination(domain=domain),
+            self.state.decide_sender(sender_identity=sender_identity),
+            ControlDecision.PERMITTED
+            if mx_host is None
+            else self.state.decide_exchanger(mx_host=mx_host),
+        ):
+            if decision is not ControlDecision.PERMITTED:
+                self._record_admin_refusal(decision)
+                raise AbuseRefused(decision=decision)
+
+        requests = [
+            *self._destination_requests(domain, mx_host, sender_identity),
+            *self._requests([(BudgetLayer.ACCEPT_ALL_DOMAIN, domain)]),
+        ]
+        await self._spend(requests, active=True)
+
     # --- budgets -------------------------------------------------------------
 
     def _caller_requests(

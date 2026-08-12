@@ -118,9 +118,18 @@ def test_every_layer_the_prompt_names_is_enforced_or_accounted_for() -> None:
         "daily total": BudgetLayer.DAILY_TOTAL,
     }
     assert set(here) | {"global concurrency"} == prompt_layers
-    assert set(here.values()) == set(BudgetLayer)
     # The ninth, where it actually lives.
     assert AdmissionSettings().max_in_flight > 0
+
+    # Every layer this enum holds is either one `prompts/07-hardening.md` names
+    # or one a later Phase added deliberately. Phase 9's accept-all domain
+    # budget is the second kind: `prompts/09-accept-all.md` requires a
+    # **separate** domain budget, so it is not `target_domain` and is not one of
+    # the eight above. Listing it here rather than widening the comparison keeps
+    # a layer added by accident failing.
+    added_by_later_phases = {BudgetLayer.ACCEPT_ALL_DOMAIN}
+    assert set(here.values()) | added_by_later_phases == set(BudgetLayer)
+    assert not set(here.values()) & added_by_later_phases
 
 
 def test_the_prompt_lists_the_layers_this_project_claims_it_does() -> None:

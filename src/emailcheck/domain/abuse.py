@@ -94,6 +94,17 @@ class BudgetLayer(StrEnum):
     TARGET_MX = "target_mx"
     #: One configured sender identity, so a reputation problem is containable.
     SENDER_IDENTITY = "sender_identity"
+    #: One recipient domain, for Phase 9's accept-all experiment **only**.
+    #:
+    #: Separate from `TARGET_DOMAIN` on purpose, and the separation is the
+    #: requirement: `prompts/09-accept-all.md` and `docs/requirements.md`
+    #: section 10 both ask for a *separate* domain budget. An experiment is
+    #: additional contact with a domain nobody asked this project to contact —
+    #: the caller asked about one mailbox — so it may not be paid for out of the
+    #: budget that bounds ordinary verification of that domain, and exhausting
+    #: it must not stop ordinary verification either. Sized far smaller: a
+    #: domain's accept-all configuration is one fact, cached for seven days.
+    ACCEPT_ALL_DOMAIN = "accept_all_domain"
     #: Everything this deployment did, in one day.
     DAILY_TOTAL = "daily_total"
 
@@ -153,6 +164,11 @@ class QuotaSettings:
     per_target: int | None = 5
     per_target_domain: int | None = 500
     per_target_mx: int | None = 500
+    #: Phase 9's separate experiment budget. Deliberately two orders of
+    #: magnitude below `per_target_domain`: a seven-day cache means one decided
+    #: answer per domain per week is the intended traffic, and a limit that
+    #: allowed more would be a limit that permitted the shape it exists to stop.
+    per_accept_all_domain: int | None = 5
     per_sender_identity: int | None = 20_000
     daily_total: int | None = 50_000
 
@@ -193,6 +209,7 @@ LIMIT_FIELDS: Final[dict[BudgetLayer, str]] = {
     BudgetLayer.TARGET: "per_target",
     BudgetLayer.TARGET_DOMAIN: "per_target_domain",
     BudgetLayer.TARGET_MX: "per_target_mx",
+    BudgetLayer.ACCEPT_ALL_DOMAIN: "per_accept_all_domain",
     BudgetLayer.SENDER_IDENTITY: "per_sender_identity",
     BudgetLayer.DAILY_TOTAL: "daily_total",
 }
