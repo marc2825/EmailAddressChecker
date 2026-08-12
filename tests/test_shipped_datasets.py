@@ -1,9 +1,18 @@
 """The datasets this repository actually ships.
 
-These read files from `data/passive/`. That is not a network access and not a
-runtime download: the files are in the repository, and the load is explicit.
+These read files from `src/emailcheck/data/passive/` — inside the package, so
+the same files are reached from a checkout and from an installed wheel. That is
+not a network access and not a runtime download: the files are packaged, and the
+load is explicit.
+
+They go through `load_shipped_datasets`, the single production path, rather than
+through a path this file builds for itself. A test that walked up from
+`__file__` would keep passing on the day the packaged resource disappeared.
 """
 
+import atexit
+import contextlib
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -15,18 +24,30 @@ from emailcheck.classification.datasets import (
     load_role_dataset,
     read_text,
 )
-from emailcheck.classification.repository import load_passive_datasets
+from emailcheck.classification.repository import (
+    load_passive_datasets,
+    load_shipped_datasets,
+    shipped_dataset_resource,
+)
 
-DATA_DIRECTORY = Path(__file__).resolve().parents[1] / "data" / "passive"
+#: The packaged snapshot, materialised once as a real directory.
+#:
+#: `shipped_dataset_resource()` is a `Traversable` because an installed package
+#: may be a zip; `as_file` is the API that gives a path either way, and the
+#: `ExitStack` keeps it valid for the module rather than per call. The
+#: individual-file tests below need a `Path` for `read_text`'s size check.
+_RESOURCES = contextlib.ExitStack()
+atexit.register(_RESOURCES.close)
+DATA_DIRECTORY: Path = Path(_RESOURCES.enter_context(resources.as_file(shipped_dataset_resource())))
 
 
 def test_every_shipped_dataset_loads() -> None:
-    datasets = load_passive_datasets(DATA_DIRECTORY)
+    datasets = load_shipped_datasets()
     assert datasets.roles.size > 0
 
 
 def test_the_role_dataset_ships_populated_with_its_provenance() -> None:
-    datasets = load_passive_datasets(DATA_DIRECTORY)
+    datasets = load_shipped_datasets()
     metadata = datasets.roles.metadata
 
     assert datasets.roles.size >= 18
@@ -60,7 +81,7 @@ def test_the_role_dataset_ships_populated_with_its_provenance() -> None:
     ],
 )
 def test_the_role_dataset_covers_every_name_the_work_order_listed(local_part: str) -> None:
-    datasets = load_passive_datasets(DATA_DIRECTORY)
+    datasets = load_shipped_datasets()
     assert datasets.roles.contains(local_part)
 
 
@@ -68,16 +89,16 @@ def test_the_role_dataset_covers_every_name_the_work_order_listed(local_part: st
 def test_the_lists_without_verified_provenance_ship_empty(name: str) -> None:
     """A licence was not invented, so these carry no entries.
 
-    `data/passive/README.md` records why, and what must be established before
+    `src/emailcheck/data/passive/README.md` records why, and what must be established before
     any of them is populated. If this test starts failing, a dataset was added
     and its provenance needs reviewing.
     """
-    datasets = load_passive_datasets(DATA_DIRECTORY)
+    datasets = load_shipped_datasets()
     assert getattr(datasets, name).size == 0
 
 
 def test_an_empty_dataset_still_declares_full_metadata() -> None:
-    datasets = load_passive_datasets(DATA_DIRECTORY)
+    datasets = load_shipped_datasets()
     for dataset in (datasets.disposable, datasets.free_mail, datasets.providers):
         assert dataset.metadata.name
         assert dataset.metadata.version
@@ -86,7 +107,7 @@ def test_an_empty_dataset_still_declares_full_metadata() -> None:
 
 def test_no_dataset_claims_a_licence_it_does_not_have() -> None:
     """An empty list must not assert a third-party licence."""
-    datasets = load_passive_datasets(DATA_DIRECTORY)
+    datasets = load_shipped_datasets()
     for dataset in (datasets.disposable, datasets.free_mail, datasets.providers):
         assert dataset.metadata.license.lower().startswith("none")
         assert dataset.metadata.source_url == "none selected"

@@ -43,6 +43,15 @@ emailcheck = "emailcheck.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/emailcheck"]
+# The passive dataset snapshot lives inside the package, at
+# `emailcheck/data/passive/`, so `load_shipped_datasets` reads the same files
+# from a checkout and from an installed wheel. Nothing here names an individual
+# dataset: updating or populating one stays an ordinary data change, per
+# `src/emailcheck/data/passive/README.md` and ADR 0007.
+#
+# The `.example` files are format documentation for a maintainer, not runtime
+# data, so they stay in the repository and out of the distribution.
+exclude = ["*.toml.example"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config"

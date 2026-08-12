@@ -125,7 +125,7 @@ Overrides correct one list. `not_disposable` and `disposable` describe
 membership of the disposable list and never a delivery decision — the allow/deny
 vocabulary belongs to `security/destination.py` alone. An override file declares
 the `target` it corrects, and an unimplemented target is refused. See ADR 0007
-and `data/passive/README.md`.
+and `src/emailcheck/data/passive/README.md`.
 
 ### SMTP probe
 

@@ -42,9 +42,12 @@ from typing import Final
 from emailcheck import __version__
 from emailcheck.adapters.http.urllib_client import UrllibRemoteCheckClient
 from emailcheck.adapters.system.clock import SystemSleeper
+from emailcheck.application.aggregate import aggregate_evidence
 from emailcheck.application.public_job import PublicJob
 from emailcheck.application.public_result import PublicResult, public_result
+from emailcheck.application.readiness import report_versions, validate_deployment
 from emailcheck.application.verification import SubmittedInputTooLong, VerificationRefused
+from emailcheck.classification.repository import load_shipped_datasets
 from emailcheck.composition import Deployment, build_verification_stack
 from emailcheck.domain.job import TERMINAL_STATES, JobState
 from emailcheck.ports.clock import Sleeper
@@ -88,6 +91,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("address", nargs="?", help="the address to check; omitted prints this help")
     parser.add_argument("--version", action="store_true", help="print the package version")
+    parser.add_argument(
+        "--check-deployment",
+        action="store_true",
+        help=(
+            "report every deployment gate in docs/operations.md section 1. "
+            "Advisory and reporting only: it contacts nothing and passes no gate"
+        ),
+    )
+    parser.add_argument(
+        "--report-versions",
+        action="store_true",
+        help="print the aggregation ruleset, dataset versions, and HMAC canonicalization",
+    )
     parser.add_argument("--json", action="store_true", help="print the public result as JSON")
     parser.add_argument(
         "--verbose",
@@ -118,6 +134,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.version:
         print(__version__)
         return EXIT_OK
+    if arguments.check_deployment:
+        return _print_deployment_report(arguments)
+    if arguments.report_versions:
+        return _print_version_report(arguments)
     if arguments.address is None:
         parser.print_help()
         return EXIT_OK
@@ -131,6 +151,82 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("emailcheck: --wait and --remote-key-file need --remote", file=sys.stderr)
         return EXIT_INVALID_INPUT
     return asyncio.run(_run_local(arguments))
+
+
+# --- readiness reporting, from `prompts/08-limited-beta.md` ------------------
+
+
+def _print_deployment_report(arguments: argparse.Namespace) -> int:
+    """Work item 1: the deployment validation command.
+
+    **Reporting only.** It resolves no name, opens no socket, and reads no
+    environment: every one of `docs/operations.md` section 1's gates is either an
+    external fact or a human commitment, so checking one from here would be an
+    outbound operation this project has not been authorized to make.
+
+    It also **authorizes nothing**. A clean report is not permission to start a
+    beta — `prompts/08-limited-beta.md`'s exit criteria give that to a human, and
+    `BetaAuthorization.external_probing_authorized` is where the decision lives.
+    The exit code is `EXIT_OK` whatever the gates say, because a non-zero code
+    would turn an advisory report into a pass/fail somebody could script against.
+    """
+    report = validate_deployment(_local_deployment())
+    if arguments.json:
+        print(json.dumps(report.as_json_object(), indent=2, sort_keys=True))
+        return EXIT_OK
+
+    print(f"deployment gates for profile {report.profile!r}\n")
+    for gate in report.gates:
+        print(f"  [{gate.status.value}] {gate.title}")
+        if arguments.verbose:
+            print(f"      why:    {gate.why}")
+            print(f"      action: {gate.operator_action}")
+    print(
+        f"\n{len(report.requires_human_verification)} of {len(report.gates)} gates "
+        "can only be verified outside this process."
+    )
+    print(report.disclaimer)
+    return EXIT_OK
+
+
+def _print_version_report(arguments: argparse.Namespace) -> int:
+    """Work item 6: ruleset and dataset version reporting.
+
+    Read from **this deployment's own datasets** — the same `PassiveDatasets`
+    the local passive check classifies against — so the versions reported are
+    the versions any result was produced under. Constructing a fresh default
+    here reported the empty snapshot rather than the shipped one, which an
+    independent review measured as `role = empty` beside a shipped role list at
+    `2026-08-07.1`.
+
+    A dataset that is declared unavailable *and* observed empty reports a stable
+    category rather than an empty string: an operator reading `version=""`
+    cannot tell "unavailable on purpose" from "the loader failed". A populated
+    one reports its own version whatever the declaration says.
+    """
+    report = report_versions(
+        package_version=__version__,
+        aggregation_ruleset=aggregate_evidence(()).ruleset,
+        datasets=_local_deployment().passive_datasets,
+    )
+    if arguments.json:
+        print(json.dumps(report.as_json_object(), indent=2, sort_keys=True))
+        return EXIT_OK
+
+    print(f"package             {report.package_version}")
+    print(f"aggregation ruleset {report.aggregation_ruleset}")
+    print(f"hmac canonical form {report.canonical_input_version}")
+    print("datasets:")
+    for name, version in sorted(report.dataset_versions.items()):
+        print(f"  {name:<22} {version}")
+    if report.unavailable_datasets:
+        print(
+            "\nDeclared unavailable for the limited beta: "
+            + ", ".join(report.unavailable_datasets)
+            + ".\nAbsence is not a negative answer."
+            + "\nSee src/emailcheck/data/passive/README.md and ADR 0007."
+        )
+    return EXIT_OK
 
 
 # --- the local passive check ------------------------------------------------
@@ -179,6 +275,10 @@ def _local_deployment() -> Deployment:
         api_keys={LOCAL_ACCOUNT: _LOCAL_KEY},
         correlation_key=secrets.token_bytes(32),
         active_probing=False,
+        # The shipped snapshot, not the empty default. `--report-versions`
+        # describes the datasets this deployment classifies against, and the
+        # local passive check applies the role list it ships with.
+        passive_datasets=load_shipped_datasets(),
     )
 
 

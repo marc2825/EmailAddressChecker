@@ -9,7 +9,7 @@
 
 No dataset is included in the starter beyond illustrative placeholders.
 
-`data/passive/` holds the current snapshots and `data/passive/README.md` records
+`src/emailcheck/data/passive/` holds the current snapshots and `src/emailcheck/data/passive/README.md` records
 the state of each one. As of Phase 3, only the role list ships populated: its
 entries are authored in this repository, so its provenance is checkable. The
 disposable, free-mail, and provider files ship empty because no upstream licence

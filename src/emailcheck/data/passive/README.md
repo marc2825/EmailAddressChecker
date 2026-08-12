@@ -37,9 +37,9 @@ answer.
 | Dataset | File | State |
 |---|---|---|
 | Role local parts | `role_local_parts.toml` | **Populated** |
-| Disposable domains | `disposable_domains.toml` | **Empty** |
-| Free-mail domains | `free_mail_domains.toml` | **Empty** |
-| Provider MX patterns | `provider_mx_patterns.toml` | **Empty** |
+| Disposable domains | `disposable_domains.toml` | **Declared unavailable** |
+| Free-mail domains | `free_mail_domains.toml` | **Declared unavailable** |
+| Provider MX patterns | `provider_mx_patterns.toml` | **Declared unavailable** |
 | Disposable overrides | `overrides.toml` | Empty, operator-maintained |
 
 Three of the five ship empty on purpose. `prompts/03-passive-classification.md`
@@ -49,17 +49,78 @@ production data stays empty, and that no licence is invented. The environment
 this Phase was implemented in has no network access and could not verify any
 upstream list's licence, source, or version, so none was asserted.
 
-The consequence is explicit: with the shipped data, no domain is disposable, no
-domain is free-mail, and every provider family is `unknown`. Role classification
-works. This is a data gap, not a code gap; the matchers and the loader are
-complete and tested against fixtures.
+This is a data gap, not a code gap; the matchers and the loader are complete and
+tested against fixtures. Role classification works.
 
-**This state has a deadline.** By the Phase 8 limited beta each of the three
-empty datasets must either be populated from a reviewed source with its licence,
-provenance, and versioned snapshot recorded, or be declared unavailable
-functionality in the published documentation. Shipping a beta whose disposable
-and free-mail answers are silently always "no" is not one of the two options.
-`IMPLEMENTATION_STATUS.md` carries the same deadline.
+## Declared unavailable for the limited beta
+
+ADR 0007 set a deadline: by the Phase 8 limited beta each empty dataset is
+either populated from a reviewed source or **documented as unavailable
+functionality**. Phase 8 took the second option for all three, and this section
+is that declaration. ADR 0007 records why.
+
+`emailcheck --report-versions` reports these three as
+`unavailable-by-declaration` rather than as an empty version string, so an
+operator can tell "unavailable on purpose" from "the loader failed".
+
+**The category is derived from the data, not from the name.** A dataset reports
+`unavailable-by-declaration` only while it is *both* named here and observed
+empty; the moment one holds entries it reports its own version, and the command
+publishes `dataset_entry_counts` beside the versions so the derivation can be
+checked rather than trusted. That is what makes the promise below true: an
+independent review found an earlier build keying the category on the dataset's
+name alone, which would have gone on printing "unavailable" over real data.
+
+### What the absence does and does not mean
+
+An empty dataset produces **no evidence at all**. It does not produce negative evidence, and nothing downstream may read it as any of the following:
+
+- **not** "this domain is not disposable";
+- **not** "this domain is not free mail";
+- **not** "this domain's provider is not one of the known families";
+- **not** any `Verdict`, any `Status`, any confidence level, and no risk flag in
+  either direction.
+
+The distinction is the whole point. With the shipped data every domain is
+*unclassified* on these three signals. A caller who reads a missing
+`disposable` flag as a clean bill of health has drawn a conclusion this project
+did not offer, and one it cannot offer, because it has no list to have checked
+against.
+
+`provider_family` already has the vocabulary for this and it is worth copying:
+`unknown` means the question could not be answered, and `other` means it was
+answered and nothing matched. With no dataset the honest answer is `unknown`,
+and that is what is produced.
+
+### Why declaring, rather than populating
+
+No dataset with verified provenance could be selected. Verifying one means
+reading an upstream licence, recording the exact release or commit, and taking a
+checksum of a snapshot — all of which require reaching the upstream source, and
+none of the Phases through 8 has been permitted network access. Inventing a
+licence, or vendoring a list whose terms nobody read, is worse than shipping
+without one: it puts this repository's name behind a redistribution nobody
+checked.
+
+**No placeholder dataset was created.** A file with a handful of well-known
+domains in it would make the feature look present, would be wrong about every
+domain not in it, and would give a reviewer nothing to check the provenance of.
+An empty list that says it is empty is the honest shape.
+
+### Lifting the declaration
+
+Populating a dataset later is an ordinary data change, not a code change — and
+that is enforced rather than asserted: a test populates a declared dataset in a
+fixture directory, loads it through the production loader, and requires the
+report to name its version. It needs, per `docs/data-sources.md` section 3:
+
+1. an upstream licence that permits redistribution, read and recorded;
+2. the exact release or commit, and a checksum of the snapshot;
+3. the metadata block filled in, including `version` and `retrieved`;
+4. the false-positive fixtures run;
+5. this section and ADR 0007 updated to say the dataset is now available, with
+   the date;
+6. for free-mail, the override-file decision below settled first.
 
 ## Role local parts
 
@@ -141,9 +202,11 @@ and less contentious membership, and it ships empty, so there is nothing yet to
 correct.
 
 That is a decision to revisit rather than a permanent one. **Before the
-free-mail list is populated, decide whether it needs an override file**, and
-settle it no later than the Phase 8 limited beta. Adding one means a second
-`target` value and a second override file; the loader already rejects any
+free-mail list is populated, decide whether it needs an override file.** The
+Phase 8 deadline on this question is discharged by the declaration above: the
+free-mail dataset is declared unavailable, so there is nothing to override and
+the question moves to whenever it is populated. Adding an override file means a
+second `target` value and a second override file; the loader already rejects any
 target it does not implement, so the gap fails loudly rather than quietly.
 
 ## Free-mail domains

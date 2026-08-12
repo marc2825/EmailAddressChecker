@@ -67,17 +67,32 @@ Alert on:
 
 ## 4. Runbooks
 
-Before beta, create executable runbooks for:
+They exist, in [runbooks/](runbooks/). Seven files cover these nine topics —
+[runbooks/README.md](runbooks/README.md) carries the mapping and the rule that
+outranks all of them:
 
-- disable active probing;
-- rotate compromised API key;
-- disable sender identity;
-- respond to abuse complaint;
-- investigate false invalid;
-- investigate destination SSRF alert;
-- delete user data;
-- restore queue/store;
-- roll back ruleset.
+| Topic | Runbook |
+| --- | --- |
+| disable active probing | [stop-active-checks.md](runbooks/stop-active-checks.md) |
+| rotate compromised API key | [stop-active-checks.md](runbooks/stop-active-checks.md) |
+| disable sender identity | [sender-identity-incident.md](runbooks/sender-identity-incident.md) |
+| respond to abuse complaint | [abuse-complaint.md](runbooks/abuse-complaint.md) |
+| investigate false invalid | [false-invalid-investigation.md](runbooks/false-invalid-investigation.md) |
+| roll back ruleset | [false-invalid-investigation.md](runbooks/false-invalid-investigation.md) |
+| investigate destination SSRF alert | [destination-ssrf-alert.md](runbooks/destination-ssrf-alert.md) |
+| delete user data | [privacy-deletion.md](runbooks/privacy-deletion.md) |
+| restore queue/store | [queue-store-outage.md](runbooks/queue-store-outage.md) |
+
+Two topics share a runbook with a neighbour rather than getting a file of their
+own: revoking a caller's key is the per-account form of the kill switch, and
+rolling a ruleset back is what a false `invalid` traced to a deployment calls
+for. Both are named procedures inside those files.
+
+**None of these has been executed.** `global kill switch tested` and
+`retention deletion tested` in section 1 are verified by *performing*
+[stop-active-checks.md](runbooks/stop-active-checks.md) and
+[privacy-deletion.md](runbooks/privacy-deletion.md) on the deployment, once,
+before the beta.
 
 ## 5. Capacity
 

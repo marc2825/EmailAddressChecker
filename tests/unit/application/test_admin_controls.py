@@ -294,3 +294,47 @@ def test_the_state_is_replaced_rather_than_mutated() -> None:
     admin.suspend_account(ACCOUNT)
     assert guard.state is not before
     assert before.suspended_accounts == frozenset()
+
+
+# --- each barrier pinned on its own -------------------------------------------
+#
+# `check_destination` and `authorize_destination` both consult the domain and
+# sender switches, and the redundancy is deliberate: the first refuses a whole
+# verification before a candidate is chosen, the second charges an attempt. A
+# Phase 8 mutation run found that the *first* one's sender check was unpinned —
+# removing it left the entire suite green, because the second copy still
+# refused. Two barriers are only two barriers when each has a test that fails
+# when only it is removed.
+
+
+def test_check_destination_refuses_a_blocked_domain_on_its_own() -> None:
+    guard, admin, _ = build()
+    admin.block_domain("example.test")
+
+    with pytest.raises(AbuseRefused) as refusal:
+        guard.check_destination(domain="example.test", sender_identity="probe.test")
+
+    assert refusal.value.decision is ControlDecision.DOMAIN_BLOCKED
+
+
+def test_check_destination_refuses_a_disabled_sender_on_its_own() -> None:
+    """The barrier the mutation run found unpinned.
+
+    It matters because this one runs **before** a candidate is chosen: a
+    deployment whose sender identity is disabled must refuse the verification
+    rather than discover it while charging an attempt.
+    """
+    guard, admin, _ = build()
+    admin.disable_sender("probe.test")
+
+    with pytest.raises(AbuseRefused) as refusal:
+        guard.check_destination(domain="example.test", sender_identity="probe.test")
+
+    assert refusal.value.decision is ControlDecision.SENDER_DISABLED
+
+
+def test_check_destination_permits_when_neither_switch_is_thrown() -> None:
+    """So the two above are about the switches rather than about refusing always."""
+    guard, _, _ = build()
+
+    guard.check_destination(domain="example.test", sender_identity="probe.test")

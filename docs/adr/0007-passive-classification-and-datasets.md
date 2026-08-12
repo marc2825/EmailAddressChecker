@@ -95,7 +95,7 @@ licence is invented.
 This Phase was implemented without network access, so no upstream list's
 licence, source, or version could be verified. Disposable, free-mail, and
 provider data therefore ship **empty**, with full metadata blocks, `.example`
-files showing the format, and `data/passive/README.md` recording what must be
+files showing the format, and `src/emailcheck/data/passive/README.md` recording what must be
 established first.
 
 The role list is the exception. Its entries are enumerated in this repository's
@@ -109,8 +109,61 @@ That is a data gap, not a code gap.
 It is also a gap with a deadline. By the Phase 8 limited beta each empty dataset
 is either populated from a reviewed source or documented as unavailable
 functionality; a beta that answers "not disposable" for every address without
-saying so is neither. `IMPLEMENTATION_STATUS.md` and `data/passive/README.md`
+saying so is neither. `IMPLEMENTATION_STATUS.md` and `src/emailcheck/data/passive/README.md`
 carry the same deadline.
+
+## Decision (Phase 8): the three datasets are declared unavailable
+
+- Decided: 2026-08-12, Phase 8.
+
+The deadline above came due. Of its two options, Phase 8 takes the second:
+disposable domains, free-mail domains, and provider MX patterns are **declared
+unavailable functionality** for the limited beta. `src/emailcheck/data/passive/README.md`
+carries the published declaration and the procedure for lifting it.
+
+Populating was not available. Verifying provenance means reading an upstream
+licence, pinning an exact release or commit, and checksumming a snapshot; every
+one of those requires reaching the upstream source, and no Phase through 8 has
+been permitted network access. Asserting a licence nobody read would put this
+repository behind a redistribution nobody checked, which is the failure this
+ADR's provenance decision exists to prevent.
+
+**No placeholder dataset was created**, and that is the substance of the
+decision rather than an omission. A short list of well-known domains would make
+the feature look present while being wrong about every domain absent from it,
+and would give a reviewer nothing whose provenance could be checked. The
+alternative — an empty list that says it is empty — is the one a caller can
+reason about.
+
+The declaration is published in three places, and the wording is the same in
+each: **absence produces no evidence, and no negative evidence.** An empty
+disposable list does not mean a domain is not disposable; an empty free-mail
+list does not mean a domain is not free mail; an empty provider list yields
+`provider_family = unknown`, which this ADR already defines as "the question
+could not be answered" rather than "answered, and nothing matched". None of the
+three can produce a `Verdict`, a `Status`, a confidence level, or a risk flag in
+either direction — which was already true, because passive signals never touch a
+status, and remains true here in the direction that matters more.
+
+`emailcheck --report-versions` reports the three as
+`unavailable-by-declaration`, **while they are empty**. The category is a
+function of the loaded data and the declaration together: a populated dataset
+reports its own version whatever this ADR says, and the command publishes the
+entry counts it derived that from. An empty version string would be
+indistinguishable from a loader that failed, and this ADR's fail-closed decision
+is about exactly that confusion.
+
+The report also describes **the deployment's own snapshot**. An independent
+review measured an earlier build constructing a fresh empty `PassiveDatasets`
+for the report and printing `role = empty` beside a shipped role list at version
+`2026-08-07.1` — a reproducibility record that named versions no result was
+produced under.
+
+This decision is reversible by data. Populating a dataset later requires the
+provenance steps in `docs/data-sources.md` section 3 and an update to this ADR
+and `src/emailcheck/data/passive/README.md` recording the date it became available. It requires
+no code change: the matchers and the loader were complete in Phase 3 and are
+unchanged.
 
 ## Decision: false positives are fixed in data, not in code
 
