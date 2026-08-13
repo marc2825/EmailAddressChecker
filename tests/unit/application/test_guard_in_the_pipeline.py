@@ -335,6 +335,84 @@ async def test_a_blocked_preferred_exchanger_is_skipped_and_the_next_is_used() -
     assert smtp.seen == ["mx2.example.test"]
 
 
+# --- the scheduling key must name the exchanger actually approached ----------
+
+
+@asyncio_test
+async def test_the_scheduling_key_names_the_preferred_exchanger_when_nothing_is_blocked() -> None:
+    service, _, smtp = blocking_harness()
+
+    outcome = await service.verify("user@example.test", principal=PRINCIPAL, active=True)  # type: ignore[attr-defined]
+
+    assert outcome.scheduling_key == "mx1.example.test"
+    assert smtp.seen[0] == "mx1.example.test"
+
+
+@asyncio_test
+async def test_the_scheduling_key_skips_a_blocked_preferred_exchanger() -> None:
+    """**The key must not name a host this verification will never contact.**
+
+    `_verify_recipient` removes every blocked exchanger before Phase 4E plans,
+    so with `mx1` blocked the work goes to `mx2`. An earlier revision computed
+    the key from the unfiltered `connectable_candidates[0]`, which answered
+    `mx1` — so a caller scheduling by it would have been accounting `mx2`'s work
+    against `mx1`, and spreading load across a destination nothing ever reaches.
+    """
+    service, admin, smtp = blocking_harness()
+    admin.block_exchanger("mx1.example.test")
+
+    outcome = await service.verify("user@example.test", principal=PRINCIPAL, active=True)  # type: ignore[attr-defined]
+
+    assert smtp.seen == ["mx2.example.test"]
+    assert outcome.scheduling_key == "mx2.example.test"
+
+
+@asyncio_test
+async def test_the_scheduling_key_is_absent_when_every_exchanger_is_blocked() -> None:
+    """Nowhere to connect is `None`, exactly as a Null MX is. No work is
+    scheduled against a destination, because none will be reached."""
+    service, admin, smtp = blocking_harness()
+    admin.block_exchanger("mx1.example.test")
+    admin.block_exchanger("mx2.example.test")
+
+    outcome = await service.verify("user@example.test", principal=PRINCIPAL, active=True)  # type: ignore[attr-defined]
+
+    assert smtp.calls == 0
+    assert outcome.scheduling_key is None
+
+
+@asyncio_test
+async def test_the_scheduling_key_names_the_first_exchanger_and_not_a_fallback() -> None:
+    """**The exact limit of the claim, asserted rather than described.**
+
+    `mx1` fails before the recipient stage and Phase 4E falls through to `mx2`,
+    so the verification's active work ends up at a host the key does not name.
+    No value computed before the verification runs could name it: the fallback
+    happens because of a reply nobody has received yet.
+
+    So `scheduling_key` means *the exchanger this verification will approach
+    first*, and fairness scheduled by it is fairness over first-approached
+    exchangers. This test exists so that scope cannot quietly inflate into a
+    claim about every attempt.
+
+    Asserted on the **plan** Phase 4E is handed, which is the whole set of hosts
+    a fallback may reach, rather than on a scripted fallback: the plan is what
+    the key is computed from, and it demonstrably holds a host the key does not
+    name.
+    """
+    service, _, smtp = blocking_harness()
+
+    outcome = await service.verify("user@example.test", principal=PRINCIPAL, active=True)  # type: ignore[attr-defined]
+
+    planned = smtp.seen
+    assert len(planned) == 2, planned
+    assert outcome.scheduling_key == planned[0] == "mx1.example.test"
+    # The second is reachable by a pre-recipient fallback and the key is silent
+    # about it. That is the limitation, stated as an assertion.
+    assert planned[1] == "mx2.example.test"
+    assert outcome.scheduling_key != planned[1]
+
+
 @asyncio_test
 async def test_every_exchanger_blocked_opens_no_socket_at_all() -> None:
     service, admin, smtp = blocking_harness()

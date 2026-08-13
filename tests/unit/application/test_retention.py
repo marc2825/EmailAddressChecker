@@ -390,3 +390,172 @@ def test_purging_a_job_forgets_its_idempotency_binding() -> None:
         assert InMemoryVerdictStore is not None
 
     asyncio.run(scenario())
+
+
+# --- the persistent job store is swept on the same schedule ------------------
+
+
+@dataclass
+class RecordingJobStore:
+    """A `JobStore` that records the cutoff it was swept with.
+
+    The cutoff is the assertion: persistence exists so a restart cannot
+    duplicate a verification, and a store swept on a *later* cutoff than the
+    registry would be persistence quietly extending `docs/privacy.md` section
+    3's retention to make a resume convenient.
+    """
+
+    cutoffs: list[datetime] = field(default_factory=list)
+    removals: int = 3
+
+    async def save(self, record: object) -> None: ...
+
+    async def load(self, job_id: str) -> object | None:
+        return None
+
+    async def find_by_idempotency(self, owner: str, idempotency_digest: str) -> object | None:
+        return None
+
+    async def delete(self, job_id: str) -> None: ...
+
+    async def purge_terminal(self, *, before: datetime, limit: int) -> int:
+        self.cutoffs.append(before)
+        return self.removals
+
+
+@asyncio_test
+async def test_the_persistent_job_store_is_swept_with_the_registrys_own_cutoff() -> None:
+    job_store = RecordingJobStore()
+    service, _, _ = build(job_store=job_store)
+
+    report = await service.run()
+
+    assert len(job_store.cutoffs) == 1
+    expected = service.clock.now() - timedelta(seconds=service.settings.job_retention_seconds)
+    assert job_store.cutoffs[0] == expected
+    assert report.jobs_removed == 3
+    assert report.failed is False
+
+
+@asyncio_test
+async def test_a_failing_job_store_is_reported_rather_than_raised() -> None:
+    """`docs/privacy.md` section 7 wants deletion failure alerted, not thrown."""
+
+    @dataclass
+    class BrokenStore(RecordingJobStore):
+        async def purge_terminal(self, *, before: datetime, limit: int) -> int:
+            raise RuntimeError("the store is unavailable at /var/db/jobs.sqlite")
+
+    service, _, _ = build(job_store=BrokenStore())
+
+    report = await service.run()
+
+    assert report.failed is True
+    assert "/var/db/jobs.sqlite" not in repr(report)
+
+
+# --- the batch store is swept by the same central sweep ----------------------
+
+
+@dataclass
+class RecordingBatchStore:
+    """A `BatchStore` that records the two cutoffs it was swept with.
+
+    Two, because they are two policies: the plaintext a resume needs and the
+    batch's own accounting expire on different clocks, and a store that got one
+    cutoff for both would silently extend whichever window is longer.
+    """
+
+    forgot: list[datetime] = field(default_factory=list)
+    purged: list[datetime] = field(default_factory=list)
+    cleared: int = 2
+    removed: int = 5
+
+    async def save_batch(self, record: object) -> None: ...
+
+    async def update_rows(self, batch_id: str, rows: object) -> None: ...
+
+    async def set_cancelled(self, batch_id: str) -> None: ...
+
+    async def load_batch(self, batch_id: str, *, account: str, now: datetime) -> object | None:
+        return None
+
+    async def save_artifact(self, artifact: object) -> None: ...
+
+    async def load_artifact(self, batch_id: str, *, account: str, now: datetime) -> object | None:
+        return None
+
+    async def delete_batch(self, batch_id: str, *, account: str) -> bool:
+        return False
+
+    async def forget_inputs(self, *, before: datetime, limit: int) -> int:
+        self.forgot.append(before)
+        return self.cleared
+
+    async def purge_expired(self, *, now: datetime, limit: int) -> int:
+        self.purged.append(now)
+        return self.removed
+
+
+@asyncio_test
+async def test_one_sweep_forgets_batch_inputs_and_purges_expired_batches() -> None:
+    """`prompts/10-batch.md` retention, reached through the **central** seam.
+
+    Both calls, from one `run()`. An earlier build had the operations on the
+    store and nothing calling them, so the documented plaintext schedule did
+    not exist — the guarantee was asserted rather than enforced.
+    """
+    from emailcheck.domain.batch import BatchSettings
+
+    batches = RecordingBatchStore()
+    settings = BatchSettings(input_retention_seconds=900)
+    service, _, _ = build(batches=batches, batch_settings=settings)
+
+    report = await service.run()
+
+    assert len(batches.forgot) == 1
+    assert len(batches.purged) == 1
+    # The plaintext cutoff is **derived from the batch settings**, not from the
+    # job window — computed here independently rather than read back.
+    assert batches.forgot[0] == service.clock.now() - timedelta(seconds=900)
+    assert batches.purged[0] == service.clock.now()
+    assert report.batch_inputs_cleared == 2
+    assert report.batches_removed == 5
+    assert report.failed is False
+    assert report.total_removed >= 7
+
+
+@asyncio_test
+async def test_the_plaintext_cutoff_follows_the_configured_input_retention() -> None:
+    """`input_retention_seconds` is load-bearing, not decorative.
+
+    Two configurations, two different cutoffs, from the same clock. A build
+    that ignored the setting and used the ceiling — or the job window — passes
+    neither row.
+    """
+    from emailcheck.domain.batch import BatchSettings
+
+    for seconds in (60, 3600, 24 * 60 * 60):
+        batches = RecordingBatchStore()
+        service, _, _ = build(
+            batches=batches, batch_settings=BatchSettings(input_retention_seconds=seconds)
+        )
+
+        await service.run()
+
+        assert batches.forgot[0] == service.clock.now() - timedelta(seconds=seconds)
+
+
+@asyncio_test
+async def test_a_failing_batch_store_is_reported_rather_than_raised() -> None:
+    @dataclass
+    class BrokenBatches(RecordingBatchStore):
+        async def forget_inputs(self, *, before: datetime, limit: int) -> int:
+            raise RuntimeError("the store is unavailable at /var/db/batch.sqlite")
+
+    service, _, _ = build(batches=BrokenBatches())
+
+    report = await service.run()
+
+    assert report.failed is True
+    assert "/var/db/batch.sqlite" not in repr(report)

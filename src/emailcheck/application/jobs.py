@@ -49,7 +49,7 @@ from datetime import datetime
 from typing import Final
 
 from emailcheck.application.abuse import AbuseGuard
-from emailcheck.application.public_result import PublicResult, public_result
+from emailcheck.application.public_result import PublicCheck, PublicResult, public_result
 from emailcheck.application.retry import jitter_span_seconds, retry_delay_seconds
 from emailcheck.application.verdict_cache import VerdictCache
 from emailcheck.application.verification import (
@@ -70,6 +70,7 @@ from emailcheck.domain.principal import Principal
 from emailcheck.domain.source import SourceIdentity
 from emailcheck.ports.clock import Clock
 from emailcheck.ports.job_executor import JobExecutor
+from emailcheck.ports.job_store import JobStore, StoredJob
 from emailcheck.ports.observability import OperatorEvent, OperatorEventKind, OperatorSink
 from emailcheck.ports.random_source import RandomSource
 from emailcheck.security.identifiers import correlation_digest
@@ -235,6 +236,13 @@ class SubmitOutcome:
     enqueued: bool
     #: Whether the job already existed. A caller distinguishes `202` from `200`.
     existing: bool
+    #: The exchanger the passive pass found this target's route leads to, or
+    #: `None`. Carried straight from `VerificationOutcome.scheduling_key` and
+    #: never re-derived; it decides nothing here either. A caller submitting
+    #: many checks uses it to order the *next* ones fairly across destinations,
+    #: which is what `prompts/10-batch.md` asks for and what no caller can learn
+    #: without resolving DNS through a second, unreviewed path.
+    scheduling_key: str | None = None
 
 
 @dataclass(slots=True)
@@ -254,6 +262,21 @@ class JobService:
     #: cache uses, so one address has one digest across both.
     correlation_key: bytes = field(repr=False)
     cache: VerdictCache | None = None
+    #: Where job identity, state, and result survive a process restart.
+    #:
+    #: `None` is a deployment that has none — the local-passive profile, and
+    #: every test that does not care — and every call site checks, so an absent
+    #: store is visibly absent rather than a silently forgetful one.
+    #:
+    #: **What it exists for is one property.** Without it, `_by_key` is the only
+    #: record that a handle already names a job, and that record dies with the
+    #: process: a resumed Phase 10 batch presenting the same deterministic
+    #: handle would be answered "new" and would start a **second verification**
+    #: for a row whose verification had already run. A duplicate `RCPT TO`
+    #: arranged by restarting is the enumeration pattern
+    #: `docs/threat-model.md` lists first, so this is a safety seam rather than
+    #: a convenience.
+    store: JobStore | None = None
     #: Phase 7's abuse controls, used here only for the early administrative
     #: refusal. Every budget is charged by the verification itself, so this
     #: field cannot become a second, divergent accounting of the same work.
@@ -269,6 +292,10 @@ class JobService:
     #: whatever they chose to put in it.
     _jobs: OrderedDict[str, CheckJob] = field(default_factory=OrderedDict, repr=False)
     _by_key: dict[tuple[str, str], _KeyBinding] = field(default_factory=dict, repr=False)
+    #: `job id -> (target digest, idempotency digest)`, so a state change can be
+    #: written without recomputing a digest from values it no longer holds.
+    #: Digests only, and `repr=False` like everything else here.
+    _persisted: dict[str, tuple[str | None, str | None]] = field(default_factory=dict, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # --- submission ---------------------------------------------------------
@@ -307,12 +334,18 @@ class JobService:
         target_digest = None if target is None else self._digest(target.hmac_material)
 
         if idempotency_key is not None and target_digest is not None:
-            existing = self._resolve_binding(account, idempotency_key, target_digest)
+            existing = await self._resolve_binding(account, idempotency_key, target_digest)
             if existing is not None:
                 # Same principal, same key, same address: the same job. ADR 0014
                 # scopes the key to a principal, so another account's identical
                 # key is a different request rather than a way to reach this one.
-                return SubmitOutcome(job=existing, passive=passive, enqueued=False, existing=True)
+                return SubmitOutcome(
+                    job=existing,
+                    passive=passive,
+                    enqueued=False,
+                    existing=True,
+                    scheduling_key=passive_outcome.scheduling_key,
+                )
 
         if target is not None and self.cache is not None:
             cached = await self.cache.find(
@@ -326,17 +359,32 @@ class JobService:
                     account=account, state=JobState.COMPLETED, result=cached, key=idempotency_key
                 )
                 claimed = await self._claim(job, target_digest=target_digest)
+                if claimed is None:
+                    await self._persist(job, target_digest=target_digest)
                 return SubmitOutcome(
                     job=claimed or job,
                     passive=passive,
                     enqueued=False,
                     existing=claimed is not None,
+                    scheduling_key=passive_outcome.scheduling_key,
                 )
 
         job = self._new_job(account=account, state=JobState.PENDING, key=idempotency_key)
         claimed = await self._claim(job, target_digest=target_digest)
         if claimed is not None:
-            return SubmitOutcome(job=claimed, passive=passive, enqueued=False, existing=True)
+            return SubmitOutcome(
+                job=claimed,
+                passive=passive,
+                enqueued=False,
+                existing=True,
+                scheduling_key=passive_outcome.scheduling_key,
+            )
+        # **Persisted before the handover**, on the same write-ahead argument
+        # Phase 10's batch row uses: a process that stops between enqueueing and
+        # recording would otherwise leave a running verification that no later
+        # process can recognize, and the next presentation of the same handle
+        # would start a second one.
+        await self._persist(job, target_digest=target_digest)
         try:
             await self.executor.submit(job.id, self._work(job.id, submitted, principal))
         except BaseException:
@@ -349,7 +397,13 @@ class JobService:
             # between registering and enqueueing leaves the same wreckage.
             await self._release(job)
             raise
-        return SubmitOutcome(job=job, passive=passive, enqueued=True, existing=False)
+        return SubmitOutcome(
+            job=job,
+            passive=passive,
+            enqueued=True,
+            existing=False,
+            scheduling_key=passive_outcome.scheduling_key,
+        )
 
     # --- reads and cancellation ---------------------------------------------
 
@@ -380,6 +434,7 @@ class JobService:
                 return job
             cancelled = job.moved_to(JobState.CANCELLED, now=self._now())
             self._jobs[job_id.value] = cancelled
+        await self._persist(cancelled)
         # Outside the lock: cancelling a running job resumes its coroutine,
         # which will take the lock on its way out.
         await self.executor.cancel(job_id)
@@ -457,6 +512,7 @@ class JobService:
                 self._jobs[job_id.value] = completed
                 delay = None
 
+        await self._persist_id(job_id)
         if delay is not None:
             await self.executor.schedule(
                 job_id, self._work(job_id, submitted, principal), delay_seconds=delay
@@ -484,7 +540,8 @@ class JobService:
             if job is None or job.state not in {JobState.PENDING, JobState.RETRY_SCHEDULED}:
                 return False
             self._jobs[job_id.value] = job.moved_to(JobState.RUNNING, now=self._now())
-            return True
+        await self._persist_id(job_id)
+        return True
 
     async def _fail(self, job_id: JobId, failure: JobFailure) -> None:
         async with self._lock:
@@ -494,6 +551,7 @@ class JobService:
             self._jobs[job_id.value] = job.moved_to(
                 JobState.FAILED, now=self._now(), failure=failure
             )
+        await self._persist_id(job_id)
 
     def _new_job(
         self,
@@ -542,8 +600,14 @@ class JobService:
         """Undo a claim. Used when the work could not be handed to an executor.
 
         Removes the binding only when it still points at *this* job, so a
-        rollback can never free a key another submission has since taken.
+        rollback can never free a key another submission has since taken. The
+        persisted record goes with it: a job the executor never accepted can
+        never run, and one left in the store would answer a later handle with a
+        job that does not exist.
         """
+        if self.store is not None:
+            self._persisted.pop(job.id.value, None)
+            await self.store.delete(job.id.value)
         async with self._lock:
             self._jobs.pop(job.id.value, None)
             if job.idempotency_key is None:
@@ -553,11 +617,45 @@ class JobService:
             if binding is not None and binding.job_id == job.id.value:
                 del self._by_key[binding_key]
 
-    def _resolve_binding(
+    async def _resolve_binding(
         self, account: str, key: IdempotencyKey, target_digest: str
     ) -> CheckJob | None:
-        """The job this key already names, or `None`. Raises on a mismatch."""
-        return self._existing_for((account, key.value), target_digest)
+        """The job this key already names, or `None`. Raises on a mismatch.
+
+        Memory first, then the store. The order matters and the position does
+        too: this runs **before** the cache lookup, so a restarted process
+        answers a repeated handle with the *same job* rather than with a new
+        job carrying a cached result. Both avoid a probe; only one of them
+        keeps `docs/architecture.md` section 6's promise that a repeat returns
+        the existing result.
+        """
+        in_memory = self._existing_for((account, key.value), target_digest)
+        if in_memory is not None or self.store is None:
+            return in_memory
+        stored = await self.store.find_by_idempotency(
+            account, self._idempotency_digest(account, key)
+        )
+        if stored is None:
+            return None
+        if stored.owner != account:
+            # **The third barrier, and it is deliberately independent.** The
+            # digest already carries the owner and the adapter's `WHERE` already
+            # names it, so reaching here means a store answered a question it
+            # was not asked. Failing closed costs one duplicate submission;
+            # trusting it hands one account another account's job.
+            #
+            # `None` rather than an error, on the Phase 6 rule: a distinct
+            # answer would tell the caller that somebody else's job exists. The
+            # operator is told instead, which is who can act on it.
+            self.operator.record(
+                OperatorEvent(
+                    kind=OperatorEventKind.INTERNAL_ERROR, detail="idempotency owner mismatch"
+                )
+            )
+            return None
+        if stored.target_digest != target_digest:
+            raise IdempotencyConflict("this idempotency key is already in use")
+        return self._rehydrate(stored, key=key)
 
     def _existing_for(self, binding_key: tuple[str, str], target_digest: str) -> CheckJob | None:
         binding = self._by_key.get(binding_key)
@@ -591,6 +689,78 @@ class JobService:
 
     def _digest(self, value: str) -> str:
         return correlation_digest(self.correlation_key, value)
+
+    def _idempotency_digest(self, owner: str, key: IdempotencyKey) -> str:
+        """The stored form of an `(owner, key)` pair.
+
+        A **digest**, never the key. `IdempotencyKey` requires printable
+        space-free text and permits an `@`, so `alice@example.test` is a legal
+        key — Phase 7's privacy corpus found exactly that being printed — and a
+        store holding one would be a store holding an address.
+        """
+        return self._digest(f"idempotency|{owner}|{key.value}")
+
+    async def _persist(self, job: CheckJob, *, target_digest: str | None = None) -> None:
+        """Write one job's current state, when this deployment has a store."""
+        if self.store is None:
+            return
+        held = self._persisted.get(job.id.value)
+        digest = target_digest if target_digest is not None else (held or (None, None))[0]
+        idempotency = (held or (None, None))[1]
+        if job.idempotency_key is not None and idempotency is None:
+            idempotency = self._idempotency_digest(job.owner, job.idempotency_key)
+        self._persisted[job.id.value] = (digest, idempotency)
+        await self.store.save(_stored(job, target_digest=digest, idempotency=idempotency))
+
+    async def _persist_id(self, job_id: JobId) -> None:
+        """Write whatever the registry now holds for `job_id`."""
+        job = self._jobs.get(job_id.value)
+        if job is not None:
+            await self._persist(job)
+
+    def _rehydrate(self, stored: StoredJob, *, key: IdempotencyKey | None) -> CheckJob:
+        """A stored job back into the registry, with its binding restored.
+
+        The caller has just presented the key, so the in-memory binding can be
+        rebuilt from it — the store keeps only the digest, and this is the one
+        moment the raw key is legitimately in hand.
+        """
+        job = CheckJob(
+            id=JobId(stored.job_id),
+            owner=stored.owner,
+            state=stored.state,
+            created_at=stored.created_at,
+            updated_at=stored.updated_at,
+            retries_used=stored.retries_used,
+            result=_public(stored),
+            failure=stored.failure,
+            idempotency_key=key,
+        )
+        self._jobs[job.id.value] = job
+        self._persisted[job.id.value] = (stored.target_digest, stored.idempotency_digest)
+        if key is not None and stored.target_digest is not None:
+            self._by_key[(stored.owner, key.value)] = _KeyBinding(
+                job.id.value, stored.target_digest
+            )
+        return job
+
+    async def fetch(self, job_id: JobId, *, principal: Principal) -> CheckJob | None:
+        """This caller's job, from the registry or from the store.
+
+        The asynchronous half of `get`. `get` stays synchronous and in-memory
+        because an API request holds a live registry; this exists for a caller
+        that outlived the process which created the job — a resumed batch
+        reading what its rows became.
+        """
+        held = self.get(job_id, principal=principal)
+        if held is not None or self.store is None:
+            return None if held is None and self.store is None else held
+        stored = await self.store.load(job_id.value)
+        if stored is None or stored.owner != principal.rate_limit_account:
+            # The Phase 6 rule, unchanged by persistence: another account's job
+            # answers exactly what an unknown identifier does.
+            return None
+        return self._rehydrate(stored, key=None)
 
     def purge_finished(self, *, before: datetime, limit: int) -> int:
         """Forget terminal jobs older than `before`. Returns how many went.
@@ -650,3 +820,55 @@ class JobService:
 
     def _now(self) -> datetime:
         return self.clock.now()
+
+
+def _stored(job: CheckJob, *, target_digest: str | None, idempotency: str | None) -> StoredJob:
+    """A `CheckJob` as the store may keep it. A projection, never a copy.
+
+    The submitted address is not among the parameters, so it cannot reach the
+    store by being added to `CheckJob` later — the same structural argument
+    `application/public_result.py` makes about `Evidence.details`.
+    """
+    result = job.result
+    return StoredJob(
+        job_id=job.id.value,
+        owner=job.owner,
+        state=job.state,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        retries_used=job.retries_used,
+        idempotency_digest=idempotency,
+        target_digest=target_digest,
+        failure=job.failure,
+        status=None if result is None else result.status,
+        confidence=None if result is None else result.confidence,
+        primary_reason=None if result is None else result.primary_reason,
+        reasons=() if result is None else tuple(result.reasons),
+        risk_flags=() if result is None else tuple(result.risk_flags),
+        checks=(
+            ()
+            if result is None
+            else tuple((name, check.result) for name, check in result.checks.items())
+        ),
+        ruleset=None if result is None else result.ruleset,
+    )
+
+
+def _public(stored: StoredJob) -> PublicResult | None:
+    """The stored projection back into the type a caller is handed.
+
+    `None` for anything but a completed job, which `StoredJob` already refuses
+    to hold — so this reads a guarantee rather than making one.
+    """
+    if stored.status is None or stored.confidence is None or stored.ruleset is None:
+        return None
+    return PublicResult(
+        status=stored.status,
+        confidence=stored.confidence,
+        primary_reason=stored.primary_reason,
+        reasons=stored.reasons,
+        risk_flags=stored.risk_flags,
+        checks={name: PublicCheck(result=value) for name, value in stored.checks},
+        no_message_data_sent=True,
+        ruleset=stored.ruleset,
+    )

@@ -402,7 +402,15 @@ def test_the_stop_conditions_live_under_their_own_heading() -> None:
 
 def test_there_are_exactly_seven_and_the_count_is_asserted() -> None:
     """A condition added later must be added to this table too, and one quietly
-    dropped from the document fails its own row above."""
+    dropped from the document fails its own row above.
+
+    **Seven, and Phase 10 did not change that.** An earlier Phase 10 revision
+    made it eight by promoting the CSV upload's body limit to a condition of its
+    own — but request body size was already the third of the approved seven, so
+    that was a duplicate wearing a new name, and it silently rewrote a Phase 7
+    invariant to accommodate a later Phase. The upload-specific wording lives
+    inside condition three and is pinned by its own Phase 10 test.
+    """
     text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
     section = text.split("#### Stop conditions on the ASGI binding", 1)[1].split("###", 1)[0]
     bullets = [line for line in section.splitlines() if line.startswith("- ")]

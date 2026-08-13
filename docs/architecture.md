@@ -760,7 +760,13 @@ Recorded here rather than left to be discovered by whoever writes it:
   trusted without an operator-configured list of proxies that may set it. Until
   that list exists, the source layer stays uncounted;
 - **request body size.** `VerificationLimits.max_submitted_length` bounds the
-  address; the *body* needs a bound before it is parsed, which is middleware;
+  address; the *body* needs a bound before it is parsed, which is middleware.
+  **For a future batch upload, the request body limit must be enforced while the
+  body is read, not only after the complete upload has been buffered.** Phase 10
+  made the batch input bytes and `parse_batch_csv` bounds them before decoding —
+  but that bound is applied to a value already in memory, so it cannot be the
+  one that protects the process. This is a specialization of this condition, not
+  an eighth condition;
 - **request logging redaction.** `prompts/06-api-cli.md`'s middleware, using
   `security/redaction.py` rather than a second implementation;
 - **one `Deployment` per process, built at startup.** Not per request: a guard,
@@ -768,6 +774,110 @@ Recorded here rather than left to be discovered by whoever writes it:
 - **no request-local limiter, quota store, or admin state**, for the same
   reason;
 - **the administrative interface is not mounted on the public application.**
+
+Phase 10 added no condition to this list. It sharpened the third, and the reason
+it stopped at an application service rather than an upload route is that the
+sharpened half is not implemented: there is no middleware, so there is nothing to
+enforce a limit while a body is read.
+
+### Controlled batch execution
+
+Phase 10. `prompts/10-batch.md` is the scope and ADR 0018 records the decisions.
+Four properties are graph-level rather than module-level.
+
+**A batch row is an ordinary `JobService.submit`.** `application/batch.py`
+reaches nothing lower — not the verification service, not the probe, not a
+transport, not a resolver — so *reuse all existing budgets* and *no increase in
+per-destination rate* are inherited rather than reimplemented. Measured, not
+assumed: against the default 512-job registry a thousand-row batch submits 512
+and refuses 488, each refusal explicit.
+
+**Fairness is two rotations, and the second needed a seam.**
+`application/batch.py`'s `FairRotation` serves exchangers in turn, and the
+domains sharing one in turn within it. The exchanger comes from
+`VerificationOutcome.scheduling_key`, produced by `scheduled_exchanger` and read
+rather than derived — a batch resolving DNS itself would duplicate Phase 2's
+ordering, caching, and destination policy.
+
+**What `scheduling_key` means, exactly.** It is *the exchanger this verification
+will approach first*: the preferred connectable candidate, **after** the
+administrator's blocked-exchanger switch has removed the hosts
+`application/verification.py` would skip. Both facts are load-bearing. An
+earlier revision read `connectable_candidates[0]` unfiltered, which named a host
+the verification then skipped whenever the preferred one was blocked — so a
+caller scheduling by it was accounting one destination's work against another,
+and spreading load across a host nothing contacts. One function now answers the
+question for both the key and the charge, so the two cannot drift.
+
+**The limit of that, stated rather than implied.** Phase 4E falls through to a
+later candidate when an attempt fails before the recipient stage, and no value
+computed before the verification runs can know whether that will happen. So
+Phase 10 provides **fairness over first-approached exchangers**, not fairness
+over every attempt. A test asserts that the plan handed to Phase 4E contains a
+host the key does not name, so the scope cannot quietly inflate. Per-attempt
+fairness would need a seam inside `application/smtp_verification.py`, which is
+below the layer that decides what to schedule and after the decision has been
+made.
+
+That seam exists because **a rate bound is not a fairness property**. The
+Phase 4 limiter partitions by recipient domain alone; the MX host is carried and
+validated and divides no budget. So twenty domains behind one provider hold
+twenty independent concurrency slots and twenty independent buckets, every
+per-domain rule satisfied, while that provider takes every worker. A test
+measures exactly that, so the claim is not a reading of the code.
+
+**Resumability is persistence on both sides, not memory.**
+`ports/batch_store.py` keeps row state, the child `JobId`, and a deterministic
+per-row idempotency handle. A row is written as `claimed` **before** the
+submission is attempted, so a process that stops between the call and the record
+leaves a row whose handle is already persisted.
+
+That alone was not enough, and the gap was a safety one rather than a
+convenience one. `JobService`'s registry and its idempotency bindings lived only
+in memory, so a **new process** presented with the same handle had no record of
+it and started a **second verification** for a row whose verification had
+already run — a duplicate `RCPT TO` for one address, arranged by restarting.
+`ports/job_store.py` and `adapters/storage/sqlite_job_store.py` close it: job
+identity, state, retry count, the result projection, and a **digest** of the
+`(owner, idempotency key)` pair survive, so a fresh `JobService` answers the
+handle with the existing job. The key itself is never stored —
+`IdempotencyKey` permits an `@` and Phase 7's privacy corpus found an address
+used as one.
+
+`application/retention.py` is the one seam for all of it. The persistent job
+store is swept on the **same** cutoff the in-memory registry uses, so
+persistence does not quietly extend `docs/privacy.md` section 3's window in
+order to make a resume work; and `BatchStore` is swept there too, with **two
+cutoffs rather than one** — `BatchSettings.input_retention_seconds` clears the
+retained submitted addresses, `result_retention_seconds` removes the batch and
+its artifact. `RetentionService` holds the operations; **no scheduler runs
+them**, because composition is deferred, and wiring one is a stop condition
+rather than a claim. The job store holds no address at all: digests and
+published vocabulary only.
+
+Ownership of a persisted job has three independent barriers — the binding digest
+carries the owner, the adapter's `WHERE` names it, and `JobService` compares it
+after the lookup — each pinned by a test that fails when only it is removed. The
+third exists because an independent review deleted the second and nothing
+noticed.
+
+**What a restart recovers, and what it does not.** It recovers *identity, state,
+retry budget, and result*: a completed child's verdict is readable by a process
+that did not create it, a cancelled child stays cancelled, and a spent retry
+stays spent. It does **not** re-execute work that was in flight. A job that was
+`running` when the process died stays `running`, is visible, and is reported by
+its batch as not yet final — because this project cannot know whether its one
+`RCPT TO` was already issued, and re-running it on the assumption that it was
+not is exactly the duplicate the store exists to prevent. Re-executing
+interrupted work is a worker-recovery property of the queue
+`docs/requirements.md` section 15 defers to the service-active profile, and it
+is not something Phase 10 may invent on a development executor.
+
+**The result is an expiring artifact behind a principal.** Owner and expiry are
+predicates of the read, not filters after it, and the artifact carries a
+`complete` flag: a batch stops submitting long before its verifications stop
+running, and a report rendered in between is a submission report. A row's status
+column is filled only from a job that reached `completed`.
 
 ### Ports
 
@@ -794,6 +904,7 @@ cache, rate limiting, time, and randomness.
 - `RemoteCheckClient`
 - `QuotaStore`
 - `MetricsSink`
+- `BatchStore`
 
 `MonotonicClock` and `Sleeper` are the two halves of the same problem: a
 component that reads `time.monotonic()` can only be tested against the machine's

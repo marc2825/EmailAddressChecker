@@ -172,6 +172,22 @@ class VerificationOutcome:
     #: second place is how two policies drift apart. It decides nothing: no
     #: status, confidence, reason, or flag reads it.
     route_ttl_seconds: int | None = None
+    #: The canonical host of the exchanger this route would be approached
+    #: through first, and `None` when there is nowhere to connect.
+    #:
+    #: **Scheduling metadata, on the `route_ttl_seconds` precedent.** It decides
+    #: nothing — no status, confidence, reason, or flag reads it — and it exists
+    #: so that a caller ordering many verifications can group them by the
+    #: destination they will actually reach, without resolving DNS a second time
+    #: through a path that has none of Phase 2's caching, ordering, or
+    #: destination policy. `prompts/10-batch.md` asks for *fair scheduling by
+    #: target domain and MX*, and this is the only honest way for anything above
+    #: `AddressVerificationService` to learn the second half.
+    #:
+    #: It is the same host `application/abuse.py` is already charged for, taken
+    #: from `connectable_candidates[0]`: a public DNS record, and the vocabulary
+    #: `docs/requirements.md` section 16 already permits aggregating by.
+    scheduling_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,7 +309,11 @@ class AddressVerificationService:
             # `aggregate_evidence` separates them: `invalid` for one, `unknown`
             # for the other.
             return self._finish(
-                self.syntax.evidence(parsed), active=False, target=None, route_ttl=None
+                self.syntax.evidence(parsed),
+                active=False,
+                target=None,
+                route_ttl=None,
+                scheduling_key=None,
             )
 
         assert isinstance(parsed, AddressAccepted)
@@ -328,6 +348,7 @@ class AddressVerificationService:
             active=attempted,
             target=target,
             route_ttl=None if route.ttl is None else route.ttl.applied_seconds,
+            scheduling_key=scheduled_exchanger(route, self.guard),
         )
 
     async def _verify_recipient(
@@ -432,6 +453,7 @@ class AddressVerificationService:
         active: bool,
         target: NormalizedAddress | None,
         route_ttl: int | None,
+        scheduling_key: str | None,
     ) -> VerificationOutcome:
         """Aggregate, report an internal failure to the operator, and return.
 
@@ -450,5 +472,45 @@ class AddressVerificationService:
                 )
             )
         return VerificationOutcome(
-            verdict=verdict, active=active, target=target, route_ttl_seconds=route_ttl
+            verdict=verdict,
+            active=active,
+            target=target,
+            route_ttl_seconds=route_ttl,
+            scheduling_key=scheduling_key,
         )
+
+
+def scheduled_exchanger(route: MailRoute, guard: AbuseGuard | None) -> str | None:
+    """The exchanger this verification would approach **first**, or `None`.
+
+    Read from `connectable_candidates`, so it is empty for exactly the outcomes
+    Phase 2 already decided have nowhere to connect — a Null MX, an
+    authoritative absence, a temporary failure — and no DNS answer is
+    re-interpreted here. The host is the validated canonical form a
+    `RouteCandidate` carries; nothing is parsed and nothing is normalized again.
+
+    **The administrator's blocked-exchanger switch is applied.** An earlier
+    revision returned `connectable_candidates[0]` unfiltered, which named a host
+    this verification would then skip: `_verify_recipient` removes every blocked
+    exchanger before Phase 4E plans, so the preferred candidate and the first
+    one actually approached are different values whenever the preferred one is
+    blocked. A scheduling key that named the blocked host would be accounting
+    one destination's work against another — and a caller ordering work by it
+    would be spreading load across a host nothing ever contacts.
+
+    This is the *same read* of the same switch, in one function both callers
+    use, rather than a second policy: it removes nothing from the plan and
+    approves nothing. `_verify_recipient` still does the filtering that decides
+    what is attempted.
+
+    **It names the first exchanger, not every one.** Phase 4E falls through to a
+    later candidate when an attempt fails before the recipient stage, and no
+    value computed before the verification runs can know whether that will
+    happen. See `docs/architecture.md` for the exact scope of what a caller may
+    conclude from this.
+    """
+    for candidate in route.connectable_candidates:
+        if guard is not None and guard.exchanger_blocked(candidate.host.value):
+            continue
+        return candidate.host.value
+    return None

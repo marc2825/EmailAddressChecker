@@ -39,13 +39,16 @@ and returns.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Final, Protocol
 
 from emailcheck.application.admin import AdminControl
 from emailcheck.application.jobs import JobService
+from emailcheck.domain.batch import BatchSettings
+from emailcheck.ports.batch_store import BatchStore
 from emailcheck.ports.clock import Clock
+from emailcheck.ports.job_store import JobStore
 from emailcheck.ports.quota import QuotaStore
 
 #: `docs/privacy.md` section 3: plaintext request data lives 24 hours. A
@@ -95,6 +98,14 @@ class DeletionReport:
     verdicts_removed: int = 0
     jobs_removed: int = 0
     quota_counters_removed: int = 0
+    #: Expired batches removed, and batches whose retained submitted addresses
+    #: were cleared. **Two counts because they are two policies**: a batch's
+    #: accounting and its downloadable result live under
+    #: `BatchSettings.result_retention_seconds`, and the plaintext a resume
+    #: needs lives under the much shorter `input_retention_seconds`. Collapsing
+    #: them would let one window silently extend the other.
+    batches_removed: int = 0
+    batch_inputs_cleared: int = 0
     failed: bool = False
     #: `True` when the batch limit was reached, so a scheduler knows to run
     #: again rather than waiting for the next interval.
@@ -102,7 +113,13 @@ class DeletionReport:
 
     @property
     def total_removed(self) -> int:
-        return self.verdicts_removed + self.jobs_removed + self.quota_counters_removed
+        return (
+            self.verdicts_removed
+            + self.jobs_removed
+            + self.quota_counters_removed
+            + self.batches_removed
+            + self.batch_inputs_cleared
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +136,28 @@ class RetentionService:
     settings: RetentionSettings = RetentionSettings()
     store: ExpiringStore | None = None
     jobs: JobService | None = None
+    #: The persistent half of the job registry, when a deployment has one.
+    #:
+    #: Swept with the **same window** `JobService.purge_finished` applies in
+    #: memory, and by the same sweep. Persistence exists so a restart cannot
+    #: duplicate a verification; it is not a reason to keep a job longer than
+    #: `docs/privacy.md` section 3 allows, and a second retention policy for the
+    #: same records is how one of them becomes wrong.
+    job_store: JobStore | None = None
+    #: Batch state, its retained submitted addresses, and its expiring results.
+    #:
+    #: Here rather than behind a timer of its own: `docs/privacy.md` section 3's
+    #: deletion is one policy with one operator-visible failure signal, and a
+    #: batch-only background loop would be a second retention mechanism to keep
+    #: in step with this one.
+    batches: BatchStore | None = None
+    #: The batch deployment's own settings, because **the plaintext window is
+    #: theirs and not this service's**. `RetentionSettings.job_retention_seconds`
+    #: prices a job; `BatchSettings.input_retention_seconds` prices a submitted
+    #: address, is capped at `MAX_INPUT_RETENTION`, and is what the sweep below
+    #: actually subtracts. A second copy of that number here is how the
+    #: configured value and the enforced value drift apart.
+    batch_settings: BatchSettings = field(default_factory=BatchSettings)
     quota: QuotaStore | None = None
 
     async def run(self) -> DeletionReport:
@@ -134,16 +173,34 @@ class RetentionService:
         verdicts = 0
         jobs = 0
         counters = 0
+        batches = 0
+        inputs_cleared = 0
         failed = False
 
         try:
             if self.store is not None:
                 verdicts = await self.store.purge_expired(now=now, limit=limit)
+            cutoff = now - timedelta(seconds=self.settings.job_retention_seconds)
             if self.jobs is not None:
-                jobs = self.jobs.purge_finished(
-                    before=now - timedelta(seconds=self.settings.job_retention_seconds),
+                jobs = self.jobs.purge_finished(before=cutoff, limit=limit)
+            if self.job_store is not None:
+                # Counted into the same total rather than reported separately:
+                # one job removed from memory and from disk is one job removed,
+                # and two counters for it would make the operator's number the
+                # sum of a job with itself.
+                persisted = await self.job_store.purge_terminal(before=cutoff, limit=limit)
+                jobs = max(jobs, persisted)
+            if self.batches is not None:
+                # **Two operations, two cutoffs.** Clearing the plaintext a
+                # resume needs is not the same act as removing a finished
+                # batch's accounting and its downloadable result, and running
+                # only one of them would leave either an address nobody may
+                # keep or a store that only grows.
+                inputs_cleared = await self.batches.forget_inputs(
+                    before=now - timedelta(seconds=self.batch_settings.input_retention_seconds),
                     limit=limit,
                 )
+                batches = await self.batches.purge_expired(now=now, limit=limit)
             if self.quota is not None:
                 counters = await self.quota.purge_expired(now=now.timestamp())
         except Exception:
@@ -157,8 +214,10 @@ class RetentionService:
             verdicts_removed=verdicts,
             jobs_removed=jobs,
             quota_counters_removed=counters,
+            batches_removed=batches,
+            batch_inputs_cleared=inputs_cleared,
             failed=failed,
-            more_remaining=not failed and (verdicts >= limit or jobs >= limit),
+            more_remaining=not failed and (verdicts >= limit or jobs >= limit or batches >= limit),
         )
         self.admin.record_deletion(removed=report.total_removed, failed=failed)
         return report
