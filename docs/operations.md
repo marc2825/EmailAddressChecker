@@ -51,6 +51,28 @@ spends one unit.
 So `per_account = 5000` is roughly 2500 active submissions per window, not 5000.
 Size these as spends. ADR 0016 decision 5c has the table.
 
+The "third time" is now rarer than it reads: ADR 0019 permits an automatic retry
+only for a first attempt that provably did not reach the recipient stage, and in
+this build that is DNS SERVFAIL alone. Size for it anyway — the budget must
+cover the worst case, and the retry that does run costs a full verification.
+
+### Restarts and interrupted jobs
+
+Persistent job state and a durable execution queue are different things, and
+only the first exists. A process that stops does not resume its in-flight
+verifications when it comes back, because a `running` job may already have
+issued its one `RCPT TO` and re-running it would contact one recipient twice.
+Reconciling those rows is an operator action —
+`JobService.recover_interrupted` — and
+[runbooks/queue-store-outage.md](runbooks/queue-store-outage.md) section 7 has
+the procedure and the two conditions on running it.
+
+Executor admission uses an irrevocable durable token before the executor call.
+A definite refusal preserves the same JobId as an operational failure; a crash
+on either side of the call is never treated as permission for another replica
+to submit the job again. This is conservative handoff safety, not a durable
+queue or exactly-once execution claim.
+
 ## 3. Alerting
 
 Alert on:

@@ -94,7 +94,55 @@ retention window was exceeded, or if the backlog was discarded.
 1. Bring the store back and confirm the quota counters read and write.
 2. Run the retention sweep before resuming work, so the backlog of expired
    records is cleared and the overrun is bounded.
-3. Re-enable probing with `AdminControl.set_active_probing(True)`.
-4. Watch queue depth, policy blocks, and timeouts for the first hour. A recovery
+3. Reconcile jobs the stopped process left behind — section 7.
+4. Re-enable probing with `AdminControl.set_active_probing(True)`.
+5. Watch queue depth, policy blocks, and timeouts for the first hour. A recovery
    that immediately re-fills the queue is a capacity problem you have not fixed
    yet.
+
+## 7. Jobs a stopped process left unfinished
+
+**A restarted process does not resume interrupted work, and this is deliberate.**
+The job store keeps job *state*; it is not a durable execution queue, and the
+executor dies with its process. A `pending`, `running`, or `retry_scheduled` row
+found after a restart therefore has nothing that will ever advance it, and the
+one thing that must not happen is for something to re-run it: a `running` row
+may already have issued its one `RCPT TO`, and this project cannot tell. ADR
+0019.
+
+The separate admission field explains how a `pending` row reached the gap.
+`claimed` means the identity exists but no executor call was authorized;
+`handoff_committed` means that JobId irrevocably spent the one handoff
+opportunity, whether the executor later accepted it or the process disappeared
+around the call. Neither is replayed. A definite executor refusal is already
+terminal `failed` / `admission_failed` and is not returned by reconciliation.
+
+`JobService.recover_interrupted(before=…, limit=…)` is the reconciliation. It
+ends each such row as `failed` with the `interrupted` category — an operational
+state carrying **no status**, because "we do not know whether we contacted the
+recipient" is a fact about this service and not about a mailbox. Callers polling
+those jobs get a terminal answer instead of a job that never moves.
+
+**No scheduler runs it.** Invoke it deliberately, as you would the retention
+sweep, and only under these two conditions:
+
+- **`before` is a cutoff, not a formality.** Pass a moment comfortably older than
+  the longest verification this deployment allows — an hour is ample against a
+  30-second total deadline. A store shared with a live replica plus a scan with
+  no cutoff is one process declaring another process's running jobs dead. The
+  operation also skips rows whose executor handoff the calling service owns.
+  A row merely rehydrated from another process is an observer snapshot, not
+  locally owned work;
+- **run it once, from one place.** It is idempotent in effect, but two operators
+  running it against different replicas at the same time is the situation the
+  cutoff exists to make safe rather than one to rely on.
+
+The returned report carries four counts. `unsafe_to_replay` is the one to
+record: it is how many interrupted operations had reached the point where a
+recipient may already have been contacted, which is the number that says whether
+the incident touched anybody else's mail server.
+
+Do **not** re-submit those addresses automatically to "finish the batch". A
+caller may re-submit with a fresh idempotency key if they choose to; that is
+their decision and their budget, and it is visible as a new job rather than as a
+silent second probe.

@@ -283,12 +283,34 @@ Cache keys include relevant ruleset, sender identity, and normalized target HMAC
 
 ## 14. Retry defaults
 
-At most one automatic retry in the MVP.
+At most one automatic retry in the MVP, and **only for a first attempt that
+provably did not reach the recipient stage**.
 
-- explicit temporary SMTP response: approximately 20 minutes plus jitter;
+The recipient-touch precondition governs. One high-level active verification
+operation may contact a recipient at most once in total (section 9,
+`docs/threat-model.md`), and an automatic retry is a second whole verification —
+so once `RCPT TO` may have been issued, the operation is settled rather than
+replayed, whatever the reply said. This is a precondition rather than a fourth
+row: a condition below that is *also* recipient-touched is not retried.
+
+- explicit temporary SMTP response: approximately 20 minutes plus jitter, when
+  the response was observed before the recipient stage;
 - DNS SERVFAIL: one retry after a few minutes;
 - connection timeout: one retry only if service health is otherwise normal;
-- no retry for syntax, NXDOMAIN, Null MX, or permanent policy response.
+- no retry for syntax, NXDOMAIN, Null MX, or permanent policy response;
+- no retry once the recipient stage was reached, including a `450`, a `451`, a
+  `452`, a `552 5.2.2`, a `RCPT TO` whose reply never arrived, and a write of
+  that command which failed part way.
+
+In this build the first bullet therefore schedules nothing in practice: the
+reason codes it maps to — `smtp_temporary_failure` and `mailbox_full` — are
+produced only from the reply to `RCPT TO`. The delay is kept because it is the
+figure that applies should such a response ever be observed earlier in a
+dialogue, and because the alternative reading of the bullet is the one that put
+a second `RCPT TO` on the wire for one submitted address.
+
+A process restart is not a retry and does not resume interrupted work. See
+section 15 and `docs/architecture.md`.
 
 Retry with the same target, sender, and stable identity. Do not rotate identity.
 

@@ -1,8 +1,16 @@
 # ADR 0014: Bounded asynchronous active jobs
 
-- Status: Accepted
+- Status: Accepted, partly superseded by ADR 0019
 - Date: 2026-08-10
 - Phase: 6
+
+> **Three decisions below are superseded by ADR 0019** (final system audit,
+> Remediation A), and each is marked where it appears: retry eligibility now
+> additionally requires that the first attempt did not reach the recipient
+> stage; the idempotency read and write move from a process-local lock into an
+> atomic store operation; and the consequence "no job state survives a process
+> restart" stopped being true at Phase 10 and is now wired into production
+> composition. Everything else here stands.
 
 ## Context
 
@@ -140,19 +148,31 @@ normalization vocabulary for no benefit.
 The read and the write happen under one lock, so two concurrent submissions
 carrying the same key cannot both miss and both register.
 
-## Decision: an executor that refuses leaves nothing behind
+**Superseded by ADR 0019.** The lock is correct for two coroutines and worth
+nothing against two processes: measured over one database, two `JobService`
+instances with one owner, one key, and one address produced two jobs, two
+enqueues, and two persistent bindings. The decision moves into
+`JobStore.claim_idempotency`, one transaction against a unique index. The lock
+stays for the registry.
 
-`submit` registers the job and then hands it to the executor. If the executor
-refuses, the registration is **rolled back**.
+## Decision: an executor that refuses leaves no nonterminal orphan
+
+`submit` registers the job and then hands it to the executor. The original
+in-memory contract rolled a refusal back so no un-evictable `pending` orphan
+remained.
 
 Without that, a `pending` job the executor never accepted stays in the registry
 for ever: it can never run, and `_evict` only removes *terminal* jobs. A burst
 of executor pressure therefore converted into a permanent `JobsFull`, surviving
 the executor's recovery — measured at four refusals against a four-job registry.
-The rollback catches `BaseException`, because a cancellation between registering
-and enqueueing leaves the same wreckage, and it removes the idempotency binding
-only when it still points at its own job, so it can never free a key another
-submission has since taken.
+
+**Superseded by ADR 0019's final follow-up.** Once a durable claim commits,
+another replica may observe it, so deleting it on refusal leaves that observer
+holding a pending phantom. The current protocol persists an irrevocable
+`handoff_committed` token before calling the executor; refusal preserves the
+same JobId and binding as terminal `failed` / `admission_failed`. Terminal jobs
+are evictable, so the original capacity property remains without releasing an
+already-observable identity.
 
 Registration stays *first*, rather than enqueueing first and registering after:
 a worker must never run a job the registry cannot answer for, and
@@ -181,6 +201,16 @@ change `--remote`. A refused redirect is an answer rather than a transient
 failure, so it is not retried.
 
 ## Decision: retry eligibility is a closed set read out of section 14
+
+**Partly superseded by ADR 0019.** The table below is unchanged and is still the
+closed set; what changed is that membership became *necessary and not
+sufficient*. An automatic retry additionally requires that the first attempt did
+not reach the recipient stage. The reasoning at the end of this section — that
+`smtp_temporary_failure` and `mailbox_full` arise only at the recipient stage,
+and that a second whole verification is therefore what section 14's first bullet
+authorizes — is correct about the first half and wrong about the second: it
+makes that retry a second `RCPT TO` for one submitted address, which the final
+system audit counted on the wire.
 
 `docs/requirements.md` section 14 gives three retryable conditions and one
 prohibition. Mapped onto published reason codes, keyed on the verdict's
@@ -279,6 +309,11 @@ would be the exact re-derivation Phase 5 stop condition 1 forbids.
   covers it: a worker reaching `SMTPProbeService`, `SMTPConnector`, or
   `SMTPTransport` is refused by test rather than by convention;
 - no job state survives a process restart, and nothing claims it does.
+  **Superseded**: Phase 10 added `ports/job_store.py` because a restarted batch
+  presenting a deterministic handle was starting a second verification, and ADR
+  0019 wires that store into production composition and adds the
+  recipient-touch checkpoint. Persistent job *state* now survives; a durable
+  execution *queue* still does not, and that distinction is the recovery policy.
 
 ## Alternatives rejected
 
@@ -292,3 +327,7 @@ would be the exact re-derivation Phase 5 stop condition 1 forbids.
   limiter, and the deadline — every bound Phase 6 added.
 - **Durable jobs in SQLite.** No document asks for them, and a job table that
   outlives a process is retained personal data with no retention rule.
+  **Reversed by Phase 10 and ADR 0019**: `prompts/10-batch.md` does ask for
+  resumable job state, and the retention rule exists —
+  `RetentionService` sweeps the job store on the same window as the registry, so
+  persistence does not quietly extend `docs/privacy.md` section 3.

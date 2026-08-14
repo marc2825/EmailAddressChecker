@@ -68,18 +68,44 @@ class JobState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class JobAdmission(StrEnum):
+    """The durable executor-handoff fact, separate from public job state.
+
+    `HANDOFF_COMMITTED` is written before the executor is called. It grants
+    only the claiming process the right to make that call; it does not claim a
+    queue acknowledged it. A crash on either side of the call may lose work,
+    conservatively, but can never authorize a second executor admission.
+    """
+
+    CLAIMED = "claimed"
+    HANDOFF_COMMITTED = "handoff_committed"
+    ADMISSION_FAILED = "admission_failed"
+    NOT_REQUIRED = "not_required"
+    INTERRUPTED = "interrupted"
+
+
 #: Terminal states, named once. A job in one of these is finished, and the
 #: transition table gives it no exit.
 TERMINAL_STATES: Final[frozenset[JobState]] = frozenset(
     {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}
 )
 
-#: The closed transition table. ADR 0014.
+#: The closed transition table. ADR 0014, amended by Remediation A.
 #:
 #: Every terminal state maps to the empty set rather than being absent, so a
 #: lookup never has to decide what a missing key means.
+#:
+#: **`pending -> failed` and `retry_scheduled -> failed` exist because work can
+#: stop being arrangeable.** Both were absent while the only way to leave those
+#: states was to run, and the final system audit found the two places where that
+#: is untrue: a `retry_scheduled` job whose `schedule()` call is refused, and a
+#: nonterminal job found in the store by a process that has no queue to resume it
+#: on. Without these rows the honest outcome — an operational failure, carrying a
+#: category and **no status** — was unreachable, and the job stayed nonterminal
+#: with nothing that would ever run it. `pending -> completed` is still refused:
+#: a job that never ran cannot have a *result*, and `JobFailure` is not one.
 PERMITTED_TRANSITIONS: Final[dict[JobState, frozenset[JobState]]] = {
-    JobState.PENDING: frozenset({JobState.RUNNING, JobState.CANCELLED}),
+    JobState.PENDING: frozenset({JobState.RUNNING, JobState.FAILED, JobState.CANCELLED}),
     JobState.RUNNING: frozenset(
         {
             JobState.COMPLETED,
@@ -88,7 +114,7 @@ PERMITTED_TRANSITIONS: Final[dict[JobState, frozenset[JobState]]] = {
             JobState.CANCELLED,
         }
     ),
-    JobState.RETRY_SCHEDULED: frozenset({JobState.RUNNING, JobState.CANCELLED}),
+    JobState.RETRY_SCHEDULED: frozenset({JobState.RUNNING, JobState.FAILED, JobState.CANCELLED}),
     JobState.COMPLETED: frozenset(),
     JobState.FAILED: frozenset(),
     JobState.CANCELLED: frozenset(),
@@ -120,6 +146,19 @@ class JobFailure(StrEnum):
     SERVICE_ERROR = "service_error"
     #: Capacity, pacing, or the verification-total deadline refused it.
     CAPACITY_UNAVAILABLE = "capacity_unavailable"
+    #: The process that owned this job stopped, and no later process may resume
+    #: it automatically.
+    #:
+    #: **A category, and deliberately not a status.** This project cannot know
+    #: whether the one `RCPT TO` had already been issued when the process died,
+    #: and `docs/threat-model.md` bounds one active operation at one recipient
+    #: contact — so re-running the verification on the assumption that it had not
+    #: is precisely the duplicate that bound exists to prevent. The honest answer
+    #: is that the operation did not finish, which is an operational fact about
+    #: this service. Turning "we do not know whether we touched the recipient"
+    #: into `unknown`, `temporary_unknown`, or any other published status would
+    #: be making a statement about a mailbox out of a statement about a crash.
+    INTERRUPTED = "interrupted"
 
 
 @dataclass(frozen=True, slots=True)

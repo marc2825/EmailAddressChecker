@@ -30,6 +30,17 @@ refuses a `TLSTrust` constructed anywhere outside `adapters/smtp/tls.py`.
 **The sender identity is operator configuration too.** It comes from a mapping
 this function is handed, never from a target and never from a request.
 
+**A component that is built here is a component that is wired here.** The
+persistent `JobStore` existed in `adapters/` and this module constructed none,
+so `JobService` ran with `store=None` in every deployment: the durable
+idempotency claim that makes two replicas agree, and the recipient-touch
+checkpoint that stops a restarted process replaying an operation which may
+already have contacted a mailbox, were both unreachable from any configuration.
+The final system audit found it. The wiring is now here, `VerificationStack`
+holds the store as a field, and a composition test asserts the *identity* of
+`stack.jobs.store` — because "a store was created" and "the service has it" are
+different statements and only the second one matters.
+
 **A profile is a refusal, not a label.** `docs/requirements.md` section 15 gives
 service-active an isolated worker and authentication;
 `prompts/06-api-cli.md` asks for a configuration that *refuses* the unsafe
@@ -57,6 +68,7 @@ from emailcheck.adapters.smtp.sender_identity import (
     ConfiguredSenderIdentityProvider,
     load_sender_identity,
 )
+from emailcheck.adapters.storage.sqlite_job_store import SQLiteJobStore
 from emailcheck.adapters.storage.sqlite_store import SQLiteVerdictStore
 from emailcheck.adapters.system.clock import SystemClock, SystemMonotonicClock, SystemSleeper
 from emailcheck.adapters.system.quota import InProcessQuotaStore
@@ -144,6 +156,20 @@ class Deployment:
     #: "when configured", and this project licenses no name dataset.
     common_names: frozenset[str] = frozenset()
     store_path: Path | None = None
+    #: Where job identity, state, the retry budget, and the recipient-touch
+    #: checkpoint are kept. A **second** file rather than a second table in
+    #: `store_path`: the two have independent schema versions and independent
+    #: retention arguments, and `SQLiteJobStore` refuses a file another schema
+    #: wrote.
+    #:
+    #: Configured, never derived. An earlier build shipped the store and left
+    #: `JobService(store=...)` unset in this module, so the durable idempotency
+    #: binding a restart depends on existed in `adapters/` and was reachable from
+    #: nothing — the final system audit found it. Deriving a path from
+    #: `store_path` would have hidden the same class of mistake behind a
+    #: convention; an operator names it, and a composition test asserts that
+    #: naming it is enough.
+    job_store_path: Path | None = None
     profile: DeploymentProfile = DeploymentProfile.LOCAL_PASSIVE
     #: Whether this deployment may open SMTP connections at all.
     #: `docs/requirements.md` section 15's local-passive profile sets this false
@@ -168,6 +194,12 @@ class Deployment:
             # Section 15's local-passive profile is "no active probes". A
             # deployment claiming both is a misconfiguration, not a preference.
             raise ValueError("the local-passive profile does not probe")
+        if self.profile is DeploymentProfile.LOCAL_PASSIVE and self.job_store_path is not None:
+            # That profile accepts no job, so a job database would be a file
+            # nothing writes and a retention obligation nothing incurs. Refused
+            # rather than ignored, on this type's rule that a setting which
+            # cannot take effect is a misconfiguration.
+            raise ValueError("the local-passive profile accepts no jobs and needs no job store")
 
     def __repr__(self) -> str:
         """Everything an operator needs, and no secret material.
@@ -182,7 +214,8 @@ class Deployment:
             f"api_keys=<{len(self.api_keys)} configured>, "
             f"correlation_key=<redacted>, "
             f"sender_identity=<{'configured' if self.sender_identity else 'none'}>, "
-            f"store_path={self.store_path!r})"
+            f"store_path={self.store_path!r}, "
+            f"job_store_path={self.job_store_path!r})"
         )
 
 
@@ -207,6 +240,10 @@ class VerificationStack:
     correlation_key: bytes = field(repr=False)
     executor: InMemoryJobExecutor | None = None
     jobs: JobService | None = None
+    #: Held as a field so a test can assert **identity** with `jobs.store`
+    #: rather than trusting that the wiring happened. The final system audit
+    #: found a build where this object existed and `JobService` did not have it.
+    job_store: SQLiteJobStore | None = None
     cache: VerdictCache | None = None
     guard: AbuseGuard | None = None
     admin: AdminControl | None = None
@@ -313,6 +350,7 @@ def build_verification_stack(
 
     executor = None
     jobs = None
+    job_store = None
     if deployment.profile is not DeploymentProfile.LOCAL_PASSIVE:
         # The local-passive profile answers synchronously and accepts no job:
         # `docs/requirements.md` section 15 gives it no queue and no worker, and
@@ -321,6 +359,9 @@ def build_verification_stack(
             clock=monotonic, sleeper=sleeper, settings=deployment.executor
         )
         _check_worker_isolation(deployment, executor)
+        if deployment.job_store_path is not None:
+            job_store = SQLiteJobStore(path=deployment.job_store_path)
+            job_store.initialize()
         jobs = JobService(
             verification=verification,
             executor=executor,
@@ -329,6 +370,14 @@ def build_verification_stack(
             operator=sink,
             correlation_key=deployment.correlation_key,
             cache=cache,
+            # **Passed, and an inspection test asserts it stays passed.** The
+            # store is where the idempotency claim becomes atomic across
+            # replicas and where the recipient-touch checkpoint survives a
+            # crash; a `JobService` built without it has neither, and the two
+            # failures it prevents — a second job for one handle, a replayed
+            # operation that may already have touched a recipient — are exactly
+            # the ones nothing else would notice.
+            store=job_store,
             guard=guard,
             settings=deployment.jobs,
         )
@@ -339,6 +388,7 @@ def build_verification_stack(
         settings=deployment.retention,
         store=store,
         jobs=jobs,
+        job_store=job_store,
         quota=guard.quota,
     )
 
@@ -352,6 +402,7 @@ def build_verification_stack(
         correlation_key=deployment.correlation_key,
         executor=executor,
         jobs=jobs,
+        job_store=job_store,
         cache=cache,
         guard=guard,
         admin=admin,

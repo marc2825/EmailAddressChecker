@@ -211,6 +211,7 @@ def resolver_for(routes: dict[str, str]) -> FakeResolver:
 def build_jobs(
     *,
     smtp: ScriptedSMTPVerification | None = None,
+    resolver: FakeResolver | None = None,
     routes: dict[str, str] | None = None,
     job_store: object | None = None,
     verdicts: object | None = None,
@@ -225,7 +226,12 @@ def build_jobs(
     restart test rather than a rename.
     """
     probe = smtp if smtp is not None else ScriptedSMTPVerification(reply_lines=("250 2.1.5 ok",))
-    resolver = resolver_with_route() if routes is None else resolver_for(routes)
+    if resolver is None:
+        # A `resolver` parameter as well as `routes`, because the only way to
+        # reach `retry_scheduled` under the recipient-touch rule is a temporary
+        # failure that happened **before** any recipient stage — a DNS SERVFAIL —
+        # and `routes` can only express routes that resolve.
+        resolver = resolver_with_route() if routes is None else resolver_for(routes)
     service, _, sink = build_service(smtp=probe, resolver=resolver)
     used_executor = executor if executor is not None else RecordingExecutor()
     jobs = JobService(

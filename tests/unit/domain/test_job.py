@@ -18,6 +18,7 @@ from emailcheck.domain.job import (
     PERMITTED_TRANSITIONS,
     TERMINAL_STATES,
     IdempotencyKey,
+    JobAdmission,
     JobError,
     JobFailure,
     JobId,
@@ -44,6 +45,17 @@ def test_the_states_are_the_repositorys_six_and_no_others() -> None:
         "failed",
         "cancelled",
     ]
+
+
+def test_executor_admission_is_closed_and_not_a_seventh_public_job_state() -> None:
+    assert [member.value for member in JobAdmission] == [
+        "claimed",
+        "handoff_committed",
+        "admission_failed",
+        "not_required",
+        "interrupted",
+    ]
+    assert set(JobAdmission).isdisjoint(JobState)
 
 
 def test_at_most_one_automatic_retry() -> None:
@@ -83,10 +95,29 @@ def test_a_terminal_state_has_no_exit() -> None:
         (JobState.RUNNING, JobState.CANCELLED),
         (JobState.RETRY_SCHEDULED, JobState.RUNNING),
         (JobState.RETRY_SCHEDULED, JobState.CANCELLED),
+        # Remediation A: work can stop being arrangeable. A `retry_scheduled`
+        # job whose `schedule()` is refused, and a nonterminal job a stopped
+        # process left in the store, both need an exit that is neither running
+        # nor a verdict — otherwise they stay nonterminal for ever with nothing
+        # that would advance them, which is what the final system audit found.
+        (JobState.PENDING, JobState.FAILED),
+        (JobState.RETRY_SCHEDULED, JobState.FAILED),
     ],
 )
 def test_a_permitted_transition_is_permitted(current: JobState, target: JobState) -> None:
     check_transition(current, target)
+
+
+def test_failing_is_not_completing_and_the_difference_is_the_point() -> None:
+    """`pending -> failed` exists; `pending -> completed` still does not.
+
+    A `JobFailure` is an operational category carrying no status, so a job that
+    never ran may be ended by one. A `PublicResult` is a statement about a
+    mailbox, and a job that never ran has nothing to say.
+    """
+    check_transition(JobState.PENDING, JobState.FAILED)
+    with pytest.raises(JobTransitionError):
+        check_transition(JobState.PENDING, JobState.COMPLETED)
 
 
 @pytest.mark.parametrize(
@@ -94,7 +125,6 @@ def test_a_permitted_transition_is_permitted(current: JobState, target: JobState
     [
         # A job that never ran cannot have a result.
         (JobState.PENDING, JobState.COMPLETED),
-        (JobState.PENDING, JobState.FAILED),
         (JobState.PENDING, JobState.RETRY_SCHEDULED),
         # Nothing moves backwards.
         (JobState.RUNNING, JobState.PENDING),

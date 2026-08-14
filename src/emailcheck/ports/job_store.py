@@ -23,15 +23,33 @@ kept the key would keep an address.
 **This is not a second job-state machine.** `domain/job.py` owns the six states
 and the transition table; this records which one a job is in. Nothing here
 decides a transition, and nothing reads this to decide a status.
+
+**This is not a durable execution queue either, and the distinction is the whole
+recovery policy.** What survives a process is *state*: identity, the idempotency
+binding, the retry budget, the recipient-touch checkpoint, and a completed
+result. What does not survive is the work. `ports/job_executor.py`'s only
+implementation is in-process and dies with it, so a later process finding a
+`pending` or `running` row has nothing to resume it on — and must not invent one.
+`application/jobs.py` reconciles such a row into an operational failure rather
+than re-enqueueing it, because "we do not know whether the `RCPT TO` went out"
+resolves to *do not send another*.
+
+**The idempotency claim is atomic or it is nothing.** An in-process lock cannot
+see a second replica, and the final system audit measured one owner, one key,
+one address across two `JobService` instances producing two jobs and two
+probes. `claim_idempotency` is the operation that makes the decision once, in
+the store, under a uniqueness constraint that survives both processes.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 
-from emailcheck.domain.job import JobError, JobFailure, JobState
+from emailcheck.domain.job import JobAdmission, JobError, JobFailure, JobState
+from emailcheck.domain.recipient_touch import RecipientTouch
 
 #: Fields that must be a non-empty digest carrying no address.
 DIGEST_FIELDS = ("idempotency_digest", "target_digest")
@@ -53,6 +71,8 @@ class StoredJob:
     state: JobState
     created_at: datetime
     updated_at: datetime
+    #: Executor-handoff state, separate from the public six-state job model.
+    admission: JobAdmission = JobAdmission.CLAIMED
     #: `docs/requirements.md` section 14's budget, carried so a restart cannot
     #: reset it. A job that has spent its one retry must not get another by
     #: outliving the process that granted it.
@@ -62,6 +82,17 @@ class StoredJob:
     #: HMAC of the normalized target. What makes "same handle, different
     #: address" a conflict rather than a wrong answer, after a restart.
     target_digest: str | None = None
+    #: Whether this operation may already have put its recipient on a wire.
+    #:
+    #: **The durable half of the one-`RCPT TO` bound, and the reason it survives
+    #: a crash.** `application/jobs.py` writes `MAYBE_TOUCHED` *before* the
+    #: active verification starts rather than after its answer arrives: a
+    #: checkpoint taken on the way out would be missing for exactly the crash it
+    #: exists to describe — the one between writing `RCPT TO` to a socket and
+    #: learning what happened. So the record is conservative on entry and
+    #: refined on exit, and a process that finds `MAYBE_TOUCHED` knows the
+    #: operation must not be replayed even though it cannot know what happened.
+    recipient_touch: RecipientTouch = RecipientTouch.NOT_TOUCHED
     failure: JobFailure | None = None
     #: The public projection, present only for a completed job — the same
     #: pairing `CheckJob` enforces, re-checked here because this is assembled
@@ -87,6 +118,8 @@ class StoredJob:
             raise JobError("a job owner is an account, never a mailbox")
         if not isinstance(self.state, JobState):
             raise JobError("a stored job must carry a published state")
+        if not isinstance(self.admission, JobAdmission):
+            raise JobError("a stored job must carry an executor-admission fact")
         for name in DIGEST_FIELDS:
             value = getattr(self, name)
             if value is None:
@@ -99,6 +132,8 @@ class StoredJob:
             raise JobError("a retry count must be a whole number, not a boolean")
         if self.retries_used < 0:
             raise JobError("a retry count may not be negative")
+        if not isinstance(self.recipient_touch, RecipientTouch):
+            raise JobError("a stored job must carry a recipient-touch fact")
         for name in ("created_at", "updated_at"):
             moment = getattr(self, name)
             if not isinstance(moment, datetime) or moment.utcoffset() is None:
@@ -110,6 +145,48 @@ class StoredJob:
             raise JobError("only a completed job carries a result")
         if (self.failure is not None) != (self.state is JobState.FAILED):
             raise JobError("only a failed job names a failure category")
+        if self.admission is JobAdmission.ADMISSION_FAILED and self.state is not JobState.FAILED:
+            raise JobError("a refused admission must be a failed job")
+        if self.admission is JobAdmission.NOT_REQUIRED and self.state is not JobState.COMPLETED:
+            raise JobError("only an already-completed job needs no executor admission")
+        if self.admission is JobAdmission.INTERRUPTED and (
+            self.state is not JobState.FAILED or self.failure is not JobFailure.INTERRUPTED
+        ):
+            raise JobError("an interrupted admission must be a failed interrupted job")
+
+
+class ClaimStatus(StrEnum):
+    """How an atomic idempotency claim ended. Three answers and no fourth."""
+
+    #: This caller won. The proposed job now exists, and it owns the key.
+    NEW_CLAIM = "new_claim"
+    #: Somebody else had already claimed the key for the **same** target. The
+    #: existing job is returned, and the proposed one was not written.
+    EXISTING_SAME_TARGET = "existing_same_target"
+    #: The key is already bound to a **different** target. `IdempotencyConflict`
+    #: territory: the proposed job was not written, and the existing binding is
+    #: untouched.
+    CONFLICT_DIFFERENT_TARGET = "conflict_different_target"
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimResult:
+    """What one `claim_idempotency` decided, and what already held the key."""
+
+    status: ClaimStatus
+    #: The job that already owns the key, for both non-winning answers, and
+    #: `None` for a win. Present so a caller can reconnect to the existing job
+    #: without a second, non-atomic lookup that could observe a different row.
+    existing: StoredJob | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, ClaimStatus):
+            raise JobError("a claim result must carry a published status")
+        won = self.status is ClaimStatus.NEW_CLAIM
+        if won and self.existing is not None:
+            raise JobError("a winning claim names no existing job")
+        if not won and self.existing is None:
+            raise JobError("a claim that did not win must name the job that holds the key")
 
 
 class JobStore(Protocol):
@@ -121,8 +198,44 @@ class JobStore(Protocol):
     the distinction the ownership rule exists to withhold.
     """
 
+    async def claim_idempotency(self, record: StoredJob) -> ClaimResult:
+        """Take `(owner, idempotency_digest)` for `record`, atomically.
+
+        **The single decision point for whether a submission is new.** It exists
+        because the previous one was a process-local `asyncio.Lock`, and the
+        final system audit measured what that is worth across two `JobService`
+        instances sharing one database: one owner, one key, one address,
+        concurrent submissions — and **two** job identifiers, **two** executor
+        admissions, and **two** persistent bindings. Two active verifications
+        for one address is a duplicate `RCPT TO` arranged by running a second
+        replica, which is the enumeration pattern `docs/threat-model.md` lists
+        first, and no amount of in-process locking can see the other process.
+
+        An implementation must decide and write inside **one** transaction. A
+        `SELECT` that ends its transaction before the `INSERT` is the same race
+        with more steps, and it is the shape this replaced.
+
+        `record` must carry both digests: a submission with no idempotency key,
+        or one whose address did not parse, has no identity to claim and goes
+        through `save`.
+
+        Returns rather than raises for all three answers, including the
+        conflict: which of the three happened is the caller's decision to
+        translate — `application/jobs.py` owns the mapping onto
+        `IdempotencyConflict` and onto the `409` a caller sees, and a store that
+        raised would be deciding an API response.
+        """
+        ...
+
     async def save(self, record: StoredJob) -> None:
-        """Create or replace one job."""
+        """Create or update one job.
+
+        **Identity is immutable.** For an existing `job_id`, `owner`,
+        `created_at`, `idempotency_digest`, and `target_digest` must match the
+        inserted row exactly. Only operational state, result, retry/touch,
+        admission, and `updated_at` may change. An implementation fails closed
+        on an identity mismatch and never deletes or rebinds the winner.
+        """
         ...
 
     async def load(self, job_id: str) -> StoredJob | None: ...
@@ -135,8 +248,32 @@ class JobStore(Protocol):
         """
         ...
 
+    async def find_nonterminal(self, *, before: datetime, limit: int) -> tuple[StoredJob, ...]:
+        """Unfinished jobs last updated at or before `before`, oldest first.
+
+        What a process reads to reconcile what a previous one left behind. It is
+        **not** a work queue: the caller is required to classify rather than to
+        enqueue, and `application/jobs.py` does exactly that.
+
+        `before` is required and has no default, because the hazard this
+        operation carries is entirely in that parameter. A store can be shared by
+        two live replicas — that is the premise `claim_idempotency` exists for —
+        and a scan with no cutoff would hand one replica the other's *running*
+        jobs, which it would then declare interrupted. A cutoff older than any
+        plausible in-flight verification makes a returned row one that nothing is
+        working on.
+
+        Bounded, on the `purge_terminal` precedent: a store holding a day of
+        interrupted jobs must not be read into memory in one call.
+        """
+        ...
+
     async def delete(self, job_id: str) -> None:
-        """Forget one job. Used to roll back a claim the executor refused."""
+        """Forget one job through an explicit deletion/retention operation.
+
+        Never executor-admission compensation: once a claim is committed,
+        another replica may have observed it and the identity must stay stable.
+        """
         ...
 
     async def purge_terminal(self, *, before: datetime, limit: int) -> int:

@@ -316,7 +316,7 @@ class CheckApi:
 
         try:
             job = (
-                self.jobs.get(job_id, principal=principal)
+                await self.jobs.fetch(job_id, principal=principal)
                 if method == "GET"
                 else await self.jobs.cancel(job_id, principal=principal)
             )

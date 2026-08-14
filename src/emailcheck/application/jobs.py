@@ -22,8 +22,10 @@ one before a verdict exists is exactly the re-derivation Phase 5 stop condition
 
 ```text
 passive check         parse + DNS; also produces the normalized target
-  → idempotency       in memory, keyed by (account, key, target HMAC)
+  → idempotency       in the store when there is one, in memory otherwise
   → cache             one indexed row
+  → claim             durable identity first, registry second; never delete it
+  → handoff           persist one irrevocable executor opportunity
   → enqueue           the SMTP half, later
 ```
 
@@ -37,6 +39,41 @@ An earlier version of this docstring claimed the cache was consulted before the
 passive step and that a hit therefore cost nothing. It was not true, and an
 independent review measured three DNS lookups on a cache hit. A behavioural test
 now pins the honest statement so the overclaim cannot come back.
+
+**Three properties are Remediation A's, and each replaced something that only
+held inside one process.**
+
+*Idempotency is the store's decision, not this object's.* The claim used to be a
+read and a write under `self._lock`, which is correct for two coroutines and
+worth nothing against two replicas: the final system audit ran one owner, one
+key, one address through two `JobService` instances over one database and got two
+job identifiers, two executor admissions, and two persistent bindings — two
+active verifications, which is a duplicate `RCPT TO` arranged by scaling out.
+`JobStore.claim_idempotency` decides it once, under a uniqueness constraint both
+processes are subject to. The lock stays for the registry, which is genuinely
+process-local.
+
+*A retry may only replay an attempt that did not reach the recipient.*
+`docs/requirements.md` section 14's delays are unchanged; what changed is that
+`VerificationOutcome.recipient_touch` is now a precondition of using them. The
+previous rule — "a `450` is an explicitly temporary SMTP response, so retry it" —
+produced a second `RCPT TO` for one submitted address, because
+`smtp_temporary_failure` and `mailbox_full` are reachable only *through* the
+recipient stage. Counted on the wire, one job made two recipient commands.
+
+*Durable state is written before the work it describes, and the work is not
+started when that write fails.* `running` is persisted — carrying
+`MAYBE_TOUCHED` — before the active verification begins, so a process that dies
+between writing `RCPT TO` to a socket and learning the answer leaves a record
+saying *do not replay this*. A failed persist stops the job instead of probing
+under a state nothing durable can express.
+
+**What this module does not claim.** The store is job *state*; it is not a
+durable execution queue, and `ports/job_executor.py`'s only implementation dies
+with its process. Nothing here re-enqueues a job found in the store.
+`recover_interrupted` classifies such rows into an operational failure, which is
+the honest answer when the alternative is to guess whether a recipient was
+already contacted.
 """
 
 from __future__ import annotations
@@ -60,6 +97,7 @@ from emailcheck.application.verification import (
 from emailcheck.domain.job import (
     MAX_RETRIES,
     IdempotencyKey,
+    JobAdmission,
     JobError,
     JobFailure,
     JobId,
@@ -67,10 +105,11 @@ from emailcheck.domain.job import (
     check_transition,
 )
 from emailcheck.domain.principal import Principal
+from emailcheck.domain.recipient_touch import RecipientTouch
 from emailcheck.domain.source import SourceIdentity
 from emailcheck.ports.clock import Clock
-from emailcheck.ports.job_executor import JobExecutor
-from emailcheck.ports.job_store import JobStore, StoredJob
+from emailcheck.ports.job_executor import ExecutorFull, JobExecutor
+from emailcheck.ports.job_store import ClaimStatus, JobStore, StoredJob
 from emailcheck.ports.observability import OperatorEvent, OperatorEventKind, OperatorSink
 from emailcheck.ports.random_source import RandomSource
 from emailcheck.security.identifiers import correlation_digest
@@ -107,6 +146,21 @@ class JobsFull(Exception):
 
     Not a `TimeoutError` and not an `OSError`, on the precedent
     `RateLimitTimeout` and `AdmissionRefused` set.
+    """
+
+
+class JobRecordMismatch(Exception):
+    """The store answered a claim with a record belonging to another account.
+
+    Unreachable by design and refused anyway. The idempotency digest already
+    carries the owner and the adapter's `WHERE` already names it, so a store that
+    gets here has answered a question it was not asked — and the two safe
+    readings of that are "somebody else's job" and "a corrupt index", neither of
+    which may be turned into this caller's job.
+
+    Carries no identifier, no digest, and no owner. The caller sees a service
+    failure, which is what it is; the operator sees the event, which is who can
+    act on it.
     """
 
 
@@ -150,6 +204,15 @@ class CheckJob:
     #: Caller-chosen text, so `repr=False`: an address is a legal idempotency
     #: key and a job printed into a log would carry it. See `JobService`.
     idempotency_key: IdempotencyKey | None = field(default=None, repr=False)
+    #: Whether this job's active work may already have contacted the recipient.
+    #:
+    #: Set to `MAYBE_TOUCHED` when the job enters `running`, and refined to what
+    #: the finished verification actually observed. That order is the point: a
+    #: fact recorded only *after* an answer arrives is missing for the one crash
+    #: it exists to describe. It gates the automatic retry and it is persisted,
+    #: so neither a second attempt nor a later process can replay an operation
+    #: that may already have named the recipient to a mail server.
+    recipient_touch: RecipientTouch = RecipientTouch.NOT_TOUCHED
 
     def __post_init__(self) -> None:
         if not isinstance(self.state, JobState):
@@ -188,6 +251,11 @@ class CheckJob:
         """
         return self.retries_used < MAX_RETRIES
 
+    @property
+    def replay_is_safe(self) -> bool:
+        """Whether re-running this job's verification can avoid a second touch."""
+        return self.recipient_touch.replay_is_safe
+
     def moved_to(
         self,
         state: JobState,
@@ -196,9 +264,30 @@ class CheckJob:
         result: PublicResult | None = None,
         failure: JobFailure | None = None,
         count_retry: bool = False,
+        recipient_touch: RecipientTouch | None = None,
     ) -> CheckJob:
-        """Move to `state`, or raise if `domain/job.py`'s table forbids it."""
+        """Move to `state`, or raise if `domain/job.py`'s table forbids it.
+
+        `recipient_touch` defaults to *unchanged* rather than to either member.
+        A default of `NOT_TOUCHED` would let any transition that forgot the
+        argument quietly declare the recipient untouched, and a default of
+        `MAYBE_TOUCHED` would make a job unretryable by being cancelled and
+        would lose the fact on every ordinary write. Carrying the existing value
+        is the only option that says nothing new.
+        """
         check_transition(self.state, state)
+        touch = self.recipient_touch if recipient_touch is None else recipient_touch
+        if state is JobState.RETRY_SCHEDULED and not touch.replay_is_safe:
+            # **The second barrier, and it is structural rather than scheduled.**
+            # `retry_scheduled` is a promise to run this verification again, and
+            # an operation whose recipient may already have been contacted has
+            # no such promise to make: `docs/threat-model.md` bounds it at one
+            # `RCPT TO` in total. `application/retry.py` refuses to produce a
+            # delay for it, which is the policy; this refuses to *hold* the
+            # state, which is the same rule expressed where no scheduling code
+            # can route around it — the precedent `retries_used` set by refusing
+            # to exist above `MAX_RETRIES` rather than by being checked.
+            raise JobError("a job whose recipient may have been contacted may not be replayed")
         return replace(
             self,
             state=state,
@@ -206,6 +295,7 @@ class CheckJob:
             result=result,
             failure=failure,
             retries_used=self.retries_used + 1 if count_retry else self.retries_used,
+            recipient_touch=touch,
         )
 
 
@@ -220,6 +310,28 @@ class _KeyBinding:
 
     job_id: str
     target_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryReport:
+    """What one reconciliation pass found and what it did with it.
+
+    Counts rather than identifiers: an operator needs to know how much work a
+    stopped process left behind and how much of it had reached the point where
+    replay would be unsafe, and neither question needs a job identifier — which
+    would be a handle to somebody's check in an operational log.
+    """
+
+    scanned: int = 0
+    #: Rows ended as `failed` / `interrupted`.
+    interrupted: int = 0
+    #: How many of those had a durable checkpoint saying a recipient may already
+    #: have been contacted. Reported because it is the number that says whether
+    #: an incident touched anybody's mail server, and because a build that
+    #: stopped writing the checkpoint would report zero here for ever.
+    unsafe_to_replay: int = 0
+    #: Rows this process still holds itself, and therefore left alone.
+    skipped_live: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +408,11 @@ class JobService:
     #: written without recomputing a digest from values it no longer holds.
     #: Digests only, and `repr=False` like everything else here.
     _persisted: dict[str, tuple[str | None, str | None]] = field(default_factory=dict, repr=False)
+    #: Durable executor-handoff facts, kept separate from the public six states.
+    _admissions: dict[str, JobAdmission] = field(default_factory=dict, repr=False)
+    #: Jobs whose executor handoff this process owns. Rehydrated nonterminal jobs
+    #: are observers and must re-read the store before being returned again.
+    _owned: set[str] = field(default_factory=set, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # --- submission ---------------------------------------------------------
@@ -311,8 +428,9 @@ class JobService:
         """Accept one active check. Returns without running the SMTP half.
 
         Raises `IdempotencyConflict` when the key already names a different
-        address, and `JobsFull` or `ExecutorFull` when there is no room. None of
-        the three leaves anything behind in the registry.
+        address, and `JobsFull` or `ExecutorFull` when there is no room. Once a
+        durable identity is observable it is never deleted on admission
+        failure; the same JobId remains as an operationally failed job.
         """
         account = principal.rate_limit_account
 
@@ -359,8 +477,6 @@ class JobService:
                     account=account, state=JobState.COMPLETED, result=cached, key=idempotency_key
                 )
                 claimed = await self._claim(job, target_digest=target_digest)
-                if claimed is None:
-                    await self._persist(job, target_digest=target_digest)
                 return SubmitOutcome(
                     job=claimed or job,
                     passive=passive,
@@ -370,6 +486,15 @@ class JobService:
                 )
 
         job = self._new_job(account=account, state=JobState.PENDING, key=idempotency_key)
+        # **The claim is durable before it is local**, on the same write-ahead
+        # argument Phase 10's batch row uses and for one further reason
+        # Remediation A added: a process that stops between enqueueing and
+        # recording leaves a running verification no later process can
+        # recognize, and the next presentation of the same handle would start a
+        # second one. `_claim` writes the store first and registers second. Once
+        # the first write commits it is observable, so a later registry refusal
+        # preserves that identity as a terminal operational failure rather than
+        # deleting it from underneath another replica.
         claimed = await self._claim(job, target_digest=target_digest)
         if claimed is not None:
             return SubmitOutcome(
@@ -379,23 +504,22 @@ class JobService:
                 existing=True,
                 scheduling_key=passive_outcome.scheduling_key,
             )
-        # **Persisted before the handover**, on the same write-ahead argument
-        # Phase 10's batch row uses: a process that stops between enqueueing and
-        # recording would otherwise leave a running verification that no later
-        # process can recognize, and the next presentation of the same handle
-        # would start a second one.
-        await self._persist(job, target_digest=target_digest)
+        # The cross-system commit is deliberately on the conservative side.
+        # `HANDOFF_COMMITTED` is durable before the executor is called, so there
+        # is no "accepted, then marker write failed" boundary from which another
+        # replica could infer that a second admission is safe. A crash after this
+        # point may lose work; it never duplicates work.
+        await self._commit_handoff(job.id)
         try:
             await self.executor.submit(job.id, self._work(job.id, submitted, principal))
-        except BaseException:
-            # **The registry is rolled back.** A `pending` job the executor never
-            # accepted can never run, and `_evict` only removes *terminal* jobs —
-            # so leaving one behind would occupy a registry slot permanently, and
-            # a burst of refusals would make the service answer `JobsFull` for
-            # ever, long after the executor recovered. An independent review
-            # measured exactly that. `BaseException` because a cancellation
-            # between registering and enqueueing leaves the same wreckage.
-            await self._release(job)
+        except BaseException as refusal:
+            await self._fail_admission(
+                job.id,
+                JobFailure.CAPACITY_UNAVAILABLE
+                if isinstance(refusal, ExecutorFull)
+                else JobFailure.SERVICE_ERROR,
+                detail="executor admission",
+            )
             raise
         return SubmitOutcome(
             job=job,
@@ -426,6 +550,10 @@ class JobService:
         A job already in a terminal state is returned unchanged: cancelling a
         completed job is not an error, and it must not overwrite a result.
         """
+        # Refresh a nonterminal observer before acting on it. A different
+        # replica may have completed or failed admission since this process
+        # reconstructed the pending snapshot.
+        await self.fetch(job_id, principal=principal)
         async with self._lock:
             job = self.get(job_id, principal=principal)
             if job is None:
@@ -490,35 +618,79 @@ class JobService:
         principal: Principal,
         outcome: VerificationOutcome,
     ) -> None:
-        """Complete the job, or schedule the one retry section 14 allows."""
+        """Complete the job, or schedule the one retry section 14 still allows.
+
+        Two independently effective barriers stand between a touched recipient
+        and a second one: `retry_delay_seconds` produces no delay, and
+        `CheckJob.moved_to` refuses to represent `retry_scheduled`. This method's
+        `touch.replay_is_safe` check remains as defense in depth at the scheduling
+        seam. Removing it alone changes no reachable behaviour while the two
+        stronger barriers remain; it is a local assertion, not a third
+        independently mutation-pinned guarantee.
+        """
+        touch = outcome.recipient_touch
         async with self._lock:
             job = self._jobs.get(job_id.value)
             if job is None or job.state is not JobState.RUNNING:
                 # Cancelled while running. The terminal state stands.
                 return
-            span = jitter_span_seconds(outcome.verdict)
+            span = jitter_span_seconds(outcome.verdict, recipient_touch=touch)
             delay = retry_delay_seconds(
-                outcome.verdict, jitter_seconds=self.random.jitter(span) if span else 0.0
+                outcome.verdict,
+                recipient_touch=touch,
+                jitter_seconds=self.random.jitter(span) if span else 0.0,
             )
-            if delay is not None and job.may_retry:
+            if delay is not None and touch.replay_is_safe and job.may_retry:
                 scheduled = job.moved_to(
-                    JobState.RETRY_SCHEDULED, now=self._now(), count_retry=True
+                    JobState.RETRY_SCHEDULED,
+                    now=self._now(),
+                    count_retry=True,
+                    recipient_touch=touch,
                 )
                 self._jobs[job_id.value] = scheduled
             else:
                 completed = job.moved_to(
-                    JobState.COMPLETED, now=self._now(), result=public_result(outcome.verdict)
+                    JobState.COMPLETED,
+                    now=self._now(),
+                    result=public_result(outcome.verdict),
+                    recipient_touch=touch,
                 )
                 self._jobs[job_id.value] = completed
                 delay = None
 
-        await self._persist_id(job_id)
-        if delay is not None:
+        if delay is None:
+            # A terminal state carrying a real verdict. The write is best effort:
+            # the answer exists and refusing to return it because a disk is
+            # unavailable would turn a storage fault into a lost result.
+            await self._persist_best_effort(job_id)
+            await self._cache(outcome, account=principal.rate_limit_account)
+            return
+
+        # A retry is different: it is a promise that something will run later, so
+        # the durable record comes first and a failure to write it cancels the
+        # promise rather than leaving one nobody can keep.
+        if not await self._persist_step(job_id, "retry state"):
+            return
+        try:
             await self.executor.schedule(
                 job_id, self._work(job_id, submitted, principal), delay_seconds=delay
             )
-            return
-        await self._cache(outcome, account=principal.rate_limit_account)
+        except Exception as refusal:
+            # **`retry_scheduled` with nothing scheduled is not a state this job
+            # may keep.** The final system audit found it surviving here: the
+            # state was persisted, the executor refused, the worker swallowed the
+            # exception, and the job stayed nonterminal for ever with no work
+            # anywhere that would advance it. It is terminalized instead —
+            # `retry_scheduled -> failed`, added to the transition table for this
+            # — with a category and no status, because failing to arrange a retry
+            # is a fact about this service and not about the address.
+            await self._abandon(
+                job_id,
+                JobFailure.CAPACITY_UNAVAILABLE
+                if isinstance(refusal, ExecutorFull)
+                else JobFailure.SERVICE_ERROR,
+                detail="retry scheduling",
+            )
 
     async def _cache(self, outcome: VerificationOutcome, *, account: str) -> None:
         """Store a completed active verdict, when ADR 0015 prices it."""
@@ -533,15 +705,73 @@ class JobService:
 
     # --- registry -----------------------------------------------------------
 
+    async def _commit_handoff(self, job_id: JobId) -> None:
+        """Durably spend this logical job's one executor-admission opportunity.
+
+        The marker precedes the executor call. That ordering turns an ambiguous
+        cross-system acknowledgement into a conservative lost-work case: every
+        observer sees that this JobId already owns the handoff, and no observer
+        may admit it again even if the owning process disappears immediately.
+        """
+        async with self._lock:
+            job = self._jobs.get(job_id.value)
+            if job is None or job.state is not JobState.PENDING:
+                raise JobError("only a pending job may commit an executor handoff")
+            if self._admissions.get(job_id.value) is not JobAdmission.CLAIMED:
+                raise JobError("a job may commit its executor handoff only once")
+            self._admissions[job_id.value] = JobAdmission.HANDOFF_COMMITTED
+        try:
+            await self._persist_id(job_id)
+        except BaseException:
+            # No executor call has happened. Preserve the identity, end the
+            # local job operationally, and propagate the storage failure.
+            await self._fail_admission(
+                job_id, JobFailure.SERVICE_ERROR, detail="job handoff commit"
+            )
+            raise
+
+    async def _fail_admission(self, job_id: JobId, failure: JobFailure, *, detail: str) -> None:
+        """Preserve one identity as a terminal operational admission failure."""
+        async with self._lock:
+            job = self._jobs.get(job_id.value)
+            if job is None or job.is_terminal:
+                return
+            self._jobs[job_id.value] = job.moved_to(
+                JobState.FAILED, now=self._now(), failure=failure
+            )
+            self._admissions[job_id.value] = JobAdmission.ADMISSION_FAILED
+        self.operator.record(OperatorEvent(kind=OperatorEventKind.INTERNAL_ERROR, detail=detail))
+        await self._persist_best_effort(job_id)
+
     async def _begin(self, job_id: JobId) -> bool:
-        """Move to `running`, or report that the job is no longer runnable."""
+        """Arm the recipient checkpoint durably, then move to `running`.
+
+        **The checkpoint is written before the verification starts, not after it
+        answers.** The crash this exists to survive is the one between writing
+        `RCPT TO` to a socket and reading the reply, and a fact recorded on the
+        way out is exactly the fact that crash destroys. So `running` is
+        persisted carrying `MAYBE_TOUCHED` — conservative, because the
+        verification *may* reach the recipient stage and nothing here can know
+        whether it will — and `_settle` refines it to what actually happened.
+
+        Returns `False` when the job is no longer runnable **and when the durable
+        write failed**. The second is the point: SMTP must not proceed under a
+        state the durable record cannot express, because the record is what a
+        later process reads to decide whether replay is safe. Probing anyway
+        would put a recipient on a wire with nothing on disk saying so.
+        """
         async with self._lock:
             job = self._jobs.get(job_id.value)
             if job is None or job.state not in {JobState.PENDING, JobState.RETRY_SCHEDULED}:
                 return False
-            self._jobs[job_id.value] = job.moved_to(JobState.RUNNING, now=self._now())
-        await self._persist_id(job_id)
-        return True
+            if self._admissions.get(job_id.value) is not JobAdmission.HANDOFF_COMMITTED:
+                return False
+            self._jobs[job_id.value] = job.moved_to(
+                JobState.RUNNING,
+                now=self._now(),
+                recipient_touch=RecipientTouch.MAYBE_TOUCHED,
+            )
+        return await self._persist_step(job_id, "running state")
 
     async def _fail(self, job_id: JobId, failure: JobFailure) -> None:
         async with self._lock:
@@ -551,7 +781,27 @@ class JobService:
             self._jobs[job_id.value] = job.moved_to(
                 JobState.FAILED, now=self._now(), failure=failure
             )
-        await self._persist_id(job_id)
+        await self._persist_best_effort(job_id)
+
+    async def _abandon(self, job_id: JobId, failure: JobFailure, *, detail: str) -> None:
+        """End a job that cannot continue. Terminal, categorical, and no status.
+
+        Reachable from three places, all of them this service failing rather
+        than the address being anything: a durable state write that did not
+        land, a retry that could not be scheduled, and a job a previous process
+        left behind. None of them may become `unknown` or `temporary_unknown` —
+        those are published statements about a mailbox, and this is a statement
+        about a machine.
+        """
+        async with self._lock:
+            job = self._jobs.get(job_id.value)
+            if job is None or job.is_terminal:
+                return
+            self._jobs[job_id.value] = job.moved_to(
+                JobState.FAILED, now=self._now(), failure=failure
+            )
+        self.operator.record(OperatorEvent(kind=OperatorEventKind.INTERNAL_ERROR, detail=detail))
+        await self._persist_best_effort(job_id)
 
     def _new_job(
         self,
@@ -573,15 +823,132 @@ class JobService:
         )
 
     async def _claim(self, job: CheckJob, *, target_digest: str | None) -> CheckJob | None:
-        """Register `job`, or return the job this key already names.
+        """Take this job's identity, durably and then locally, or find the holder.
+
+        Returns the job this key already names, or `None` when this caller won.
+        Raises `IdempotencyConflict` when the key names a different address.
+
+        **The order is the fix, and both halves of it matter.**
+
+        The durable claim goes first. It is the only barrier a second process is
+        subject to: an `asyncio.Lock` is invisible across replicas, and the final
+        system audit measured two of them minting two jobs and two probes for one
+        owner, key, and address. `JobStore.claim_idempotency` resolves that
+        against a uniqueness constraint inside one transaction, so exactly one
+        caller anywhere gets `NEW_CLAIM`.
+
+        The registry goes second. Once the durable row commits it is observable
+        to another replica, so a later local refusal must not delete it. A
+        nonterminal proposed job is instead persisted as an operational
+        admission failure under the same identity.
+
+        The in-memory path is unchanged for deployments with no store — the lock
+        still reads and writes the binding in one critical section, which is what
+        two coroutines in one process need — and `submit`'s earlier lookup stays
+        the fast path rather than the authority.
+        """
+        binding_key = self._binding_key(job.owner, job.idempotency_key, target_digest)
+        claimed_durably = False
+        self._admissions[job.id.value] = (
+            JobAdmission.NOT_REQUIRED if job.state is JobState.COMPLETED else JobAdmission.CLAIMED
+        )
+        try:
+            if self.store is not None:
+                if binding_key is not None:
+                    assert target_digest is not None
+                    existing = await self._claim_durably(job, target_digest=target_digest)
+                    if existing is not None:
+                        self._admissions.pop(job.id.value, None)
+                        return existing
+                else:
+                    # No key, or an address that did not parse: nothing to claim,
+                    # but the record is still durable before it becomes local.
+                    await self._persist(job, target_digest=target_digest)
+                claimed_durably = True
+            held = await self._register(job, binding_key=binding_key, target_digest=target_digest)
+        except BaseException as refusal:
+            if claimed_durably and self.store is not None and not job.is_terminal:
+                failed = job.moved_to(
+                    JobState.FAILED,
+                    now=self._now(),
+                    failure=(
+                        JobFailure.CAPACITY_UNAVAILABLE
+                        if isinstance(refusal, JobsFull)
+                        else JobFailure.SERVICE_ERROR
+                    ),
+                )
+                self._admissions[job.id.value] = JobAdmission.ADMISSION_FAILED
+                held_identity = self._persisted.get(job.id.value, (target_digest, None))
+                try:
+                    await self.store.save(
+                        _stored(
+                            failed,
+                            target_digest=held_identity[0],
+                            idempotency=held_identity[1],
+                            admission=JobAdmission.ADMISSION_FAILED,
+                        )
+                    )
+                except Exception:
+                    self.operator.record(
+                        OperatorEvent(
+                            kind=OperatorEventKind.INTERNAL_ERROR,
+                            detail="job registry admission failure",
+                        )
+                    )
+            self._persisted.pop(job.id.value, None)
+            self._admissions.pop(job.id.value, None)
+            self._owned.discard(job.id.value)
+            raise
+        if held is not None and claimed_durably:
+            # The pre-lookup should make this unreachable. Deleting the newly
+            # observable durable row would recreate RA-01, so fail closed.
+            raise JobRecordMismatch("the local and durable idempotency bindings disagree")
+        return held
+
+    async def _claim_durably(self, job: CheckJob, *, target_digest: str) -> CheckJob | None:
+        """The store's decision, translated into this layer's vocabulary."""
+        assert self.store is not None
+        assert job.idempotency_key is not None
+        digest = self._idempotency_digest(job.owner, job.idempotency_key)
+        result = await self.store.claim_idempotency(
+            _stored(
+                job,
+                target_digest=target_digest,
+                idempotency=digest,
+                admission=self._admissions[job.id.value],
+            )
+        )
+        if result.status is ClaimStatus.NEW_CLAIM:
+            self._persisted[job.id.value] = (target_digest, digest)
+            return None
+        stored = result.existing
+        assert stored is not None
+        if stored.owner != job.owner:
+            # **The third barrier, and it is deliberately independent.** The
+            # digest already carries the owner and the adapter's `WHERE` already
+            # names it, so reaching here means a store answered a question it was
+            # not asked. Failing closed costs one submission; trusting it hands
+            # one account another account's job.
+            self.operator.record(
+                OperatorEvent(
+                    kind=OperatorEventKind.INTERNAL_ERROR, detail="idempotency owner mismatch"
+                )
+            )
+            raise JobRecordMismatch("the job store answered with another account's record")
+        if result.status is ClaimStatus.CONFLICT_DIFFERENT_TARGET:
+            raise IdempotencyConflict("this idempotency key is already in use")
+        async with self._lock:
+            return self._rehydrate(stored, key=job.idempotency_key)
+
+    async def _register(
+        self, job: CheckJob, *, binding_key: tuple[str, str] | None, target_digest: str | None
+    ) -> CheckJob | None:
+        """Put `job` in the registry, or return the job this key already names.
 
         The binding is read **and** written under one lock, so two concurrent
         submissions carrying the same key cannot both miss and both register.
-        The read-only check in `submit` is the fast path; this is the
-        authoritative one.
         """
         async with self._lock:
-            binding_key = self._binding_key(job.owner, job.idempotency_key, target_digest)
             if binding_key is not None:
                 assert target_digest is not None
                 existing = self._existing_for(binding_key, target_digest)
@@ -591,51 +958,40 @@ class JobService:
             if len(self._jobs) >= self.settings.max_jobs:
                 raise JobsFull("the job registry is at capacity")
             self._jobs[job.id.value] = job
+            self._owned.add(job.id.value)
             if binding_key is not None:
                 assert target_digest is not None
                 self._by_key[binding_key] = _KeyBinding(job.id.value, target_digest)
             return None
-
-    async def _release(self, job: CheckJob) -> None:
-        """Undo a claim. Used when the work could not be handed to an executor.
-
-        Removes the binding only when it still points at *this* job, so a
-        rollback can never free a key another submission has since taken. The
-        persisted record goes with it: a job the executor never accepted can
-        never run, and one left in the store would answer a later handle with a
-        job that does not exist.
-        """
-        if self.store is not None:
-            self._persisted.pop(job.id.value, None)
-            await self.store.delete(job.id.value)
-        async with self._lock:
-            self._jobs.pop(job.id.value, None)
-            if job.idempotency_key is None:
-                return
-            binding_key = (job.owner, job.idempotency_key.value)
-            binding = self._by_key.get(binding_key)
-            if binding is not None and binding.job_id == job.id.value:
-                del self._by_key[binding_key]
 
     async def _resolve_binding(
         self, account: str, key: IdempotencyKey, target_digest: str
     ) -> CheckJob | None:
         """The job this key already names, or `None`. Raises on a mismatch.
 
-        Memory first, then the store. The order matters and the position does
-        too: this runs **before** the cache lookup, so a restarted process
-        answers a repeated handle with the *same job* rather than with a new
-        job carrying a cached result. Both avoid a probe; only one of them
-        keeps `docs/architecture.md` section 6's promise that a repeat returns
-        the existing result.
+        Memory is a fast path only for jobs this process owns and for terminal
+        snapshots. A nonterminal job reconstructed from another replica is
+        re-read: its owner may have moved `claimed` through handoff to running
+        or to a terminal admission failure since this process cached it.
         """
-        in_memory = self._existing_for((account, key.value), target_digest)
-        if in_memory is not None or self.store is None:
+        binding_key = (account, key.value)
+        in_memory = self._existing_for(binding_key, target_digest)
+        if self.store is None:
+            return in_memory
+        if in_memory is not None and (in_memory.id.value in self._owned or in_memory.is_terminal):
             return in_memory
         stored = await self.store.find_by_idempotency(
             account, self._idempotency_digest(account, key)
         )
         if stored is None:
+            if in_memory is not None:
+                self.operator.record(
+                    OperatorEvent(
+                        kind=OperatorEventKind.INTERNAL_ERROR,
+                        detail="observed job disappeared from durable storage",
+                    )
+                )
+                raise JobRecordMismatch("an observed durable job disappeared")
             return None
         if stored.owner != account:
             # **The third barrier, and it is deliberately independent.** The
@@ -655,7 +1011,8 @@ class JobService:
             return None
         if stored.target_digest != target_digest:
             raise IdempotencyConflict("this idempotency key is already in use")
-        return self._rehydrate(stored, key=key)
+        async with self._lock:
+            return self._rehydrate(stored, key=key)
 
     def _existing_for(self, binding_key: tuple[str, str], target_digest: str) -> CheckJob | None:
         binding = self._by_key.get(binding_key)
@@ -709,14 +1066,53 @@ class JobService:
         idempotency = (held or (None, None))[1]
         if job.idempotency_key is not None and idempotency is None:
             idempotency = self._idempotency_digest(job.owner, job.idempotency_key)
+        admission = self._admissions.get(job.id.value)
+        if admission is None:
+            raise JobError("a persisted job must carry an executor-admission fact")
+        await self.store.save(
+            _stored(
+                job,
+                target_digest=digest,
+                idempotency=idempotency,
+                admission=admission,
+            )
+        )
+        # Only a successful write authorizes later state writes to reuse these
+        # immutable identity values.
         self._persisted[job.id.value] = (digest, idempotency)
-        await self.store.save(_stored(job, target_digest=digest, idempotency=idempotency))
 
     async def _persist_id(self, job_id: JobId) -> None:
         """Write whatever the registry now holds for `job_id`."""
         job = self._jobs.get(job_id.value)
         if job is not None:
             await self._persist(job)
+
+    async def _persist_step(self, job_id: JobId, what: str) -> bool:
+        """Write a state the next irreversible step depends on. `False` stops it.
+
+        The distinction from `_persist_best_effort` is the whole protocol: a
+        state that *authorizes* something — `running` authorizes an SMTP
+        dialogue, `retry_scheduled` authorizes a second one — must exist on disk
+        before that something happens, because the disk is what a later process
+        reads. A state that merely *records* an outcome does not, and refusing to
+        return a verdict because a disk was unavailable would be a worse answer
+        than an unwritten row.
+        """
+        try:
+            await self._persist_id(job_id)
+        except Exception:
+            await self._abandon(job_id, JobFailure.SERVICE_ERROR, detail=f"job {what}")
+            return False
+        return True
+
+    async def _persist_best_effort(self, job_id: JobId) -> None:
+        """Record a state that authorizes nothing. A failure is told, not raised."""
+        try:
+            await self._persist_id(job_id)
+        except Exception:
+            self.operator.record(
+                OperatorEvent(kind=OperatorEventKind.INTERNAL_ERROR, detail="job state")
+            )
 
     def _rehydrate(self, stored: StoredJob, *, key: IdempotencyKey | None) -> CheckJob:
         """A stored job back into the registry, with its binding restored.
@@ -735,8 +1131,11 @@ class JobService:
             result=_public(stored),
             failure=stored.failure,
             idempotency_key=key,
+            recipient_touch=stored.recipient_touch,
         )
         self._jobs[job.id.value] = job
+        self._admissions[job.id.value] = stored.admission
+        self._owned.discard(job.id.value)
         self._persisted[job.id.value] = (stored.target_digest, stored.idempotency_digest)
         if key is not None and stored.target_digest is not None:
             self._by_key[(stored.owner, key.value)] = _KeyBinding(
@@ -753,7 +1152,11 @@ class JobService:
         reading what its rows became.
         """
         held = self.get(job_id, principal=principal)
-        if held is not None or self.store is None:
+        if held is not None and (
+            self.store is None or held.id.value in self._owned or held.is_terminal
+        ):
+            return held
+        if self.store is None:
             return None if held is None and self.store is None else held
         stored = await self.store.load(job_id.value)
         if stored is None or stored.owner != principal.rate_limit_account:
@@ -761,6 +1164,83 @@ class JobService:
             # answers exactly what an unknown identifier does.
             return None
         return self._rehydrate(stored, key=None)
+
+    async def recover_interrupted(self, *, before: datetime, limit: int) -> RecoveryReport:
+        """Classify jobs a previous process left unfinished. Enqueues nothing.
+
+        **This is reconciliation, not resumption, and the difference is a safety
+        property rather than a limitation of effort.** `ports/job_executor.py`'s
+        only implementation runs in this process and dies with it, so a
+        `pending`, `running`, or `retry_scheduled` row found on disk has no work
+        anywhere that will advance it. Two things could be done with such a row,
+        and only one of them is honest:
+
+        - re-enqueue it, which for a `running` row means running a verification
+          that may already have issued its one `RCPT TO` — a second recipient
+          contact for one submitted address, decided by guessing;
+        - end it as an operational failure, which says what is true: the
+          operation did not finish, and this service will not finish it.
+
+        This does the second, for **every** nonterminal row rather than only the
+        armed ones. A `pending` row is provably safe to replay and is still not
+        replayed here, because there is nowhere to replay it *to*; inventing a
+        durable queue out of an in-memory one is the overclaim
+        `docs/architecture.md` refuses to make.
+
+        `JobFailure.INTERRUPTED` and no status. `unknown` and
+        `temporary_unknown` are published statements about a mailbox, and "the
+        machine stopped" is not one.
+
+        **Cancelled and completed rows are never returned by the scan**, so this
+        cannot resurrect a cancellation — a structural property of the store's
+        predicate rather than a check here that could be edited away.
+
+        `before` is a cutoff and not a convenience. A store may be shared with a
+        live replica, and a scan with no cutoff would let one process declare
+        another's running jobs interrupted. A handoff this process owns is
+        skipped for the same reason, which covers a caller that runs this against
+        a service that is already serving. Merely reconstructing another
+        replica's row does not make this process its owner.
+        """
+        if self.store is None:
+            return RecoveryReport()
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise JobError("a recovery batch must be a positive whole number")
+        stored_jobs = await self.store.find_nonterminal(before=before, limit=limit)
+        interrupted = 0
+        unsafe = 0
+        live = 0
+        for stored in stored_jobs:
+            if stored.job_id in self._owned:
+                # This process owns its executor handoff. A merely rehydrated
+                # observer has no work and may reconcile it once the cutoff says
+                # the real owner is no longer plausibly live.
+                live += 1
+                continue
+            await self.store.save(
+                replace(
+                    stored,
+                    state=JobState.FAILED,
+                    failure=JobFailure.INTERRUPTED,
+                    admission=JobAdmission.INTERRUPTED,
+                    updated_at=self._now(),
+                )
+            )
+            interrupted += 1
+            if not stored.recipient_touch.replay_is_safe:
+                unsafe += 1
+        if interrupted:
+            self.operator.record(
+                OperatorEvent(
+                    kind=OperatorEventKind.INTERNAL_ERROR, detail="interrupted jobs recovered"
+                )
+            )
+        return RecoveryReport(
+            scanned=len(stored_jobs),
+            interrupted=interrupted,
+            unsafe_to_replay=unsafe,
+            skipped_live=live,
+        )
 
     def purge_finished(self, *, before: datetime, limit: int) -> int:
         """Forget terminal jobs older than `before`. Returns how many went.
@@ -786,6 +1266,7 @@ class JobService:
                 continue
             del self._jobs[job_id]
             self._forget_bindings(job_id)
+            self._forget_job_metadata(job_id)
             removed += 1
         return removed
 
@@ -794,6 +1275,12 @@ class JobService:
         for binding_key, binding in list(self._by_key.items()):
             if binding.job_id == job_id:
                 del self._by_key[binding_key]
+
+    def _forget_job_metadata(self, job_id: str) -> None:
+        """Drop process-local persistence and handoff metadata for one job."""
+        self._persisted.pop(job_id, None)
+        self._admissions.pop(job_id, None)
+        self._owned.discard(job_id)
 
     def _evict(self) -> None:
         """Drop the oldest terminal jobs to make room. Never a live one.
@@ -811,6 +1298,7 @@ class JobService:
             if evictable is None:
                 return
             removed = self._jobs.pop(evictable)
+            self._forget_job_metadata(evictable)
             if removed.idempotency_key is None:
                 continue
             binding_key = (removed.owner, removed.idempotency_key.value)
@@ -822,7 +1310,13 @@ class JobService:
         return self.clock.now()
 
 
-def _stored(job: CheckJob, *, target_digest: str | None, idempotency: str | None) -> StoredJob:
+def _stored(
+    job: CheckJob,
+    *,
+    target_digest: str | None,
+    idempotency: str | None,
+    admission: JobAdmission,
+) -> StoredJob:
     """A `CheckJob` as the store may keep it. A projection, never a copy.
 
     The submitted address is not among the parameters, so it cannot reach the
@@ -834,11 +1328,13 @@ def _stored(job: CheckJob, *, target_digest: str | None, idempotency: str | None
         job_id=job.id.value,
         owner=job.owner,
         state=job.state,
+        admission=admission,
         created_at=job.created_at,
         updated_at=job.updated_at,
         retries_used=job.retries_used,
         idempotency_digest=idempotency,
         target_digest=target_digest,
+        recipient_touch=job.recipient_touch,
         failure=job.failure,
         status=None if result is None else result.status,
         confidence=None if result is None else result.confidence,

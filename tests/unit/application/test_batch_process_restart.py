@@ -40,21 +40,62 @@ from tests.phase6_fixtures import (
     InMemoryVerdictStore,
     RecordingExecutor,
     ScriptedSMTPVerification,
+    resolver_with_temporary_failure,
 )
 from tests.phase7_fixtures import OTHER_PRINCIPAL as OTHER
 
 from emailcheck.adapters.storage.sqlite_batch_store import SQLiteBatchStore
 from emailcheck.adapters.storage.sqlite_job_store import SQLiteJobStore
 from emailcheck.application.batch import BatchService
-from emailcheck.application.jobs import IdempotencyConflict, JobService
+from emailcheck.application.jobs import IdempotencyConflict, JobRecordMismatch, JobService
 from emailcheck.domain.batch import BatchId, BatchLimits, BatchRowState
 from emailcheck.domain.job import IdempotencyKey, JobError, JobFailure, JobId, JobState
 from emailcheck.ports.job_executor import ExecutorFull
+from emailcheck.ports.job_store import ClaimResult, ClaimStatus
 
 asyncio_test = pytest.mark.asyncio
 
 OUTER_BOUND: Final = 10.0
 SERIAL: Final = BatchLimits(max_in_flight=1, max_in_flight_per_domain=1, max_in_flight_per_mx=1)
+
+
+@dataclass
+class TreacherousStore:
+    """A `JobStore` that answers questions it was not asked.
+
+    Stands in for a bug, a shared file, or a compromised adapter. `planted` is
+    what every idempotency *lookup* returns and `claim` is what every *claim*
+    returns, so the two ownership barriers can be exercised one at a time —
+    which is the rule the Phase 10 review set: two barriers are only two if each
+    fails on its own.
+    """
+
+    inner: SQLiteJobStore
+    planted: object = None
+    claim: object = None
+
+    async def claim_idempotency(self, record: object) -> object:
+        if self.claim is not None:
+            return self.claim
+        return await self.inner.claim_idempotency(record)  # type: ignore[arg-type]
+
+    async def save(self, record: object) -> None:
+        await self.inner.save(record)  # type: ignore[arg-type]
+
+    async def load(self, job_id: str) -> object | None:
+        return await self.inner.load(job_id)
+
+    async def find_by_idempotency(self, owner: str, digest: str) -> object | None:
+        return self.planted
+
+    async def find_nonterminal(self, *, before: object, limit: int) -> object:
+        return await self.inner.find_nonterminal(before=before, limit=limit)  # type: ignore[arg-type]
+
+    async def delete(self, job_id: str) -> None:
+        await self.inner.delete(job_id)
+
+    async def purge_terminal(self, *, before: object, limit: int) -> int:
+        return await self.inner.purge_terminal(before=before, limit=limit)  # type: ignore[arg-type]
 
 
 class Interrupted(BaseException):
@@ -109,9 +150,14 @@ class Machine:
     batch: BatchService = field(init=False)
     retention_seconds: int = 3600
     limits: BatchLimits = SERIAL
-    #: The scripted recipient answer. A temporary one is what makes
-    #: `retry_scheduled` reachable through the ordinary pipeline.
+    #: The scripted recipient answer.
     reply_lines: tuple[str, ...] = ("250 2.1.5 ok",)
+    #: Whether DNS answers SERVFAIL. **The only way to reach `retry_scheduled`
+    #: through the ordinary pipeline**, since Remediation A: a temporary reply to
+    #: `RCPT TO` no longer schedules a retry, because that attempt already
+    #: contacted the recipient and a second verification would contact it again.
+    #: A SERVFAIL happens before any socket, so replay is provably safe.
+    dns_servfail: bool = False
 
     def __post_init__(self) -> None:
         self.restart()
@@ -139,6 +185,7 @@ class Machine:
         """
         self.jobs = build_jobs(
             smtp=ScriptedSMTPVerification(reply_lines=self.reply_lines),
+            resolver=resolver_with_temporary_failure() if self.dns_servfail else None,
             job_store=self.job_store,
             verdicts=self.verdicts,
             executor=self.executor,
@@ -360,13 +407,18 @@ async def test_a_terminal_child_result_is_recoverable_by_a_new_process(tmp_path:
 async def test_a_restart_does_not_reset_a_childs_retry_budget(tmp_path: Path) -> None:
     """§11. One retry is a budget, and a budget a restart refills is none.
 
-    Driven through the ordinary pipeline: a `450` is `docs/requirements.md`
-    section 14's explicit temporary condition, so the job moves to
+    Driven through the ordinary pipeline: a DNS SERVFAIL is
+    `docs/requirements.md` section 14's temporary condition that provably
+    happened **before** any recipient stage, so the job moves to
     `retry_scheduled` with its one retry spent. `CheckJob` refuses a second
     retry structurally — but only if the count survives, which is what this
     asserts about the store rather than about the type.
+
+    A `450` at `RCPT TO` used to drive this and no longer can: that attempt
+    contacted the recipient, so Remediation A settles it instead of scheduling a
+    second verification.
     """
-    machine = Machine(root=tmp_path, reply_lines=("450 4.7.1 try later",))
+    machine = Machine(root=tmp_path, dns_servfail=True)
     outcome = await machine.jobs.submit("user@example.test", principal=PRINCIPAL)
     await machine.executor.run_pending()
     scheduled = machine.jobs.get(outcome.job.id, principal=PRINCIPAL)
@@ -431,15 +483,8 @@ async def test_a_cancelled_batch_submits_nothing_after_a_whole_process_restart(
 
 
 @asyncio_test
-async def test_a_job_the_executor_refused_leaves_nothing_persisted(tmp_path: Path) -> None:
-    """The rollback reaches the store, not only the registry.
-
-    `submit` writes the claim before handing the work over, so a refusal has to
-    unwind both. A record left behind would answer a later presentation of the
-    same handle with a job that was never enqueued and can never run — the
-    persistent form of the `pending`-job leak an independent review found in
-    Phase 6's registry.
-    """
+async def test_a_job_the_executor_refused_stays_terminal_across_restart(tmp_path: Path) -> None:
+    """The observable identity survives as failure and is never re-admitted."""
     machine = Machine(root=tmp_path)
     machine.executor.full = True
     key = IdempotencyKey("handle-" + "c" * 20)
@@ -453,9 +498,11 @@ async def test_a_job_the_executor_refused_leaves_nothing_persisted(tmp_path: Pat
         "user@example.test", principal=PRINCIPAL, idempotency_key=key
     )
 
-    assert recovered.enqueued is True, "a refused job was recovered from the store"
-    assert recovered.existing is False
-    assert len(machine.executor.submitted) == 1
+    assert recovered.enqueued is False
+    assert recovered.existing is True
+    assert recovered.job.state is JobState.FAILED
+    assert recovered.job.failure is JobFailure.CAPACITY_UNAVAILABLE
+    assert machine.executor.submitted == []
 
 
 def test_a_stored_job_may_not_carry_a_status_before_it_completes() -> None:
@@ -566,26 +613,6 @@ async def test_a_store_answering_with_another_owners_job_is_refused(tmp_path: Pa
     The operator gets the event, because they are who can act on it.
     """
 
-    @dataclass
-    class TreacherousStore:
-        inner: SQLiteJobStore
-        planted: object = None
-
-        async def save(self, record: object) -> None:
-            await self.inner.save(record)  # type: ignore[arg-type]
-
-        async def load(self, job_id: str) -> object | None:
-            return await self.inner.load(job_id)
-
-        async def find_by_idempotency(self, owner: str, digest: str) -> object | None:
-            return self.planted
-
-        async def delete(self, job_id: str) -> None:
-            await self.inner.delete(job_id)
-
-        async def purge_terminal(self, *, before: object, limit: int) -> int:
-            return await self.inner.purge_terminal(before=before, limit=limit)  # type: ignore[arg-type]
-
     machine = Machine(root=tmp_path)
     key = IdempotencyKey("handle-" + "g" * 20)
     theirs = await machine.jobs.submit("user@example.test", principal=OTHER, idempotency_key=key)
@@ -601,6 +628,42 @@ async def test_a_store_answering_with_another_owners_job_is_refused(tmp_path: Pa
     assert mine.job.id.value != theirs.job.id.value, "another account's job was handed over"
     assert mine.job.owner == ACCOUNT
     assert mine.existing is False
+
+
+@asyncio_test
+async def test_a_store_answering_a_claim_with_another_owners_job_refuses_the_submission(
+    tmp_path: Path,
+) -> None:
+    """The same barrier at the seam that now decides idempotency.
+
+    `_resolve_binding` is the read-only fast path and answering `None` there is
+    right — a duplicate submission is the cost. `claim_idempotency` is the
+    **authority**, and `None` is not available to it: the claim reported that it
+    did not write, so treating the answer as "the key is free" would mint a job
+    the store has no row for. It fails closed instead, tells the operator, and
+    tells the caller nothing about whose record it saw.
+    """
+    machine = Machine(root=tmp_path)
+    key = IdempotencyKey("handle-" + "j" * 20)
+    theirs = await machine.jobs.submit("user@example.test", principal=OTHER, idempotency_key=key)
+    planted = await machine.job_store.load(theirs.job.id.value)
+    assert planted is not None
+
+    treacherous = TreacherousStore(
+        inner=machine.job_store,
+        planted=planted,
+        claim=ClaimResult(status=ClaimStatus.EXISTING_SAME_TARGET, existing=planted),
+    )
+    machine.restart()
+    machine.jobs.store = treacherous  # type: ignore[assignment]
+    sink = machine.jobs.operator
+
+    with pytest.raises(JobRecordMismatch):
+        await machine.jobs.submit("user@example.test", principal=PRINCIPAL, idempotency_key=key)
+
+    assert machine.jobs.get(theirs.job.id, principal=PRINCIPAL) is None
+    details = [event.detail for event in sink.events]  # type: ignore[attr-defined]
+    assert "idempotency owner mismatch" in details
 
 
 # --- retention and privacy ---------------------------------------------------

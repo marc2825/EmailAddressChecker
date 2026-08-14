@@ -50,6 +50,7 @@ from emailcheck.domain.address import NormalizedAddress
 from emailcheck.domain.evidence import Evidence
 from emailcheck.domain.mail_route import MailRoute, RouteCandidate
 from emailcheck.domain.rate_limit import RateLimitTimeout
+from emailcheck.domain.recipient_touch import RecipientTouch
 from emailcheck.domain.smtp_contract import SMTPCommand, SMTPContractError
 from emailcheck.domain.smtp_destination import DEFAULT_SMTP_PORT
 from emailcheck.domain.smtp_protocol import STAGE_ORDER, DialogueStage, SessionReport
@@ -205,6 +206,25 @@ class VerificationReport:
     def recipients_attempted(self) -> int:
         """How many times `RCPT TO` was reached. Never more than one."""
         return sum(1 for attempt in self.attempts if attempt.recipient_attempted)
+
+    @property
+    def recipient_touch(self) -> RecipientTouch:
+        """Whether this verification may already have contacted the recipient.
+
+        The fact everything above this layer needs in order to decide whether an
+        automatic second attempt is a second recipient contact. Derived from the
+        attempt records — which `touched_the_recipient` filled from the
+        transcript and the stage reached — rather than from `stopped_because`,
+        because a `VerificationStop` says why the *loop* ended and an
+        `INTERNAL_ERROR` at the recipient stage ends it under a different name
+        while having touched the recipient exactly as much.
+
+        `NOT_TOUCHED` therefore requires every attempt to have said so. There is
+        no branch here that produces it by default.
+        """
+        if any(attempt.recipient_attempted for attempt in self.attempts):
+            return RecipientTouch.MAYBE_TOUCHED
+        return RecipientTouch.NOT_TOUCHED
 
     @property
     def connections_made(self) -> int:

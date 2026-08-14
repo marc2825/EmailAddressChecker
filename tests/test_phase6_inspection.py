@@ -933,9 +933,13 @@ def test_the_idempotency_identity_includes_the_target() -> None:
     assert "target_digest" in source
 
 
-def test_the_job_service_rolls_back_when_the_executor_refuses() -> None:
-    """A `pending` job the executor never accepted can never run, and eviction
-    removes only terminal jobs."""
+def test_the_job_service_preserves_identity_when_the_executor_refuses() -> None:
+    """A durable winner may already be visible to another replica.
+
+    The one handoff opportunity is committed before the executor call, and a
+    refusal terminalizes that identity. Deleting or releasing it would recreate
+    the cross-replica pending phantom pinned by the crash-recovery suite.
+    """
     tree = tree_of(PHASE_6_MODULES["jobs"])
     submit = next(
         node
@@ -946,8 +950,19 @@ def test_the_job_service_rolls_back_when_the_executor_refuses() -> None:
     assert guarded, "the enqueue is not guarded at all"
     rendered = ast.unparse(guarded[0])
     assert "executor.submit" in rendered
-    assert "_release" in rendered
+    assert "_fail_admission" in rendered
     assert "BaseException" in rendered
+    assert "_release" not in rendered
+    assert ".delete" not in rendered
+
+    statements = [ast.unparse(statement) for statement in submit.body]
+    handoff = next(
+        index for index, statement in enumerate(statements) if "_commit_handoff" in statement
+    )
+    enqueue = next(
+        index for index, statement in enumerate(statements) if "executor.submit" in statement
+    )
+    assert handoff < enqueue, "the durable handoff marker must precede executor admission"
 
 
 def test_the_retry_table_is_read_by_reason_and_never_by_reply_code() -> None:

@@ -227,3 +227,65 @@ def test_admission_settings_reach_the_gate() -> None:
 def test_a_short_correlation_key_is_refused_at_configuration() -> None:
     with pytest.raises(ValueError, match="at least"):
         Deployment(api_keys={}, correlation_key=b"short")
+
+
+# --- the job store, which was built and then not handed over -----------------
+#
+# The final system audit found `SQLiteJobStore` implemented, tested, and reachable
+# from no configuration: this module constructed none and `JobService` therefore
+# ran with `store=None` everywhere. The durable idempotency claim that makes two
+# replicas agree and the recipient-touch checkpoint that stops a restarted
+# process replaying an operation both live behind that field, so the effect was
+# that neither existed in any deployment.
+
+
+def test_a_configured_job_store_reaches_the_job_service(tmp_path: Path) -> None:
+    """Identity, not existence.
+
+    "A store was created" and "the service has it" are different statements and
+    only the second one changes behaviour — which is exactly the gap the audit
+    measured, so the assertion is `is`.
+    """
+    path = tmp_path / "jobs.sqlite3"
+    stack = build_verification_stack(active_deployment(job_store_path=path))
+
+    assert stack.jobs is not None
+    assert stack.job_store is not None
+    assert stack.jobs.store is stack.job_store, "the job service was given no persistence"
+    assert path.exists(), "the schema was never created"
+
+
+def test_the_retention_sweep_gets_the_same_job_store(tmp_path: Path) -> None:
+    """Otherwise persisted jobs outlive `docs/privacy.md` section 3's window
+    while the in-memory registry is swept on time."""
+    stack = build_verification_stack(active_deployment(job_store_path=tmp_path / "jobs.sqlite3"))
+
+    assert stack.retention is not None
+    assert stack.retention.job_store is stack.job_store
+
+
+def test_an_unconfigured_job_store_is_visibly_absent_rather_than_silently(
+    tmp_path: Path,
+) -> None:
+    """`None` is a deployment that has none, and every call site checks."""
+    stack = build_verification_stack(active_deployment())
+
+    assert stack.jobs is not None
+    assert stack.job_store is None
+    assert stack.jobs.store is None
+
+
+def test_the_local_passive_profile_is_refused_a_job_store(tmp_path: Path) -> None:
+    """That profile accepts no job, so a job database would be a file nothing
+    writes and a retention obligation nothing incurs."""
+    with pytest.raises(ValueError, match="job store"):
+        passive_deployment(job_store_path=tmp_path / "jobs.sqlite3")
+
+
+def test_the_deployment_repr_names_the_job_store_and_still_no_secret() -> None:
+    """`Deployment` is the object most likely to be logged by accident."""
+    text = repr(active_deployment(job_store_path=Path("/var/lib/emailcheck/jobs.sqlite3")))
+
+    assert "jobs.sqlite3" in text
+    assert KEY not in text
+    assert "correlation_key=<redacted>" in text

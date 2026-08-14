@@ -40,6 +40,24 @@ Controls:
   — and each is pinned by its own test (ADR 0011);
 - **MX fallback is only for failures before the recipient stage**, so the next
   exchanger asks the question for the first time rather than asking it again;
+- **one high-level operation issues at most one `RCPT TO`, in total.** The bound
+  above is per *verification*; this one covers everything a caller's single
+  request causes, including `docs/requirements.md` section 14's automatic retry
+  and anything a restart might re-run. The gap between the two was real: a `450`
+  at `RCPT TO` is an "explicit temporary SMTP response", section 14 retried
+  those, and the retry was a whole second verification — so one submitted
+  address reached one mail server twice, twenty minutes apart, which is the
+  slower and more deliberate version of the pattern this section is about. An
+  automatic retry now requires a first attempt that provably did not reach the
+  recipient stage, carried as a protocol fact rather than inferred from a status:
+  `temporary_unknown` arises from a DNS SERVFAIL that opened no socket *and*
+  from a `451` at `RCPT TO`, and a rule that could not tell those apart is the
+  rule that broke. The count is asserted on the wire, across retries;
+- **an interrupted operation is not replayed.** A process that stops between
+  writing `RCPT TO` and reading the reply leaves a durable checkpoint written
+  *before* the dialogue began, saying the recipient may have been contacted; a
+  later process ends such a job as an operational failure rather than re-running
+  it. A duplicate `RCPT TO` arranged by restarting is the same duplicate;
 - no anonymous active checks;
 - per-account, IP, address, domain, and MX budgets;
 - new-account quotas;

@@ -636,10 +636,11 @@ Reusing a key for a different address is a `409` conflict rather than a second
 meaning for the key, because answering with the first address's job would be a
 confident verdict about a mailbox nobody asked about. ADR 0014.
 
-**An executor that refuses leaves nothing behind.** A registration is rolled
-back when the work cannot be handed over: a `pending` job the executor never
-accepted can never run, and eviction only removes terminal jobs, so one left
-behind would occupy a registry slot for ever.
+**An executor that refuses leaves one stable terminal identity.** A durable
+claim is observable before executor admission, so it is never deleted as a
+rollback. The same JobId becomes `failed` with an operational category and no
+mailbox status. It is evictable, it cannot occupy a live slot for ever, and a
+second replica cannot keep a pending snapshot of an identity that disappeared.
 
 `domain/job.py` holds the six states `prompts/06-api-cli.md` publishes —
 `pending`, `running`, `retry_scheduled`, `completed`, `failed`, `cancelled` —
@@ -664,13 +665,36 @@ delay set, and no `create_task` on the job path. It answers `is_isolated` as
 deployment on it — section 15 requires an isolated worker for that profile, and
 a development fake must not become the production default by omission.
 
-**One retry, and only for what section 14 names.** `application/retry.py` maps
-section 14's conditions onto reason codes and is a closed, explicit set:
-`smtp_temporary_failure`, `mailbox_full`, and `dns_temporary_failure` are
-retried, and `smtp_connection_timeout` is not — section 14 permits that one only
-"if service health is otherwise normal", and this project does not model service
-health, so retrying anyway would be implementing half a rule and calling it the
-rule.
+**One retry, and only for what section 14 names — and only before the recipient
+stage.** `application/retry.py` maps section 14's conditions onto reason codes
+and is a closed, explicit set: `smtp_temporary_failure`, `mailbox_full`, and
+`dns_temporary_failure` are in the table, and `smtp_connection_timeout` is not —
+section 14 permits that one only "if service health is otherwise normal", and
+this project does not model service health, so retrying anyway would be
+implementing half a rule and calling it the rule.
+
+Membership of that table is **necessary and not sufficient**. `docs/threat-model.md`
+bounds one high-level operation at one `RCPT TO` in total, and an automatic
+retry is a second whole verification, so a retry additionally requires a first
+attempt that provably did not reach the recipient stage. That is
+`domain/recipient_touch.py`'s two-member `RecipientTouch`, computed by
+`application/smtp_verification.py` from the transcript and the stage reached,
+carried on `VerificationOutcome`, persisted on the job, and checked by two
+independently effective barriers — the pure policy function and
+`CheckJob.moved_to`'s structural refusal to represent a touched job as
+`retry_scheduled`. `_settle` repeats the check as defense in depth at the
+scheduling seam; removing that local assertion alone changes no reachable
+behaviour while the stronger two remain.
+
+It is a protocol fact rather than a status for a reason that was measured: a
+`450` at `RCPT TO` and a DNS SERVFAIL that opened no socket both aggregate to
+`temporary_unknown`, so the previous rule retried both, and the first of those
+put one submitted address in front of one mail server twice. In this build the
+two recipient-stage reasons are therefore eligible by reason and refused by
+touch, and `dns_temporary_failure` is the condition that still earns its retry.
+The delays stay keyed by reason: a temporary SMTP failure observed before the
+recipient stage would be retryable under both rules, and deleting the row would
+be deciding here that such a thing can never happen.
 
 **The classification is the reason code's, never the reply's first digit.**
 `mailbox_full` arises from `452 4.2.2` and from `552 5.2.2`, and section 9 calls
@@ -682,12 +706,14 @@ until one side or the other is chosen for it.
 
 A retry is a whole new verification through `AddressVerificationService`, so
 admission, DNS, the limiter, the destination policy, the one-`RCPT TO` bound,
-and the total deadline all apply again. Phase 4E's rule is untouched and the
-distinction is worth keeping sharp: a second exchanger or a second `RCPT TO`
-*inside one verification* is the enumeration pattern `docs/threat-model.md`
-lists first and gate 4E refuses; one whole new verification twenty minutes
-later, capped at one, is what section 14 authorizes. The budget lives on the
-job, so a second retry cannot be arranged by re-enqueueing.
+and the total deadline all apply again. That is also precisely why the
+recipient-touch precondition exists: a second verification is a second chance to
+reach the recipient stage, so "capped at one retry" bounds the *number of
+verifications* and bounds nothing about how many times one address is named to a
+mail server. An earlier reading of section 14 kept the first bound and lost the
+second. The budget still lives on the job, so a second retry cannot be arranged
+by re-enqueueing, and the recipient-touch fact lives there too, so it cannot be
+arranged by restarting either.
 
 ### The result cache
 
@@ -838,11 +864,40 @@ in memory, so a **new process** presented with the same handle had no record of
 it and started a **second verification** for a row whose verification had
 already run — a duplicate `RCPT TO` for one address, arranged by restarting.
 `ports/job_store.py` and `adapters/storage/sqlite_job_store.py` close it: job
-identity, state, retry count, the result projection, and a **digest** of the
-`(owner, idempotency key)` pair survive, so a fresh `JobService` answers the
-handle with the existing job. The key itself is never stored —
-`IdempotencyKey` permits an `@` and Phase 7's privacy corpus found an address
-used as one.
+identity, state, retry count, the recipient-touch checkpoint, the result
+projection, and a **digest** of the `(owner, idempotency key)` pair survive, so
+a fresh `JobService` answers the handle with the existing job. The key itself is
+never stored — `IdempotencyKey` permits an `@` and Phase 7's privacy corpus
+found an address used as one.
+
+**The store decides idempotency, and it is wired.** Two things were wrong here
+and the final system audit found both. The claim was made under a process-local
+`asyncio.Lock`, which two replicas over one database do not share — measured as
+one owner, one key, and one address producing two job identifiers, two executor
+admissions, and two persistent bindings, so two active verifications for one
+address, arranged by scaling out. And `composition.py` constructed no job store
+at all, so `JobService.store` was `None` in every deployment and none of this
+existed outside its tests.
+
+`JobStore.claim_idempotency` is now the single decision point: one transaction,
+resolved against a `UNIQUE (owner, idempotency_digest)` index, answering
+`NEW_CLAIM`, `EXISTING_SAME_TARGET`, or `CONFLICT_DIFFERENT_TARGET`, with the
+losing caller reading the winner inside the same transaction. `save` is an
+explicit upsert on `job_id` rather than `INSERT OR REPLACE`, because SQLite's
+`REPLACE` resolves a constraint by *deleting* the conflicting row — which under
+the new index would have let one job's ordinary state transition evict the
+winner of a claim. A crossing write raises instead. `Deployment.job_store_path`
+configures the file. The update list contains only mutable fields; `owner`,
+`created_at`, and both
+identity digests are guarded for exact equality, so the same JobId cannot be
+rebound either. A composition test asserts `stack.jobs.store` **is** the store
+that was built.
+
+The claim is durable **before** it is local: the store first, the registry
+second. A committed claim is immediately observable and is never deleted on a
+later refusal. `JobAdmission` records the operational handoff separately from
+the six public states: `claimed`, `handoff_committed`, `admission_failed`,
+`not_required`, or `interrupted`.
 
 `application/retention.py` is the one seam for all of it. The persistent job
 store is swept on the **same** cutoff the in-memory registry uses, so
@@ -862,16 +917,52 @@ third exists because an independent review deleted the second and nothing
 noticed.
 
 **What a restart recovers, and what it does not.** It recovers *identity, state,
-retry budget, and result*: a completed child's verdict is readable by a process
-that did not create it, a cancelled child stays cancelled, and a spent retry
-stays spent. It does **not** re-execute work that was in flight. A job that was
-`running` when the process died stays `running`, is visible, and is reported by
-its batch as not yet final — because this project cannot know whether its one
-`RCPT TO` was already issued, and re-running it on the assumption that it was
-not is exactly the duplicate the store exists to prevent. Re-executing
-interrupted work is a worker-recovery property of the queue
-`docs/requirements.md` section 15 defers to the service-active profile, and it
-is not something Phase 10 may invent on a development executor.
+retry budget, the recipient-touch checkpoint, and result*: a completed child's
+verdict is readable by a process that did not create it, a cancelled child stays
+cancelled, and a spent retry stays spent. It does **not** re-execute work that
+was in flight, and the distinction between the two is worth stating plainly:
+
+| Persisted job state | Durable execution queue |
+|---|---|
+| implemented, in SQLite | **not implemented** |
+
+`ports/job_executor.py`'s only implementation runs in the API process and dies
+with it. So there is nothing to claim about exactly-once distributed execution,
+durable worker recovery, or an atomic database-and-executor transaction, and
+none of the three is claimed. The persist-to-executor handoff is two systems and
+is treated conservatively: the durable claim happens first, then an irrevocable
+`handoff_committed` token is persisted **before** `executor.submit`. A marker
+write failure calls no executor. A crash after the marker, whether before or
+after executor acceptance, is never permission for another replica to submit
+again. A definite refusal terminalizes the same identity instead of deleting it.
+
+A nonterminal job reconstructed by a process that does not own its handoff is a
+snapshot, not an authority. Idempotent submission and asynchronous fetch re-read
+the durable row before returning it, so a replica that observed `claimed` or
+`handoff_committed` also observes the owner's later admission failure rather
+than retaining an immortal pending phantom.
+
+The recipient-touch checkpoint is what makes the gap safe. `running` is
+persisted carrying `maybe_touched` **before** the active verification starts,
+not after its answer arrives — a fact recorded on the way out is exactly the
+fact a crash between writing `RCPT TO` and reading the reply destroys. A process
+that finds such a row knows replay is unsafe without knowing what happened. If
+that write fails, the verification does not start: SMTP must not proceed under a
+state the durable record cannot express.
+
+`JobService.recover_interrupted` is the reconciliation, and it is deliberately
+not a resumption. It ends every nonterminal row it is given as `failed` with the
+`interrupted` category — including a `pending` row that is *provably* safe to
+replay, because there is nowhere to replay it to, and inventing a durable queue
+out of an in-memory one would be an overclaim. It carries **no status**: turning
+"we do not know whether the `RCPT TO` went out" into `unknown` or
+`temporary_unknown` would answer a question about a mailbox with a fact about a
+machine. Completed and cancelled rows are never returned by the scan at all, so
+a cancellation cannot be resurrected by it. The operation takes a cutoff and
+skips rows this process still holds, because a store may be shared with a live
+replica and an unbounded scan would be one process declaring another's running
+jobs dead. **No scheduler runs it**; it is an operator action, on the same
+footing as `RetentionService`.
 
 **The result is an expiring artifact behind a principal.** Owner and expiry are
 predicates of the read, not filters after it, and the artifact carries a

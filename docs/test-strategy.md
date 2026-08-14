@@ -481,7 +481,7 @@ expanded in Phase 2's order, one endpoint never planned twice, and the same
 address behind two exchanger names planned as two attempts — because the
 certificate is verified against the host name.
 
-**The recipient-touched rule has two barriers and each is pinned**, on the
+**The per-verification recipient-touched rule has two transcript barriers and each is pinned**, on the
 precedent gate 4D set. A `SessionReport` whose transcript names `RCPT TO` at an
 earlier stage is caught by the transcript check alone; one that reached the stage
 with an empty transcript is caught by the stage check alone.
@@ -712,8 +712,33 @@ Required scenarios:
   enqueued first would still answer from the cache while having spent the slot;
 - another account neither reads nor cancels the job, and gets the answer an
   unknown identifier gets;
-- one retry for a temporary condition, none for any recipient answer, and a
-  second retry structurally impossible;
+- one retry for a temporary condition **that happened before the recipient
+  stage**, none for any recipient answer, and a second retry structurally
+  impossible. The count that matters is measured on the wire rather than on the
+  report: `tests/unit/application/test_operation_recipient_budget.py` drives one
+  job through the real Phase 4 stack and counts `RCPT TO` commands across
+  retries, because the earlier suite counted verification calls and a build that
+  contacted one recipient twice satisfied it;
+- two `JobService` instances over one database agree about one idempotency key —
+  one job, one admission, one binding —
+  `tests/unit/application/test_multi_instance_idempotency.py`. Process-local
+  locks pass every single-process test and none of these;
+- the executor-admission gap is fixed with events, never sleeps: replica A
+  commits the identity and pauses inside admission, replica B reconstructs it,
+  A is refused, and B must refresh to the same terminal JobId rather than keep
+  a pending phantom. Restart and different-target assertions keep that identity
+  bound. The persisted `handoff_committed` token precedes the executor call, so
+  a marker-write failure is asserted to produce zero executor work;
+- ordinary SQLite state saves vary `owner`, `created_at`,
+  `idempotency_digest`, and `target_digest` independently, including NULL in
+  both directions. Every mismatch must raise and leave the original row exact;
+  a positive control updates state, retry count, recipient touch, admission,
+  result fields, and `updated_at`;
+- every crash point between the claim and the reply is a fresh process with an
+  **empty** executor, in
+  `tests/unit/application/test_job_crash_recovery.py`. Carrying the old executor
+  across a restart is carrying a queue this project does not have, and it is
+  what an earlier restart suite did;
 - a cancellation landing *inside* a running verification does not become
   `completed`, `failed`, or `retry_scheduled` afterwards. An earlier version of
   this test cancelled a job that was still queued, so the fake executor simply
@@ -721,6 +746,12 @@ Required scenarios:
   guard escaped the entire suite;
 - the registry evicts finished jobs, never a live one, and forgets their
   idempotency keys with them.
+
+For operation-global retry, the independently effective barriers are the pure
+retry policy and `CheckJob.moved_to`'s refusal to represent a maybe-touched job
+as `retry_scheduled`. `_settle` repeats `replay_is_safe` as defense in depth at
+the scheduling seam; removing only that repetition is expected to be inert and
+is not described as a third independently mutation-pinned barrier.
 
 **The executor is tested as a set of refusals.** Bounds on workers, queue, and
 delay set; a full queue and a full delay set refusing rather than growing; a

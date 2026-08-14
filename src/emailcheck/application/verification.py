@@ -77,6 +77,7 @@ from emailcheck.domain.evidence import Evidence
 from emailcheck.domain.mail_route import MailRoute
 from emailcheck.domain.principal import Principal
 from emailcheck.domain.reasons import ReasonCode
+from emailcheck.domain.recipient_touch import RecipientTouch
 from emailcheck.domain.source import SourceIdentity
 from emailcheck.domain.verdict import Verdict
 from emailcheck.ports.observability import OperatorEvent, OperatorEventKind, OperatorSink
@@ -188,6 +189,43 @@ class VerificationOutcome:
     #: from `connectable_candidates[0]`: a public DNS record, and the vocabulary
     #: `docs/requirements.md` section 16 already permits aggregating by.
     scheduling_key: str | None = None
+    #: Whether this verification may already have put the recipient on a wire.
+    #:
+    #: **The one fact an automatic retry may be decided on.** `docs/threat-model.md`
+    #: bounds one active operation at one `RCPT TO` in total, and the status this
+    #: outcome carries cannot express that bound: `temporary_unknown` arises from
+    #: a DNS SERVFAIL that opened no socket *and* from a `451` at `RCPT TO`, so a
+    #: caller branching on the verdict retried both and contacted one recipient
+    #: twice. Carried from `VerificationReport.recipient_touch`, which is the
+    #: protocol fact, and never re-derived from a reason code here.
+    #:
+    #: The default is the conservative member on purpose. A producer that adds a
+    #: path returning a `VerificationOutcome` without answering this question
+    #: gets "an automatic retry is not allowed", which costs one retry; the other
+    #: default costs a second recipient contact.
+    recipient_touch: RecipientTouch = RecipientTouch.MAYBE_TOUCHED
+
+
+@dataclass(frozen=True, slots=True)
+class _RecipientStep:
+    """What the SMTP step produced: evidence, whether it ran, and what it touched.
+
+    A value rather than a tuple because the three disagree often enough that
+    positional unpacking stopped being readable, and because adding the touch to
+    a two-tuple is exactly the edit that gets made in the wrong order.
+    """
+
+    evidence: tuple[Evidence, ...]
+    attempted: bool
+    recipient_touch: RecipientTouch
+
+
+#: The SMTP step that did not happen. There is nowhere to connect, this
+#: deployment does not probe, or this request is passive — and none of the three
+#: puts a recipient on a wire.
+_NO_RECIPIENT_STEP: Final = _RecipientStep(
+    evidence=(), attempted=False, recipient_touch=RecipientTouch.NOT_TOUCHED
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +352,7 @@ class AddressVerificationService:
                 target=None,
                 route_ttl=None,
                 scheduling_key=None,
+                recipient_touch=RecipientTouch.NOT_TOUCHED,
             )
 
         assert isinstance(parsed, AddressAccepted)
@@ -334,32 +373,37 @@ class AddressVerificationService:
         classification = self.passive.classify(target, route)
         passive_evidence = self.passive.evidence(classification)
 
-        smtp_evidence, attempted = await self._verify_recipient(
-            target, route, account=account, active=active
-        )
+        step = await self._verify_recipient(target, route, account=account, active=active)
 
         # `docs/status-model.md` section 4 makes the decision order-independent,
         # so this order is a retention decision rather than a semantic one:
         # cheapest layer first, then the network layers in the order they ran,
         # with SMTP evidence already in attempt order from Phase 4E.
-        evidence = (*passive_evidence, route_evidence, *smtp_evidence)
+        evidence = (*passive_evidence, route_evidence, *step.evidence)
         return self._finish(
             evidence,
-            active=attempted,
+            active=step.attempted,
             target=target,
             route_ttl=None if route.ttl is None else route.ttl.applied_seconds,
             scheduling_key=scheduled_exchanger(route, self.guard),
+            recipient_touch=step.recipient_touch,
         )
 
     async def _verify_recipient(
         self, target: NormalizedAddress, route: MailRoute, *, account: str, active: bool
-    ) -> tuple[tuple[Evidence, ...], bool]:
+    ) -> _RecipientStep:
         """The SMTP step, when there is one, and whether it ran.
 
         The flag is returned separately from the evidence because the two can
         disagree: a verification refused by this project's own pacing reaches
         the SMTP layer and produces no evidence at all, and reporting that as
         "no probe was attempted" would be the wrong operational answer.
+
+        The recipient-touch fact is returned as a third thing rather than being
+        folded into either, because it disagrees with both: a paced-out
+        verification attempted no probe and touched no recipient, while a
+        verification that reached `RCPT TO` and got no reply attempted a probe,
+        produced evidence about nothing, and touched the recipient.
 
         Three conditions, and none of them is a judgement about the address:
         active checks must be permitted for this request, this deployment must
@@ -369,9 +413,9 @@ class AddressVerificationService:
         to decide whether a Null MX means what Phase 2 already said it means.
         """
         if not active or self.smtp is None:
-            return (), False
+            return _NO_RECIPIENT_STEP
         if not route.connectable_candidates:
-            return (), False
+            return _NO_RECIPIENT_STEP
         if self.guard is not None:
             # **The domain and sender switches first**, because they refuse the
             # whole verification rather than one host.
@@ -401,7 +445,7 @@ class AddressVerificationService:
                 # nowhere to connect, so nothing is probed and no destination
                 # budget is spent — the answer Phase 2 already gives a domain
                 # with no usable route.
-                return (), False
+                return _NO_RECIPIENT_STEP
 
             # The destination layers, charged once per verification that will
             # actually connect. The exchanger *charged* is the preferred one
@@ -418,7 +462,11 @@ class AddressVerificationService:
             )
         report = await self.smtp.verify(target, route, account=account)
         self._report_pacing(report, target)
-        return report.evidence, True
+        return _RecipientStep(
+            evidence=report.evidence,
+            attempted=True,
+            recipient_touch=report.recipient_touch,
+        )
 
     def _report_pacing(self, report: VerificationReport, target: NormalizedAddress) -> None:
         """Tell the operator when this project's own pacing refused an attempt.
@@ -454,6 +502,7 @@ class AddressVerificationService:
         target: NormalizedAddress | None,
         route_ttl: int | None,
         scheduling_key: str | None,
+        recipient_touch: RecipientTouch,
     ) -> VerificationOutcome:
         """Aggregate, report an internal failure to the operator, and return.
 
@@ -477,6 +526,7 @@ class AddressVerificationService:
             target=target,
             route_ttl_seconds=route_ttl,
             scheduling_key=scheduling_key,
+            recipient_touch=recipient_touch,
         )
 
 

@@ -11,6 +11,12 @@ The system has four independent concepts:
 
 Do not store only the final status.
 
+Asynchronous job state is outside these four concepts. `JobState`,
+`JobAdmission`, and `JobFailure` describe this service's operation and executor
+handoff; none is mailbox evidence and none may be converted into a
+deliverability `Status`. In particular, `admission_failed` and `interrupted`
+carry no mailbox result.
+
 ## 2. Statuses
 
 ### likely_deliverable
@@ -33,8 +39,7 @@ Examples:
 
 ### temporary_unknown
 
-Evidence explicitly indicates a condition expected to change or worth one
-bounded retry.
+Evidence explicitly indicates a condition expected to change.
 
 Examples:
 
@@ -42,6 +47,16 @@ Examples:
 - SMTP 4xx;
 - bounded connection timeout when service health is normal;
 - explicitly reported temporary mailbox/storage condition.
+
+**This status is not a retry instruction, and reading it as one was a defect.**
+The four examples above are one status and two very different situations: a
+SERVFAIL opened no socket, while an SMTP 4xx is a reply to `RCPT TO` and means
+this project has already named the address to a mail server. `docs/requirements.md`
+section 14's automatic retry is decided on that protocol fact — carried
+separately as `RecipientTouch` — and never on the status, because the status
+cannot express the difference. A caller reading `temporary_unknown` learns that
+the condition may change; whether *this service* will try again is
+section 14's question and ADR 0019's answer.
 
 ### unknown
 

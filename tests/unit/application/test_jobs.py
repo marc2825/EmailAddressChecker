@@ -40,9 +40,10 @@ from emailcheck.application.jobs import (
 from emailcheck.application.retry import RETRY_AFTER_SECONDS
 from emailcheck.application.verdict_cache import VerdictCache
 from emailcheck.domain.address import AddressAccepted, RawAddressInput, parse_address
-from emailcheck.domain.job import IdempotencyKey, JobError, JobId, JobState
+from emailcheck.domain.job import IdempotencyKey, JobError, JobFailure, JobId, JobState
 from emailcheck.domain.principal import Principal
 from emailcheck.domain.reasons import ReasonCode
+from emailcheck.domain.recipient_touch import RecipientTouch
 from emailcheck.domain.verdict import Status
 from emailcheck.ports.job_executor import ExecutorFull
 from emailcheck.security.identifiers import correlation_digest
@@ -701,17 +702,21 @@ async def test_a_rejected_address_records_no_idempotency_binding() -> None:
     assert later.existing is False
 
 
-# --- F3: an executor refusal leaves nothing behind -------------------------
+# --- F3: an executor refusal leaves one stable terminal identity ------------
 
 
-async def test_an_executor_refusal_leaves_the_registry_unchanged() -> None:
+async def test_an_executor_refusal_leaves_one_terminal_operational_job() -> None:
     harness = Harness(settings=JobSettings(max_jobs=6))
     harness.executor.full = True
 
     with pytest.raises(ExecutorFull):
         await harness.jobs.submit(VALID, principal=PRINCIPAL)
 
-    assert harness.jobs._jobs == {}
+    assert len(harness.jobs._jobs) == 1
+    failed = next(iter(harness.jobs._jobs.values()))
+    assert failed.state is JobState.FAILED
+    assert failed.failure is JobFailure.CAPACITY_UNAVAILABLE
+    assert failed.result is None
     assert harness.jobs._by_key == {}
 
 
@@ -727,44 +732,48 @@ async def test_repeated_executor_refusals_do_not_poison_the_registry() -> None:
         with pytest.raises(ExecutorFull):
             await harness.jobs.submit(VALID, principal=PRINCIPAL)
 
-    assert len(harness.jobs._jobs) == 0
+    assert len(harness.jobs._jobs) == harness.jobs.settings.max_jobs
+    assert all(job.is_terminal for job in harness.jobs._jobs.values())
 
     harness.executor.full = False
     healthy = await harness.jobs.submit(VALID, principal=PRINCIPAL)
     assert healthy.job.state is JobState.PENDING
     assert harness.executor.submitted == [healthy.job.id.value]
+    assert len(harness.jobs._jobs) <= harness.jobs.settings.max_jobs
 
 
-async def test_an_executor_refusal_frees_the_idempotency_key_again() -> None:
-    """F2 and F3 interact: a refused submission must not leave a binding
-    pointing at a job that will never run."""
+async def test_an_executor_refusal_preserves_the_idempotency_winner() -> None:
+    """An observable identity never becomes available to a second operation."""
     harness = Harness()
     key = IdempotencyKey("order-4711-attempt-1")
     harness.executor.full = True
 
     with pytest.raises(ExecutorFull):
         await harness.jobs.submit(VALID, principal=PRINCIPAL, idempotency_key=key)
-    assert harness.jobs._by_key == {}
+    binding = harness.jobs._by_key[(PRINCIPAL.rate_limit_account, key.value)]
+    failed = harness.jobs._jobs[binding.job_id]
+    assert failed.state is JobState.FAILED
 
     harness.executor.full = False
     recovered = await harness.jobs.submit(VALID, principal=PRINCIPAL, idempotency_key=key)
-    assert recovered.enqueued is True
-    assert recovered.existing is False
+    assert recovered.job.id == failed.id
+    assert recovered.enqueued is False
+    assert recovered.existing is True
+    assert harness.executor.submitted == []
 
 
-async def test_a_rollback_never_frees_a_key_another_submission_took() -> None:
-    """`_release` removes the binding only when it still points at its own job."""
+async def test_a_repeat_never_changes_the_existing_successful_binding() -> None:
     harness = Harness()
     key = IdempotencyKey("order-4711-attempt-1")
     winner = await harness.jobs.submit(VALID, principal=PRINCIPAL, idempotency_key=key)
 
-    loser = harness.jobs._new_job(
-        account=PRINCIPAL.rate_limit_account, state=JobState.PENDING, key=key
-    )
-    await harness.jobs._release(loser)
+    harness.executor.full = True
+    repeated = await harness.jobs.submit(VALID, principal=PRINCIPAL, idempotency_key=key)
 
     binding = harness.jobs._by_key[(PRINCIPAL.rate_limit_account, key.value)]
     assert binding.job_id == winner.job.id.value
+    assert repeated.job.id == winner.job.id
+    assert repeated.enqueued is False
 
 
 async def test_a_job_is_discoverable_before_the_executor_is_told_about_it() -> None:
@@ -825,20 +834,72 @@ async def test_a_cache_hit_still_costs_the_passive_lookup_and_that_is_documented
     ],
     ids=["450", "451", "452", "552 5.2.2"],
 )
-async def test_one_retry_and_never_a_second(lines: tuple[str, ...]) -> None:
-    """`docs/requirements.md` section 14: at most one automatic retry.
+async def test_a_temporary_recipient_reply_is_settled_rather_than_replayed(
+    lines: tuple[str, ...],
+) -> None:
+    """The finding, as the behaviour that now holds.
 
-    The same temporary answer twice settles the job rather than scheduling a
-    third verification. The budget lives on the record, so it cannot be
-    refreshed by re-enqueueing or by the executor running the work again.
+    These four replies are `docs/requirements.md` section 14's "explicit
+    temporary SMTP response", and the previous build retried every one of them.
+    Each is also, necessarily, a reply to `RCPT TO` — `smtp_temporary_failure`
+    and `mailbox_full` are produced nowhere else — so the retry was a **second
+    recipient contact for one submitted address**, twenty minutes later. The
+    final system audit counted two `RCPT TO` commands on the wire for one job.
+
+    So the job settles on the first answer. `retries_used` stays at zero,
+    because no retry was spent rather than one being spent and refused, and the
+    verification ran exactly once.
     """
     harness = Harness(smtp=ScriptedSMTPVerification(reply_lines=lines))
+    job = await harness.submit()
+
+    await harness.executor.run_pending()
+    settled = harness.jobs.get(job.id, principal=PRINCIPAL)
+    assert settled.state is JobState.COMPLETED
+    assert settled.retries_used == 0
+    assert harness.executor.scheduled == [], "a touched recipient was scheduled for a second visit"
+    assert len(harness.smtp.calls) == 1
+
+    # Running the work again cannot revive it: the table refuses every exit
+    # from a terminal state.
+    await harness.executor.run_pending()
+    assert harness.jobs.get(job.id, principal=PRINCIPAL).state is JobState.COMPLETED
+    assert len(harness.smtp.calls) == 1
+
+
+async def test_the_recipient_touch_is_recorded_on_the_job_that_settled() -> None:
+    """Not inferred from the status later. `temporary_unknown` is reachable from
+    a DNS SERVFAIL that opened no socket and from a `451` at `RCPT TO`, so the
+    fact has to travel with the job rather than being re-derived from it."""
+    harness = Harness(smtp=ScriptedSMTPVerification(reply_lines=("451 4.3.0 later",)))
+    job = await harness.submit()
+    await harness.executor.run_pending()
+
+    settled = harness.jobs.get(job.id, principal=PRINCIPAL)
+    assert settled.recipient_touch is RecipientTouch.MAYBE_TOUCHED
+    assert settled.replay_is_safe is False
+
+
+async def test_one_retry_and_never_a_second_before_the_recipient_stage() -> None:
+    """Section 14's budget, on the condition that can still use it.
+
+    A DNS SERVFAIL happens before any socket, so the first attempt provably
+    contacted nobody and replay is safe. One retry is scheduled, the second
+    answer settles the job, and the budget on the record refuses a third
+    verification however the work is re-run.
+    """
+    harness = Harness()
+    harness.service, _, harness.sink = build_service(
+        resolver=resolver_with_temporary_failure(), smtp=harness.smtp
+    )
+    harness.jobs.verification = harness.service
     job = await harness.submit()
 
     await harness.executor.run_pending()
     scheduled = harness.jobs.get(job.id, principal=PRINCIPAL)
     assert scheduled.state is JobState.RETRY_SCHEDULED
     assert scheduled.retries_used == 1
+    assert scheduled.recipient_touch is RecipientTouch.NOT_TOUCHED
     assert len(harness.executor.scheduled) == 1
 
     await harness.executor.run_pending()
@@ -846,12 +907,10 @@ async def test_one_retry_and_never_a_second(lines: tuple[str, ...]) -> None:
     assert settled.state is JobState.COMPLETED
     assert settled.retries_used == 1
     assert len(harness.executor.scheduled) == 1
-    assert len(harness.smtp.calls) == 2
 
-    # Running the work a third time cannot revive it: the table refuses every
-    # exit from a terminal state.
     await harness.executor.run_pending()
     assert harness.jobs.get(job.id, principal=PRINCIPAL).state is JobState.COMPLETED
+    assert len(harness.executor.scheduled) == 1
 
 
 async def test_a_connection_timeout_settles_without_a_retry() -> None:
@@ -956,3 +1015,65 @@ async def test_two_concurrent_submissions_of_one_key_and_two_targets_conflict_ex
     assert binding.target_digest == target_digest_of(winner)
     loser = "bob@example.test" if winner == "alice@example.test" else "alice@example.test"
     assert binding.target_digest != target_digest_of(loser)
+
+
+# --- the second, structural barrier on replay --------------------------------
+
+
+async def test_a_touched_job_cannot_hold_the_retry_scheduled_state_at_all() -> None:
+    """`application/retry.py` refuses to produce a delay; this refuses to hold
+    the state.
+
+    Two barriers of different kinds, and this is the one no scheduling code can
+    route around: `retry_scheduled` is a promise to run the verification again,
+    and an operation that may already have contacted its recipient has no such
+    promise to make. The precedent is `retries_used`, which refuses to exist
+    above `MAX_RETRIES` rather than being checked before each increment.
+    """
+    now = OBSERVED_AT
+    running = CheckJob(
+        id=JobId("touched-job-0001xxxxxxxx"),
+        owner=PRINCIPAL.rate_limit_account,
+        state=JobState.RUNNING,
+        created_at=now,
+        updated_at=now,
+        recipient_touch=RecipientTouch.MAYBE_TOUCHED,
+    )
+
+    with pytest.raises(JobError, match="replayed"):
+        running.moved_to(JobState.RETRY_SCHEDULED, now=now, count_retry=True)
+
+    # The same move is permitted for an attempt that reached no recipient, so
+    # this refuses the unsafe case rather than the state.
+    safe = running.moved_to(
+        JobState.RETRY_SCHEDULED,
+        now=now,
+        count_retry=True,
+        recipient_touch=RecipientTouch.NOT_TOUCHED,
+    )
+    assert safe.state is JobState.RETRY_SCHEDULED
+    assert safe.retries_used == 1
+
+
+async def test_a_touched_job_may_still_complete_be_cancelled_and_be_failed() -> None:
+    """The barrier is on replay, not on the job. Every terminal exit stays open,
+    because a touched recipient is a perfectly ordinary answer to report."""
+    now = OBSERVED_AT
+    running = CheckJob(
+        id=JobId("touched-job-0002xxxxxxxx"),
+        owner=PRINCIPAL.rate_limit_account,
+        state=JobState.RUNNING,
+        created_at=now,
+        updated_at=now,
+        recipient_touch=RecipientTouch.MAYBE_TOUCHED,
+    )
+
+    assert (
+        running.moved_to(JobState.COMPLETED, now=now, result=empty_result()).state
+        is JobState.COMPLETED
+    )
+    assert running.moved_to(JobState.CANCELLED, now=now).state is JobState.CANCELLED
+    assert (
+        running.moved_to(JobState.FAILED, now=now, failure=JobFailure.SERVICE_ERROR).state
+        is JobState.FAILED
+    )

@@ -142,6 +142,20 @@ class ScriptedSMTPVerification:
     #: A whole `VerificationReport`, when a test needs the attempt records
     #: rather than only the evidence — the operational half Phase 6 reads.
     report: VerificationReport | None = None
+    #: Whether the scripted outcome reached the recipient stage.
+    #:
+    #: **This fixture has to be honest about it**, because it is what
+    #: `VerificationReport.recipient_touch` is derived from and therefore what
+    #: gates the automatic retry. An earlier version returned `attempts=()` for
+    #: every script, which made every scripted `450` look like a verification
+    #: that never contacted anybody — so a test of "one job, one recipient
+    #: touch" would have passed against a build that touched twice.
+    #:
+    #: `None` derives it from the script, and the derivation is the real rule: a
+    #: scripted *reply* is a reply to `RCPT TO`, and there is no other way to
+    #: obtain one. A script that produces evidence some other way — a refused
+    #: connection, an internal error — reached no recipient.
+    recipient_touched: bool | None = None
 
     async def verify(
         self, target: NormalizedAddress, route: MailRoute, *, account: str
@@ -156,10 +170,31 @@ class ScriptedSMTPVerification:
         produced = self.evidence
         if produced is None:
             produced = () if self.reply_lines is None else recipient_evidence(self.reply_lines)
+        touched = self.recipient_touched
+        if touched is None:
+            touched = self.reply_lines is not None
         return VerificationReport(
-            attempts=(),
+            attempts=(
+                AttemptRecord(
+                    index=0,
+                    mx_host=MX_HOST,
+                    outcome=(
+                        AttemptOutcome.RECIPIENT_ATTEMPTED
+                        if touched
+                        else AttemptOutcome.PRE_RECIPIENT_FAILURE
+                    ),
+                    stage_reached=None,
+                    recipient_attempted=touched,
+                    reached_the_network=True,
+                    evidence=produced,
+                ),
+            ),
             evidence=produced,
-            stopped_because=VerificationStop.RECIPIENT_ATTEMPTED,
+            stopped_because=(
+                VerificationStop.RECIPIENT_ATTEMPTED
+                if touched
+                else VerificationStop.CANDIDATES_EXHAUSTED
+            ),
         )
 
 
@@ -382,6 +417,11 @@ class RecordingExecutor:
     pending: dict[str, object] = field(default_factory=dict)
     isolated: bool = False
     full: bool = False
+    #: Refuse only `schedule`. A separate switch from `full`, because the state
+    #: that used to be left orphaned — `retry_scheduled` with nothing scheduled —
+    #: is only reachable when the first submission *succeeded* and the retry is
+    #: what gets refused.
+    full_on_schedule: bool = False
 
     @property
     def is_isolated(self) -> bool:
@@ -394,7 +434,7 @@ class RecordingExecutor:
         self.pending[job_id.value] = work
 
     async def schedule(self, job_id, work, *, delay_seconds: float) -> None:  # type: ignore[no-untyped-def]
-        if self.full:
+        if self.full or self.full_on_schedule:
             raise ExecutorFull("full")
         self.scheduled.append((job_id.value, delay_seconds))
         self.pending[job_id.value] = work
