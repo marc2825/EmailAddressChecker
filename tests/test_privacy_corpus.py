@@ -128,6 +128,7 @@ def caching_deployment(tmp: pathlib.Path) -> Deployment:
         api_keys={"acct-1": API_KEY},
         correlation_key=CORRELATION_KEY,
         profile=DeploymentProfile.LAB_ACTIVE,
+        lab_destination_allowlist=frozenset({"mx.test.example"}),
         store_path=tmp / "verdicts.sqlite",
     )
 
@@ -137,6 +138,7 @@ def deployment() -> Deployment:
         api_keys={"acct-1": API_KEY},
         correlation_key=CORRELATION_KEY,
         profile=DeploymentProfile.LAB_ACTIVE,
+        lab_destination_allowlist=frozenset({"mx.test.example"}),
     )
 
 

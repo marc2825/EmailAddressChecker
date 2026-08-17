@@ -135,12 +135,34 @@ _DELETE_ARTIFACT: Final = "DELETE FROM batch_artifacts WHERE batch_id = ?"
 #: for as long as the backlog is.
 _EXPIRED_IDS: Final = "SELECT batch_id FROM batches WHERE expires_at <= ? LIMIT ?"
 
-_STALE_INPUT_IDS: Final = "SELECT batch_id FROM batches WHERE created_at <= ? LIMIT ?"
+#: **`submitted IS NOT NULL` is the whole starvation fix.** The predicate used
+#: to select by `created_at` alone, so a batch whose plaintext had already been
+#: cleared was selected again on every sweep for ever. With a bounded `limit`
+#: that is not merely wasteful: the first already-cleared batch occupied the
+#: whole budget run after run, and a second batch's plaintext was never reached.
+#: The final system audit measured it.
+#:
+#: `EXISTS` rather than a join, so one batch is one row however many rows it has.
+#: The ordering is explicit for the same reason the recovery scan's is: an
+#: unordered bounded selection returns a different subset each run, which is a
+#: sweep whose progress a test cannot pin and an operator cannot reason about.
+_STALE_INPUT_IDS: Final = """
+SELECT batch_id FROM batches
+ WHERE created_at <= ?
+   AND EXISTS (
+       SELECT 1 FROM batch_rows
+        WHERE batch_rows.batch_id = batches.batch_id AND batch_rows.submitted IS NOT NULL
+   )
+ ORDER BY created_at ASC, batch_id ASC
+ LIMIT ?
+"""
 
 #: Clearing plaintext is an `UPDATE`, not a `DELETE`: the row's accounting must
 #: survive its input. A row that can no longer be submitted is recorded as
 #: refused by the caller, never silently dropped.
-_FORGET_INPUT: Final = "UPDATE batch_rows SET submitted = NULL WHERE batch_id = ?"
+_FORGET_INPUT: Final = (
+    "UPDATE batch_rows SET submitted = NULL WHERE batch_id = ? AND submitted IS NOT NULL"
+)
 
 
 class BatchStoreSchemaError(RuntimeError):
@@ -346,12 +368,21 @@ class SQLiteBatchStore:
         connection.execute(_DELETE_BATCH, (batch_id,))
 
     def _forget_inputs(self, before: datetime, limit: int) -> int:
+        """Clear stale plaintext. Returns batches **actually changed**.
+
+        The count used to be one per selected identifier, so a sweep that
+        cleared nothing still reported work — which is what an operator reads as
+        "retention is running" and what `more_remaining` reads as progress. It
+        is now driven by `cursor.rowcount`: a batch whose rows were already
+        `NULL` contributes zero, and the selection above no longer offers one.
+        """
         with self._connect() as connection:
             identifiers = connection.execute(_STALE_INPUT_IDS, (before.isoformat(), limit))
             cleared = 0
             for (batch_id,) in identifiers.fetchall():
-                connection.execute(_FORGET_INPUT, (batch_id,))
-                cleared += 1
+                cursor = connection.execute(_FORGET_INPUT, (batch_id,))
+                if cursor.rowcount > 0:
+                    cleared += 1
         return cleared
 
     def _purge_expired(self, now: datetime, limit: int) -> int:

@@ -1347,6 +1347,13 @@ def _stored(
             else tuple((name, check.result) for name, check in result.checks.items())
         ),
         ruleset=None if result is None else result.ruleset,
+        #: **Carried, never re-asserted.** The projection used to omit this and
+        #: `_public` rebuilt it as `True`, so a result that said message content
+        #: *had* been sent came back from disk claiming the opposite — the
+        #: strongest promise this project makes, manufactured by a reload. The
+        #: final system audit measured it. `None` for a job with no result at
+        #: all, which `StoredJob` pairs with a `None` status.
+        no_message_data_sent=None if result is None else result.no_message_data_sent,
     )
 
 
@@ -1358,6 +1365,11 @@ def _public(stored: StoredJob) -> PublicResult | None:
     """
     if stored.status is None or stored.confidence is None or stored.ruleset is None:
         return None
+    if stored.no_message_data_sent is None:
+        # A completed row must carry the safety assertion it was completed with.
+        # Substituting `True` here is exactly the laundering this branch
+        # replaced; refusing is the only answer that does not invent one.
+        raise JobError("a stored result must carry its no_message_data_sent assertion")
     return PublicResult(
         status=stored.status,
         confidence=stored.confidence,
@@ -1365,6 +1377,6 @@ def _public(stored: StoredJob) -> PublicResult | None:
         reasons=stored.reasons,
         risk_flags=stored.risk_flags,
         checks={name: PublicCheck(result=value) for name, value in stored.checks},
-        no_message_data_sent=True,
+        no_message_data_sent=stored.no_message_data_sent,
         ruleset=stored.ruleset,
     )

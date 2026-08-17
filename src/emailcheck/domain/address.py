@@ -364,6 +364,26 @@ def _closing_quote_index(text: str) -> int | None:
     return None
 
 
+def encode_domain_ascii(domain: str) -> str | None:
+    """The canonical ASCII form of `domain`, or `None` when it has none.
+
+    The **public** name for Phase 1's encoder, exported because two other places
+    need the identical answer and were not getting it. `application/admin.py`
+    stored whatever an operator typed, so `EXAMPLE.TEST`, `example.test.`, and
+    `bücher.test` were three different blocks and a route spelled any other way
+    walked past all of them; `composition.py`'s lab destination allowlist has
+    exactly the same problem to avoid. The final system audit found the first.
+
+    One encoder, so a domain has one identity everywhere: the address parser,
+    the mail route, the destination policy, an operator's kill switch, and a lab
+    allowlist all compare the same string. A second `.lower()` somewhere else is
+    the bug this exists to prevent, and it is why this is a shared function
+    rather than three implementations that agree today.
+    """
+    encoded, issue = _encode_domain(domain)
+    return None if issue is not None else encoded
+
+
 def _encode_domain(domain: str) -> tuple[str, AddressSyntaxIssue | None]:
     """Return the lowercase ASCII form of `domain`.
 

@@ -77,6 +77,19 @@ one that refuses to open. ADR 0016.
 
 ## 7. Deletion
 
+**Scheduled since Remediation B.** `RetentionScheduler` runs the sweep on
+`RetentionSettings.interval_seconds` for every profile that owns persistent
+service state, and `VerificationStack.run_retention` is the operator trigger for
+the same operation. The effective deletion time is therefore the retention
+cutoff **plus at most one scheduling interval**; the windows below are cutoffs,
+not wall-clock guarantees.
+
+**Logical deletion, not physical erasure.** A sweep deletes rows and sets
+retained plaintext to `NULL`. It does not overwrite SQLite free pages, rewrite
+the write-ahead log, or reach a backup taken before it ran. Anyone who needs
+those guarantees needs storage-level or backup-level erasure, which this project
+does not perform and does not claim.
+
 `application/retention.py` implements this, and keeps **three retentions
 separate**: a cached verdict expires on its own `expires_at` (ADR 0015, from
 `docs/requirements.md` section 13), a finished job record lives

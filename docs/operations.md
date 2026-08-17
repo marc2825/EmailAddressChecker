@@ -36,6 +36,22 @@ disable a security control to the public application is what "non-public
 interface" exists to prevent, and `docs/architecture.md` carries that as a stop
 condition on the ASGI binding.
 
+**A destination switch is canonicalized before it is stored.** A domain or
+exchanger block goes through the same `HostName` identity the mail route uses —
+case-folded, trailing dot removed, IDNA-encoded through Phase 1's UTS-46
+encoder — so `EXAMPLE.TEST`, `example.test.`, and `bücher.test` are one block
+rather than three that each match nothing. Before Remediation B they were stored
+as typed and compared against a canonical route, so each of those three read as
+thrown and blocked nothing. An unusable host name is refused at the boundary
+rather than stored inert. Account and API-key subjects are **not** normalized:
+those are opaque identifiers, and two spellings really are two accounts.
+
+**A lab-active deployment additionally names what it may contact.**
+`Deployment.lab_destination_allowlist` is the exchanger inventory
+`docs/requirements.md` section 15 requires, canonicalized the same way. It
+restricts and grants nothing: a block still beats it, and an allowlisted host
+still passes the destination policy, the peer check, and TLS verification.
+
 The global switch stops the enqueue **and** the worker. A switch that stopped
 only new work would leave the queue connecting to remote hosts after an operator
 said stop, which is the moment they most need it to have worked.
@@ -55,6 +71,29 @@ The "third time" is now rarer than it reads: ADR 0019 permits an automatic retry
 only for a first attempt that provably did not reach the recipient stage, and in
 this build that is DNS SERVFAIL alone. Size for it anyway — the budget must
 cover the worst case, and the retry that does run costs a full verification.
+
+### Retention
+
+`RetentionService` is now **scheduled**. `VerificationStack.start` starts a
+`RetentionScheduler` for every profile that owns persistent service state —
+local-passive gets none, because it accepts no job and owns no batch — and
+`aclose` stops it. `VerificationStack.run_retention` is the operator trigger and
+runs the same sweep, so a timer and an operator cannot get different policy.
+
+`RetentionSettings.interval_seconds` is operator configuration: fifteen minutes
+by default, refused below one minute or above one day, and reachable from no
+request, flag, or admin call. **The effective deletion time is the retention
+cutoff plus at most one interval**, not the cutoff exactly.
+
+A sweep is logical deletion — rows removed, retained plaintext set to `NULL`.
+Secure physical erasure of SQLite free pages, the write-ahead log, or any backup
+taken before the sweep is outside what this project does; see
+[privacy.md](privacy.md).
+
+One failing store no longer suppresses the others: each cleanup runs under its
+own handler and `DeletionReport.failed_stores` names the categories that failed,
+in this project's vocabulary rather than an exception's text. A failed sweep
+does not end the schedule.
 
 ### Restarts and interrupted jobs
 

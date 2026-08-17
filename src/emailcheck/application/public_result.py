@@ -170,7 +170,7 @@ def public_result_from_json_object(payload: object) -> PublicResult:
         reasons=_text_tuple(payload, "reasons"),
         risk_flags=_text_tuple(payload, "risk_flags"),
         checks=checks,
-        no_message_data_sent=bool(payload.get("no_message_data_sent", True)),
+        no_message_data_sent=_safety_boolean(payload, "no_message_data_sent"),
         ruleset=_text(payload, "ruleset"),
     )
 
@@ -179,6 +179,42 @@ def _text(payload: Mapping[str, object], name: str) -> str:
     value = payload.get(name)
     if not isinstance(value, str):
         raise ValueError(f"a result needs a text {name}")
+    return value
+
+
+def _safety_boolean(payload: Mapping[str, object], name: str) -> bool:
+    """A published safety assertion, parsed strictly. Never coerced.
+
+    **This replaced `bool(payload.get(name, True))`, which laundered a remote
+    server's silence into this project's strongest promise.** Three ways in, all
+    measured by the final system audit:
+
+    - the field **absent** became `True`, so a server that had sent message
+      content and simply omitted the field was displayed as one that had not;
+    - the string `"false"` became `True`, because every non-empty string is
+      truthy — the single most likely shape for a hand-rolled or
+      loosely-typed remote encoder to produce;
+    - `0`, `[]`, and `{}` became `False`, which is the right answer reached by
+      the wrong rule and would have flipped the moment the encoder changed.
+
+    `docs/requirements.md` section 2 makes "no message content was sent" a
+    promise to the user rather than a field, and a promise this project repeats
+    on another instance's behalf has to have been *made* by that instance. So
+    the field is **required** and must be a real JSON boolean. Absence is a
+    malformed body, not a safe default: `--remote` is the one path where the
+    value is not this build's own invariant, and there is no honest way to infer
+    it.
+
+    `isinstance(value, bool)` rather than a truthiness test, and the `bool`
+    check comes with the ordering Python requires — `True` and `False` are the
+    only two values that pass, and `1` and `0` do not, even though they are
+    `int` instances that compare equal.
+    """
+    if name not in payload:
+        raise ValueError(f"a result needs a published {name}")
+    value = payload[name]
+    if not isinstance(value, bool):
+        raise ValueError(f"a result needs a boolean {name}")
     return value
 
 

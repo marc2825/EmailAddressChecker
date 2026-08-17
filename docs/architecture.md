@@ -905,10 +905,38 @@ persistence does not quietly extend `docs/privacy.md` section 3's window in
 order to make a resume work; and `BatchStore` is swept there too, with **two
 cutoffs rather than one** — `BatchSettings.input_retention_seconds` clears the
 retained submitted addresses, `result_retention_seconds` removes the batch and
-its artifact. `RetentionService` holds the operations; **no scheduler runs
-them**, because composition is deferred, and wiring one is a stop condition
-rather than a claim. The job store holds no address at all: digests and
-published vocabulary only.
+its artifact. `RetentionService` holds the operations, and — since Remediation
+B — **`RetentionScheduler` runs them**. The job store holds no address at all:
+digests and published vocabulary only.
+
+**Scheduled, and what that does and does not mean.** `composition.py` builds a
+`RetentionScheduler` for every profile that owns persistent service state (not
+local-passive, which accepts no job and owns no batch) and
+`VerificationStack.start` starts it; `aclose` cancels it before the executor.
+`VerificationStack.run_retention` is the operator trigger, and it invokes the
+same `RetentionService.run` — one cleanup seam, one set of cutoffs, one failure
+signal, so a timer and an operator cannot get different policy. It is an
+application operation rather than an HTTP route: this document's "no public
+administrative interface" stop condition still holds, and a deletion endpoint a
+caller could reach is a denial-of-service control with an audit trail attached.
+
+The effective deletion time is therefore **the retention cutoff plus at most one
+scheduling interval** (`RetentionSettings.interval_seconds`, default fifteen
+minutes, validated between one minute and one day), not the cutoff exactly. A
+backlog larger than `batch_limit` is drained over a bounded number of passes per
+interval rather than one, and `DeletionReport.more_remaining` says when work is
+left.
+
+**A sweep is logical deletion.** Rows are deleted and retained plaintext is set
+to `NULL`; nothing here claims secure physical erasure — SQLite free pages, the
+write-ahead log, and any backup taken before the sweep are outside what this
+project controls, and `docs/privacy.md` is where that boundary is described.
+
+**One failing store no longer suppresses the others.** Each cleanup runs under
+its own exception handler and `DeletionReport.failed_stores` names the
+categories that failed in this project's own vocabulary — never an exception
+message, a path, or a query. A failed category is also never reported as a
+drained one.
 
 Ownership of a persisted job has three independent barriers — the binding digest
 carries the owner, the adapter's `WHERE` names it, and `JobService` compares it

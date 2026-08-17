@@ -46,6 +46,12 @@ from emailcheck.ports.job_store import ClaimResult, ClaimStatus, StoredJob
 #: Bumped when the shape changes. A file written by another shape is refused at
 #: start rather than migrated.
 #:
+#: Version 4 is Remediation B: it persists the completed result's
+#: `no_message_data_sent`. A version 3 file has no column for it, and the value
+#: a reload would have to invent is precisely the assertion the column exists to
+#: stop being invented — so such a file is refused by version rather than read
+#: with an assumed `True`.
+#:
 #: Version 3 is the final Remediation A follow-up: it adds the executor-handoff
 #: admission fact. Version 2 added `recipient_touch` and — the reason a version
 #: 1 file cannot simply be opened — the **unique** idempotency index. A file
@@ -55,7 +61,7 @@ from emailcheck.ports.job_store import ClaimResult, ClaimStatus, StoredJob
 #: error from the driver at some unrelated moment; refusing the file by version
 #: fails at start, with a sentence, which is the convention
 #: `adapters/storage/sqlite_store.py` set.
-SCHEMA_VERSION: Final = 3
+SCHEMA_VERSION: Final = 4
 
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS job_schema_version (version INTEGER NOT NULL);
@@ -78,7 +84,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     reasons            TEXT NOT NULL,
     risk_flags         TEXT NOT NULL,
     checks             TEXT NOT NULL,
-    ruleset            TEXT
+    ruleset            TEXT,
+    no_message_data_sent INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency
@@ -96,7 +103,8 @@ _RECORD_VERSION: Final = "INSERT INTO job_schema_version (version) VALUES (?)"
 _COLUMNS: Final = """
 SELECT job_id, owner, state, admission, created_at, updated_at, retries_used,
        idempotency_digest, target_digest, recipient_touch, failure, status,
-       confidence, primary_reason, reasons, risk_flags, checks, ruleset
+       confidence, primary_reason, reasons, risk_flags, checks, ruleset,
+       no_message_data_sent
   FROM jobs
 """
 
@@ -112,8 +120,9 @@ _INSERT: Final = """
 INSERT INTO jobs (
     job_id, owner, state, admission, created_at, updated_at, retries_used,
     idempotency_digest, target_digest, recipient_touch, failure, status,
-    confidence, primary_reason, reasons, risk_flags, checks, ruleset
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    confidence, primary_reason, reasons, risk_flags, checks, ruleset,
+    no_message_data_sent
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (job_id) DO UPDATE SET
     state              = excluded.state,
     admission          = excluded.admission,
@@ -127,7 +136,8 @@ ON CONFLICT (job_id) DO UPDATE SET
     reasons            = excluded.reasons,
     risk_flags         = excluded.risk_flags,
     checks             = excluded.checks,
-    ruleset            = excluded.ruleset
+    ruleset            = excluded.ruleset,
+    no_message_data_sent = excluded.no_message_data_sent
  WHERE jobs.owner = excluded.owner
    AND jobs.created_at = excluded.created_at
    AND jobs.idempotency_digest IS excluded.idempotency_digest
@@ -141,8 +151,9 @@ _CLAIM_INSERT: Final = """
 INSERT INTO jobs (
     job_id, owner, state, admission, created_at, updated_at, retries_used,
     idempotency_digest, target_digest, recipient_touch, failure, status,
-    confidence, primary_reason, reasons, risk_flags, checks, ruleset
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    confidence, primary_reason, reasons, risk_flags, checks, ruleset,
+    no_message_data_sent
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 """
 
@@ -394,6 +405,7 @@ def _row_for(record: StoredJob) -> tuple[Any, ...]:
         json.dumps(list(record.risk_flags)),
         json.dumps([list(pair) for pair in record.checks]),
         record.ruleset,
+        None if record.no_message_data_sent is None else int(record.no_message_data_sent),
     )
 
 
@@ -417,4 +429,9 @@ def _record(row: tuple[Any, ...]) -> StoredJob:
         risk_flags=tuple(json.loads(str(row[15]))),
         checks=tuple((str(pair[0]), str(pair[1])) for pair in json.loads(str(row[16]))),
         ruleset=None if row[17] is None else str(row[17]),
+        # SQLite has no boolean type, so the column is an INTEGER and this is
+        # the one place it becomes a `bool` again. `None` stays `None`: an
+        # unfinished job has no assertion to make, and `bool(None)` would be the
+        # same laundering one layer down.
+        no_message_data_sent=None if row[18] is None else bool(row[18]),
     )

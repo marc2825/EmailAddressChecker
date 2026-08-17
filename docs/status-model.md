@@ -37,6 +37,14 @@ Examples:
 - no MX and no implicit A/AAAA route;
 - RCPT-stage enhanced code explicitly indicating recipient does not exist.
 
+### A note on `no_message_data_sent`
+
+It is a **safety assertion**, not a status, a confidence, or a reason, and
+nothing in this document derives one from the other. A malformed or missing
+value at the remote boundary is a protocol-validation failure — never
+`Status.INVALID` or any other published status, because a remote server's broken
+JSON says nothing about an address.
+
 ### temporary_unknown
 
 Evidence explicitly indicates a condition expected to change.

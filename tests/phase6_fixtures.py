@@ -137,6 +137,10 @@ class ScriptedSMTPVerification:
     reply_lines: tuple[str, ...] | None = None
     evidence: tuple[Evidence, ...] | None = None
     calls: list[tuple[str, str]] = field(default_factory=list)
+    #: The `MailRoute` each call was handed. Recorded because the candidate
+    #: *filtering* that happens above this layer — the operator's blocks and the
+    #: lab destination allowlist — is only observable in what reaches here.
+    routes: list[MailRoute] = field(default_factory=list)
     delay_seconds: float = 0.0
     raises: BaseException | None = None
     #: A whole `VerificationReport`, when a test needs the attempt records
@@ -161,6 +165,7 @@ class ScriptedSMTPVerification:
         self, target: NormalizedAddress, route: MailRoute, *, account: str
     ) -> VerificationReport:
         self.calls.append((target.domain.ascii_form, account))
+        self.routes.append(route)
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
         if self.raises is not None:

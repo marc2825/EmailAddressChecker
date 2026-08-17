@@ -32,6 +32,16 @@ attachments, `VRFY`, or `EXPN`.
 The public UI and API documentation must say that a remote mail server may be
 contacted even though no message content is transmitted.
 
+`no_message_data_sent` publishes this promise. For a result this build produced
+it is an invariant of the SMTP state machine; for a result received over
+`--remote` it is a claim **another** instance made, and this project may not
+manufacture it on that instance's behalf. So at the remote boundary the field is
+**required** and must be a real JSON boolean: absence is a malformed body rather
+than a safe default, and `"false"`, `0`, `1`, and `null` are refused rather than
+coerced. `False` survives parsing, the job projection, persistence, reload, the
+API body, and the CLI — which prints the affirmative statement only when the
+result actually makes it, and an explicit warning when it does not.
+
 ## 3. Deliverability status
 
 The public status is exactly one of:
@@ -325,7 +335,14 @@ Retry with the same target, sender, and stable identity. Do not rotate identity.
 
 ### lab-active
 
-- destination allowlist;
+- destination allowlist — **enforced**: `Deployment.lab_destination_allowlist`
+  names the exchanger host names this deployment may contact, canonicalized to
+  the same `HostName` identity the route and the operator's blocks use. A
+  probing lab deployment with an empty allowlist does not start, and an empty
+  allowlist permits nothing rather than everything. It restricts and grants
+  nothing: an allowlisted host still passes the destination policy, the
+  operator's blocks, the peer check, and TLS verification, and every MX
+  candidate is checked rather than only the preferred one;
 - controlled SMTP server or owned domain;
 - active probing feature flag;
 - low concurrency;

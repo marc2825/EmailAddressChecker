@@ -11,11 +11,12 @@ the same way an address domain is before it becomes a `HostName`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
-from emailcheck.domain.address import ascii_domain_issue
+from emailcheck.domain.address import ascii_domain_issue, encode_domain_ascii
 
 #: Requirements section 13. Caps are policy, not protocol truth.
 POSITIVE_TTL_CAP_SECONDS: Final = 24 * 60 * 60
@@ -81,6 +82,16 @@ class DNSFailure(StrEnum):
         return self is DNSFailure.INTERNAL_ERROR
 
 
+def _presentation_form(text: str) -> str:
+    """Strip surrounding space and the presentation trailing dot. Nothing else.
+
+    Shared by both constructors so the two cannot disagree about what a trailing
+    dot means — which is exactly the kind of drift that let one spelling of a
+    host be blocked while another was contacted.
+    """
+    return text.strip().rstrip(".")
+
+
 @dataclass(frozen=True, slots=True)
 class HostName:
     """A validated ASCII DNS host name in its canonical form.
@@ -101,13 +112,117 @@ class HostName:
     def normalize(cls, text: str) -> HostName | None:
         """Return a canonical host name, or None when the text is unusable.
 
-        Remote data uses this instead of the constructor: a malformed exchange
-        is an observation to record, not a crash.
+        **The wire path.** Remote data uses this instead of the constructor: a
+        malformed exchange is an observation to record, not a crash. It stays
+        ASCII-only on purpose — an MX exchange arrives as ASCII bytes, and a
+        non-ASCII one is malformed wire data rather than a name to be encoded.
+        `canonical` is the path for text a human typed.
         """
-        candidate = text.strip().rstrip(".").lower()
-        if not candidate or ascii_domain_issue(candidate) is not None:
+        candidate = _presentation_form(text)
+        if not candidate or ascii_domain_issue(candidate.lower()) is not None:
             return None
-        return cls(candidate)
+        return cls(candidate.lower())
+
+    @classmethod
+    def canonical(cls, text: str) -> HostName:
+        """One host identity from text a human or a configuration file supplied.
+
+        **The operator path, and it exists because there were three of them.**
+        `application/admin.py` stored an operator's kill switch as the string
+        they typed, so `EXAMPLE.TEST`, `example.test.`, and `bücher.test` each
+        blocked something no route was ever spelled as, and the block silently
+        did nothing — the final system audit measured it. A lab-active
+        destination allowlist read from a configuration file has the same
+        problem with the same three spellings.
+
+        So both go through here, and here goes through Phase 1's IDNA encoder
+        (`encode_domain_ascii`, UTS-46, non-transitional, ADR 0005) and then
+        through the same `ascii_domain_issue` validation the wire path uses. The
+        result is a `HostName` — the type `MailRoute`, `approve_destination`,
+        and the exchanger switch already compare — rather than a second string
+        format that agrees by coincidence.
+
+        Raises rather than returning `None`: an operator who mistypes a domain
+        must be told, because a switch stored as an inert unmatched string is a
+        control that looks thrown and is not.
+        """
+        if not isinstance(text, str):
+            raise DNSContractError("a host name must be text")
+        presentation = _presentation_form(text)
+        if not presentation:
+            raise DNSContractError("unusable host name: empty")
+        encoded = encode_domain_ascii(presentation)
+        if encoded is None:
+            raise DNSContractError("unusable host name: domain_idna_failure")
+        return cls(encoded)
+
+
+@dataclass(frozen=True, slots=True)
+class DestinationAllowlist:
+    """The exchangers a deployment may contact at all. Canonical identities.
+
+    `docs/requirements.md` section 15 gives the lab-active profile a
+    *destination allowlist*, and `config/lab-active.toml.example` has carried
+    one since Phase 0 — as decorative TOML that no code read. The final system
+    audit found that: a lab deployment probed whatever DNS pointed it at, which
+    is the opposite of "controlled SMTP server or owned domain".
+
+    **Exchanger host names**, because that is what the configuration example
+    lists and what a connection actually reaches. Not recipient domains: a
+    domain names no socket, and the thing an operator is promising to stay
+    inside is a set of machines they own.
+
+    **No wildcards.** Nothing in the repository defines a wildcard syntax for
+    this, and inventing one would mean inventing its matching rule — which is
+    the kind of rule that later turns out to match a suffix nobody intended.
+    Each entry is one exact canonical host.
+
+    **Empty means nothing is permitted**, never everything. An unset allowlist
+    is the shape a misconfiguration takes, and reading it as "allow every public
+    MX" would make the safest-looking configuration the most dangerous one.
+    `composition.py` additionally refuses to *build* a probing lab deployment
+    with an empty allowlist, so the fail-closed answer here is the second
+    barrier rather than the only one.
+
+    This grants nothing. A host on the allowlist is *eligible* to be contacted
+    and still has to pass the destination policy, the operator's blocks, the
+    peer check, and TLS verification.
+    """
+
+    hosts: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        for host in self.hosts:
+            if HostName.canonical(host).value != host:
+                raise DNSContractError("a destination allowlist holds canonical host names")
+
+    @classmethod
+    def of(cls, values: Iterable[str]) -> DestinationAllowlist:
+        """Build one from operator configuration, canonicalizing every entry.
+
+        Through `HostName.canonical`, so `MX.Example.Test.` in a configuration
+        file and `mx.example.test` in a DNS answer are one host — the identity
+        `application/admin.py`'s blocks now use, for the same reason.
+        """
+        return cls(hosts=frozenset(HostName.canonical(value).value for value in values))
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.hosts
+
+    def permits(self, host: str) -> bool:
+        """Whether `host` may be contacted. Unusable text is not permitted.
+
+        The argument is canonicalized rather than trusted, so this answers the
+        same way whether it is handed a `HostName.value` from a route or a
+        string from somewhere newer. Text with no canonical form is refused
+        rather than compared raw: an entry that cannot be a host cannot be one
+        this deployment owns.
+        """
+        try:
+            return HostName.canonical(host).value in self.hosts
+        except DNSContractError:
+            return False
 
 
 @dataclass(frozen=True, slots=True)

@@ -36,10 +36,21 @@ def passive_deployment(**kwargs: object) -> Deployment:
     return Deployment(api_keys={"acct-1": KEY}, correlation_key=CORRELATION_KEY, **kwargs)  # type: ignore[arg-type]
 
 
+LAB_ALLOWLIST = frozenset({"mx.test.example"})
+
+
 def active_deployment(**kwargs: object) -> Deployment:
     """A probing deployment, which by `docs/requirements.md` section 15 is not
-    the local-passive profile — that one is defined as "no active probes"."""
+    the local-passive profile — that one is defined as "no active probes".
+
+    The destination allowlist is not decoration here: section 15 gives
+    lab-active one, and Remediation B made a probing lab deployment without it
+    refuse to start. A fixture that omitted it would be building a deployment
+    the composition root no longer accepts.
+    """
     kwargs.setdefault("profile", DeploymentProfile.LAB_ACTIVE)
+    if kwargs.get("profile") is DeploymentProfile.LAB_ACTIVE:
+        kwargs.setdefault("lab_destination_allowlist", LAB_ALLOWLIST)
     return Deployment(
         api_keys={"acct-1": KEY},
         correlation_key=CORRELATION_KEY,
@@ -289,3 +300,78 @@ def test_the_deployment_repr_names_the_job_store_and_still_no_secret() -> None:
     assert "jobs.sqlite3" in text
     assert KEY not in text
     assert "correlation_key=<redacted>" in text
+
+
+# --- the retention schedule (B4) --------------------------------------------
+#
+# `RetentionService` was built here and called from nowhere, so every window in
+# `docs/privacy.md` was enforced by whoever remembered. Which profiles get a
+# sweeping daemon is a property of the object graph rather than of any class in
+# it, so it can only be pinned here.
+
+
+@pytest.mark.parametrize(
+    ("profile", "scheduled"),
+    [
+        (DeploymentProfile.LOCAL_PASSIVE, False),
+        (DeploymentProfile.LAB_ACTIVE, True),
+    ],
+    ids=["local-passive", "lab-active"],
+)
+def test_only_the_profiles_that_own_service_state_get_a_retention_daemon(
+    profile: DeploymentProfile, scheduled: bool
+) -> None:
+    """A developer laptop does not silently acquire a background deletion task
+    because the class exists; a lab deployment that owns jobs and batches does.
+    """
+    deployment = active_deployment() if scheduled else passive_deployment()
+    assert deployment.profile is profile
+
+    stack = build_verification_stack(deployment)
+
+    assert (stack.retention_scheduler is not None) is scheduled
+    assert stack.retention is not None, "every profile still has the operator trigger"
+
+
+def test_the_scheduler_sweeps_the_same_service_the_operator_triggers() -> None:
+    """One cleanup seam. An operator invoking the trigger can never get
+    different policy from the timer."""
+    stack = build_verification_stack(active_deployment())
+
+    assert stack.retention_scheduler is not None
+    assert stack.retention_scheduler.service is stack.retention
+    assert stack.retention_scheduler.settings is stack.retention.settings
+
+
+@pytest.mark.asyncio
+async def test_starting_and_closing_the_stack_starts_and_stops_both_tasks() -> None:
+    """The executor and the retention sweep share one lifecycle, and neither
+    outlives `aclose` — a sweep left running holds a database connection."""
+    stack = build_verification_stack(active_deployment())
+    assert stack.executor is not None and stack.retention_scheduler is not None
+
+    await stack.start()
+    retention_task = stack.retention_scheduler._task
+    assert retention_task is not None and not retention_task.done()
+
+    await stack.aclose()
+
+    assert retention_task.done(), "the retention task outlived the stack"
+
+
+@pytest.mark.asyncio
+async def test_the_operator_trigger_runs_one_sweep_and_needs_no_route() -> None:
+    """`prompts/07-hardening.md`'s "trigger deletion", as an application
+    operation on the built stack rather than a public endpoint — a deletion
+    route reachable by a caller is a denial-of-service control with an audit
+    trail attached."""
+    stack = build_verification_stack(active_deployment())
+
+    report = await stack.run_retention()
+
+    assert report.failed is False
+    assert report.total_removed == 0
+    # And it is not reachable as a request: the API's schema is closed.
+    from emailcheck.apps.api import PERMITTED_REQUEST_KEYS
+
+    assert frozenset({"email"}) == PERMITTED_REQUEST_KEYS

@@ -24,6 +24,7 @@ def active_deployment() -> Deployment:
         api_keys={"acct-1": KEY},
         correlation_key=CORRELATION_KEY,
         profile=DeploymentProfile.LAB_ACTIVE,
+        lab_destination_allowlist=frozenset({"mx.test.example"}),
     )
 
 
@@ -62,6 +63,7 @@ def test_the_administrative_state_comes_from_the_deployment() -> None:
             api_keys={"acct-1": KEY},
             correlation_key=CORRELATION_KEY,
             profile=DeploymentProfile.LAB_ACTIVE,
+            lab_destination_allowlist=frozenset({"mx.test.example"}),
             admin_state=AdminState(active_probing_enabled=False),
         )
     )

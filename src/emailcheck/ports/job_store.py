@@ -104,6 +104,16 @@ class StoredJob:
     risk_flags: tuple[str, ...] = ()
     checks: tuple[tuple[str, str], ...] = ()
     ruleset: str | None = None
+    #: The completed result's `no_message_data_sent`, persisted rather than
+    #: assumed.
+    #:
+    #: **It was absent, and a reload rebuilt it as `True`.** That is
+    #: `docs/requirements.md` section 2's promise to the user being made by a
+    #: database read rather than by the code that ran the dialogue, which the
+    #: final system audit found. Paired with `status`: present exactly when a
+    #: result is, so neither a completed row can lose it nor an unfinished row
+    #: can carry a safety assertion about work that has not happened.
+    no_message_data_sent: bool | None = None
     #: The submitted text is **absent by design**. Recovering a job's identity
     #: and answer needs no address, and a store that held one would be a second
     #: plaintext location with its own retention argument to make.
@@ -138,6 +148,16 @@ class StoredJob:
             moment = getattr(self, name)
             if not isinstance(moment, datetime) or moment.utcoffset() is None:
                 raise JobError(f"a stored job {name} must be timezone-aware")
+        if self.no_message_data_sent is not None and not isinstance(
+            self.no_message_data_sent, bool
+        ):
+            raise JobError("no_message_data_sent must be a boolean")
+        if (self.no_message_data_sent is None) != (self.status is None):
+            # Paired with the result, both directions. A completed row without
+            # it would be rebuilt with an invented assertion, and an unfinished
+            # row carrying one would be a safety claim about work that has not
+            # run.
+            raise JobError("a stored result carries its no_message_data_sent assertion")
         if (self.status is not None) != (self.state is JobState.COMPLETED):
             # The `CheckJob` pairing, re-stated: a status outside `completed`
             # would be a published answer for a verification that has not

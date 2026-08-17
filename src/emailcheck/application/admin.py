@@ -43,7 +43,7 @@ from enum import StrEnum
 from typing import Final
 
 from emailcheck.application.abuse import AbuseGuard
-from emailcheck.domain.admin import AdminState, check_subject
+from emailcheck.domain.admin import AdminState, check_destination_subject, check_subject
 from emailcheck.ports.clock import Clock
 from emailcheck.ports.metrics import MetricLabels, MetricName, MetricsSink, Outcome
 from emailcheck.security.identifiers import correlation_digest
@@ -220,25 +220,25 @@ class AdminControl:
     # --- destinations --------------------------------------------------------
 
     def block_domain(self, domain: str) -> bool:
-        value = check_subject(SubjectKind.DOMAIN.value, domain)
+        value = check_destination_subject(SubjectKind.DOMAIN.value, domain)
         changed = value not in self.state.blocked_domains
         self._apply(replace(self.state, blocked_domains=self.state.blocked_domains | {value}))
         return self._record(AdminOperation.BLOCK_DOMAIN, SubjectKind.DOMAIN, value, changed)
 
     def unblock_domain(self, domain: str) -> bool:
-        value = check_subject(SubjectKind.DOMAIN.value, domain)
+        value = check_destination_subject(SubjectKind.DOMAIN.value, domain)
         changed = value in self.state.blocked_domains
         self._apply(replace(self.state, blocked_domains=self.state.blocked_domains - {value}))
         return self._record(AdminOperation.UNBLOCK_DOMAIN, SubjectKind.DOMAIN, value, changed)
 
     def block_exchanger(self, mx_host: str) -> bool:
-        value = check_subject(SubjectKind.EXCHANGER.value, mx_host)
+        value = check_destination_subject(SubjectKind.EXCHANGER.value, mx_host)
         changed = value not in self.state.blocked_mx_hosts
         self._apply(replace(self.state, blocked_mx_hosts=self.state.blocked_mx_hosts | {value}))
         return self._record(AdminOperation.BLOCK_EXCHANGER, SubjectKind.EXCHANGER, value, changed)
 
     def unblock_exchanger(self, mx_host: str) -> bool:
-        value = check_subject(SubjectKind.EXCHANGER.value, mx_host)
+        value = check_destination_subject(SubjectKind.EXCHANGER.value, mx_host)
         changed = value in self.state.blocked_mx_hosts
         self._apply(replace(self.state, blocked_mx_hosts=self.state.blocked_mx_hosts - {value}))
         return self._record(AdminOperation.UNBLOCK_EXCHANGER, SubjectKind.EXCHANGER, value, changed)

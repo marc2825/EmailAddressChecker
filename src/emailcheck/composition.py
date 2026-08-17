@@ -80,7 +80,12 @@ from emailcheck.application.admission import AdmissionControl, AdmissionSettings
 from emailcheck.application.jobs import JobService, JobSettings
 from emailcheck.application.mail_route import MailRouteService
 from emailcheck.application.passive import PassiveClassifier
-from emailcheck.application.retention import RetentionService, RetentionSettings
+from emailcheck.application.retention import (
+    DeletionReport,
+    RetentionScheduler,
+    RetentionService,
+    RetentionSettings,
+)
 from emailcheck.application.smtp_probe import SMTPProbeService
 from emailcheck.application.smtp_verification import SMTPVerificationService
 from emailcheck.application.syntax_evidence import SyntaxEvidenceProducer
@@ -89,6 +94,7 @@ from emailcheck.application.verification import AddressVerificationService, Veri
 from emailcheck.classification.repository import PassiveDatasets
 from emailcheck.domain.abuse import QuotaSettings
 from emailcheck.domain.admin import AdminState
+from emailcheck.domain.dns import DestinationAllowlist
 from emailcheck.domain.rate_limit import RateLimitSettings
 from emailcheck.ports.authentication import Authenticator
 from emailcheck.ports.metrics import MetricsSink
@@ -155,6 +161,19 @@ class Deployment:
     #: indicators. Empty unless configured — `prompts/07-hardening.md` says
     #: "when configured", and this project licenses no name dataset.
     common_names: frozenset[str] = frozenset()
+    #: The exchangers a lab-active deployment may contact. Host names, exactly
+    #: as `config/lab-active.toml.example` has always listed them.
+    #:
+    #: `docs/requirements.md` section 15 gives that profile a destination
+    #: allowlist and the example file has carried one since Phase 0, read by
+    #: nothing: the final system audit found a lab deployment would probe
+    #: whatever DNS pointed it at. Canonicalized through `HostName.canonical`
+    #: below, so the spelling in a configuration file and the spelling in a DNS
+    #: answer are one identity — the same rule an operator's block now follows.
+    #:
+    #: Empty is refused for a probing lab deployment rather than read as
+    #: "everything", which is the direction a missing safety setting has to fail.
+    lab_destination_allowlist: frozenset[str] = frozenset()
     store_path: Path | None = None
     #: Where job identity, state, the retry budget, and the recipient-touch
     #: checkpoint are kept. A **second** file rather than a second table in
@@ -194,12 +213,38 @@ class Deployment:
             # Section 15's local-passive profile is "no active probes". A
             # deployment claiming both is a misconfiguration, not a preference.
             raise ValueError("the local-passive profile does not probe")
+        if self.profile is DeploymentProfile.LAB_ACTIVE and self.active_probing:
+            # Section 15's lab-active profile is "destination allowlist" and
+            # "controlled SMTP server or owned domain". A deployment that would
+            # probe without naming what it owns does not start: an unset
+            # allowlist is a misconfiguration, and the only unsafe way to read
+            # one is as permission for every public MX.
+            if not self.lab_destination_allowlist:
+                raise ValueError("the lab-active profile must configure a destination allowlist")
+            # Canonicalized here so an unusable entry is a start-up failure with
+            # a sentence rather than a host that silently matches nothing.
+            self.lab_allowlist()
+        if self.profile is not DeploymentProfile.LAB_ACTIVE and self.lab_destination_allowlist:
+            raise ValueError("a destination allowlist is a lab-active setting")
         if self.profile is DeploymentProfile.LOCAL_PASSIVE and self.job_store_path is not None:
             # That profile accepts no job, so a job database would be a file
             # nothing writes and a retention obligation nothing incurs. Refused
             # rather than ignored, on this type's rule that a setting which
             # cannot take effect is a misconfiguration.
             raise ValueError("the local-passive profile accepts no jobs and needs no job store")
+
+    def lab_allowlist(self) -> DestinationAllowlist | None:
+        """The configured allowlist as canonical identities, or `None`.
+
+        `None` for every profile that has none — service-active is bounded by
+        quotas, blocks, and the destination policy rather than by an inventory
+        of owned machines — and never an *empty* allowlist standing in for it.
+        The two mean opposite things and `AddressVerificationService` treats them
+        as opposite things.
+        """
+        if not self.lab_destination_allowlist:
+            return None
+        return DestinationAllowlist.of(self.lab_destination_allowlist)
 
     def __repr__(self) -> str:
         """Everything an operator needs, and no secret material.
@@ -249,21 +294,61 @@ class VerificationStack:
     admin: AdminControl | None = None
     metrics: MetricsSink | None = None
     retention: RetentionService | None = None
+    #: The task that actually sweeps. `None` for a profile that owns no
+    #: persistent active-service state — see `_build_retention_scheduler`.
+    retention_scheduler: RetentionScheduler | None = None
 
     async def start(self) -> None:
-        """Start the executor, if this deployment has one.
+        """Start the executor and the retention sweep, if this deployment has them.
 
-        Separate from building, because an executor creates tasks and tasks
-        need a running loop. A caller that never starts one has a stack that
-        accepts no active job — which is the local-passive profile.
+        Separate from building, because both create tasks and tasks need a
+        running loop. A caller that never starts one has a stack that accepts no
+        active job — which is the local-passive profile.
+
+        **The retention sweep starts here, and until Remediation B it did not.**
+        `docs/privacy.md` section 7 requires scheduled expiry;
+        `RetentionService` was built by this module and called by nothing, so
+        every window in the documentation was enforced only by an operator
+        remembering. The final system audit found it.
         """
         if self.executor is not None:
             self.executor.start()
+        if self.retention_scheduler is not None:
+            self.retention_scheduler.start()
 
     async def aclose(self) -> None:
-        """Stop every task this stack owns."""
+        """Stop every task this stack owns.
+
+        The retention task goes first: a sweep in flight touches the same
+        stores the executor's jobs do, and stopping the writer before the
+        readers is the ordering that leaves nothing half-swept.
+        """
+        if self.retention_scheduler is not None:
+            await self.retention_scheduler.aclose()
         if self.executor is not None:
             await self.executor.aclose()
+
+    async def run_retention(self) -> DeletionReport:
+        """Sweep once, now. **The operator-triggered half.**
+
+        `prompts/07-hardening.md` lists "trigger deletion" among the admin
+        controls and the final system audit asked for both scheduling and an
+        explicit trigger. This is the trigger, and it is deliberately an
+        application operation on the built stack rather than an HTTP route:
+        `docs/architecture.md` carries "no public administrative interface" as a
+        stop condition, and a deletion endpoint reachable by a caller is a
+        denial-of-service control with an audit trail attached.
+
+        It runs the **same** `RetentionService.run` the scheduler runs — one
+        cleanup seam, one set of cutoffs, one failure signal — so an operator
+        invoking it can never get different policy from the timer.
+        Ownership and policy boundaries are untouched: the sweep decides nothing
+        about who may read what, and a deployment with no retention service
+        answers with an empty report rather than inventing one.
+        """
+        if self.retention is None:
+            return DeletionReport()
+        return await self.retention.run()
 
 
 def build_verification_stack(
@@ -336,6 +421,7 @@ def build_verification_stack(
         limits=deployment.verification,
         guard=guard,
         sender_identity=_sender_identity_key(deployment),
+        destination_allowlist=deployment.lab_allowlist(),
     )
 
     cache = None
@@ -391,6 +477,9 @@ def build_verification_stack(
         job_store=job_store,
         quota=guard.quota,
     )
+    retention_scheduler = _build_retention_scheduler(
+        deployment, retention=retention, sleeper=sleeper, operator=sink
+    )
 
     return VerificationStack(
         verification=verification,
@@ -408,6 +497,38 @@ def build_verification_stack(
         admin=admin,
         metrics=metrics,
         retention=retention,
+        retention_scheduler=retention_scheduler,
+    )
+
+
+def _build_retention_scheduler(
+    deployment: Deployment,
+    *,
+    retention: RetentionService,
+    sleeper: SystemSleeper,
+    operator: OperatorSink,
+) -> RetentionScheduler | None:
+    """A retention task for the profiles that own persistent service state.
+
+    **Not local-passive.** That profile accepts no job, runs no worker, and owns
+    no batch: `docs/requirements.md` section 15 describes a developer laptop,
+    and starting a background deletion daemon on one because the class exists
+    would be an operational surprise rather than a policy. Its verdict cache is
+    bounded by each row's own `expires_at`, which every read already filters on,
+    so nothing is retained by not sweeping it — and an operator who wants the
+    sweep can still call `VerificationStack.run_retention`.
+
+    A composition test pins exactly which profiles get one, because "which
+    profiles run a daemon" is a property of the object graph rather than of any
+    class in it.
+    """
+    if deployment.profile is DeploymentProfile.LOCAL_PASSIVE:
+        return None
+    return RetentionScheduler(
+        service=retention,
+        sleeper=sleeper,
+        operator=operator,
+        settings=deployment.retention,
     )
 
 

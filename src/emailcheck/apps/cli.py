@@ -475,8 +475,28 @@ def _render(result: PublicResult, *, verbose: bool) -> str:
             lines.append(f"  {name:<22}: {check.result}")
     lines.append("")
     lines.append("This is an estimate. It does not prove that a mailbox exists or is in use.")
-    lines.append("No message content was sent.")
+    lines.append(_message_data_line(result))
     return "\n".join(lines)
+
+
+def _message_data_line(result: PublicResult) -> str:
+    """The safety statement, printed only when the result actually makes it.
+
+    **It used to be an unconditional string literal**, so this build printed
+    "No message content was sent." over a result whose `no_message_data_sent`
+    was `False` — a promise about somebody else's mail server that the result
+    itself contradicted. Reachable through `--remote`, where the result comes
+    from another instance rather than from this process's own dialogue, and the
+    final system audit found it.
+
+    The line is still unconditional in the sense that matters: something is
+    always printed, so the affirmative statement is never merely missing and
+    left to be assumed. The negative case says what is true instead. Neither
+    branch names the remote host, the reply, or the address.
+    """
+    if result.no_message_data_sent:
+        return "No message content was sent."
+    return "WARNING: this result does not assert that no message content was sent."
 
 
 def _render_job(job: PublicJob, *, verbose: bool) -> str:

@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
+from emailcheck.domain.dns import DNSContractError, HostName
+
 #: Bounded, because these are operator-supplied strings that reach a log line, a
 #: metric label, and an audit event.
 MAX_SUBJECT_LENGTH: Final = 255
@@ -80,6 +82,11 @@ def check_subject(kind: str, value: str) -> str:
     Refuses rather than normalizes, for the reason `SourceIdentity` does: the
     string an operator suspended and the string this project compares must be
     the same one, or a suspension can silently miss.
+
+    **Account and key subjects only.** A destination is a *host name*, and a
+    host name has a canonical form this project already computes everywhere
+    else — see `check_destination_subject`, which this function must not be
+    used in place of.
     """
     if not isinstance(value, str) or not value:
         raise AdminStateError(f"a {kind} must be non-empty text")
@@ -89,6 +96,44 @@ def check_subject(kind: str, value: str) -> str:
         # `@` is outside the set, so no switch can ever be keyed by a mailbox.
         raise AdminStateError(f"a {kind} carries an unpermitted character")
     return value
+
+
+def check_destination_subject(kind: str, value: str) -> str:
+    """Validate a domain or exchanger switch, returning its **canonical** form.
+
+    The one place `check_subject`'s "refuse rather than normalize" rule is
+    wrong, and the final system audit measured why. That rule is right for an
+    account identifier, which is an opaque string with no canonical form: two
+    spellings really are two accounts. A host name is the opposite — `MailRoute`,
+    `approve_destination`, and every comparison downstream already hold the
+    canonical form, so storing an operator's spelling meant comparing a raw
+    string against a canonical one.
+
+    Measured consequences: blocking `EXAMPLE.TEST` blocked nothing, because the
+    route says `example.test`. Blocking `mx1.example.test.` blocked nothing,
+    because the trailing dot is presentation. Blocking `bücher.test` blocked
+    nothing, because DNS says `xn--bcher-kva.test`. In each case the operator's
+    switch read as thrown and the destination was contacted.
+
+    So this canonicalizes through `HostName.canonical` — Phase 1's IDNA encoder
+    and the same validation the wire path uses — and the character screen still
+    runs, on the canonical form, so a switch can still never be keyed by a
+    mailbox. Invalid input raises: a control stored as an inert unmatched string
+    is worse than a refusal, because nobody goes back to check it.
+    """
+    if not isinstance(value, str) or not value:
+        raise AdminStateError(f"a {kind} must be non-empty text")
+    if len(value) > MAX_SUBJECT_LENGTH:
+        raise AdminStateError(f"a {kind} is too long")
+    try:
+        canonical = HostName.canonical(value).value
+    except DNSContractError as issue:
+        # The library's message never surfaces; this project's own vocabulary
+        # does, on the rule `_encode_domain` already follows.
+        raise AdminStateError(f"a {kind} is not a usable host name") from issue
+    if not _PERMITTED.issuperset(canonical):
+        raise AdminStateError(f"a {kind} carries an unpermitted character")
+    return canonical
 
 
 @dataclass(frozen=True, slots=True)

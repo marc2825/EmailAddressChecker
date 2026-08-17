@@ -73,6 +73,7 @@ from emailcheck.domain.address import (
     RawAddressInput,
     parse_address,
 )
+from emailcheck.domain.dns import DestinationAllowlist
 from emailcheck.domain.evidence import Evidence
 from emailcheck.domain.mail_route import MailRoute
 from emailcheck.domain.principal import Principal
@@ -257,6 +258,21 @@ class AddressVerificationService:
     #: Which sender identity this deployment probes from, as the budget and the
     #: kill switch name it. Operator configuration, never a request field.
     sender_identity: str = "none"
+    #: The exchangers this deployment may contact at all, or `None` for a
+    #: deployment with no such restriction.
+    #:
+    #: `None` and an *empty* allowlist are deliberately different: `None` is the
+    #: service-active profile, which is bounded by quotas and blocks rather than
+    #: by an inventory of owned machines, and an empty `DestinationAllowlist`
+    #: permits nothing. Reading a missing allowlist as "allow everything" is the
+    #: failure mode this distinction exists to make unspellable, and
+    #: `composition.py` refuses to build a probing lab-active deployment that
+    #: has one.
+    #:
+    #: **Operator configuration, never a request field.** There is no parameter
+    #: on `verify`, no key in the request schema, and no CLI flag through which a
+    #: caller could supply, extend, or bypass it.
+    destination_allowlist: DestinationAllowlist | None = None
 
     async def verify(
         self,
@@ -385,7 +401,7 @@ class AddressVerificationService:
             active=step.attempted,
             target=target,
             route_ttl=None if route.ttl is None else route.ttl.applied_seconds,
-            scheduling_key=scheduled_exchanger(route, self.guard),
+            scheduling_key=scheduled_exchanger(route, self.guard, self.destination_allowlist),
             recipient_touch=step.recipient_touch,
         )
 
@@ -416,6 +432,32 @@ class AddressVerificationService:
             return _NO_RECIPIENT_STEP
         if not route.connectable_candidates:
             return _NO_RECIPIENT_STEP
+        if self.destination_allowlist is not None:
+            # **Before the guard, and before any candidate can be approved.**
+            # `docs/requirements.md` section 15 gives the lab-active profile a
+            # destination allowlist, and this is where "eligible to be contacted
+            # at all" is decided — earliest, so nothing downstream has to
+            # remember it. It composes rather than replaces: a surviving
+            # candidate still passes the operator's blocks below, the
+            # destination policy, the peer check, and TLS verification.
+            #
+            # **Every candidate, not the preferred one.** Phase 4E falls through
+            # to the next exchanger on a pre-recipient failure, so an allowlist
+            # consulted for `connectable_candidates[0]` alone would let a
+            # fallback reach a host the operator never authorized — the exact
+            # shape the exchanger switch was already fixed for once.
+            route = replace(
+                route,
+                candidates=tuple(
+                    candidate
+                    for candidate in route.candidates
+                    if self.destination_allowlist.permits(candidate.host.value)
+                ),
+            )
+            if not route.connectable_candidates:
+                # No exchanger this domain publishes is one this deployment may
+                # contact. Nothing is probed and no destination budget is spent.
+                return _NO_RECIPIENT_STEP
         if self.guard is not None:
             # **The domain and sender switches first**, because they refuse the
             # whole verification rather than one host.
@@ -530,7 +572,11 @@ class AddressVerificationService:
         )
 
 
-def scheduled_exchanger(route: MailRoute, guard: AbuseGuard | None) -> str | None:
+def scheduled_exchanger(
+    route: MailRoute,
+    guard: AbuseGuard | None,
+    allowlist: DestinationAllowlist | None = None,
+) -> str | None:
     """The exchanger this verification would approach **first**, or `None`.
 
     Read from `connectable_candidates`, so it is empty for exactly the outcomes
@@ -560,6 +606,12 @@ def scheduled_exchanger(route: MailRoute, guard: AbuseGuard | None) -> str | Non
     conclude from this.
     """
     for candidate in route.connectable_candidates:
+        if allowlist is not None and not allowlist.permits(candidate.host.value):
+            # A host this deployment may not contact is not the host this
+            # verification will approach first, so naming it as the scheduling
+            # key would account one destination's work against another — the
+            # same reasoning the blocked-exchanger filter above already applies.
+            continue
         if guard is not None and guard.exchanger_blocked(candidate.host.value):
             continue
         return candidate.host.value
