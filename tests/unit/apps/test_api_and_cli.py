@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import pytest
 from tests.phase6_fixtures import (
@@ -29,6 +30,7 @@ from tests.phase6_fixtures import (
 )
 
 from emailcheck.adapters.auth.api_keys import build_authenticator
+from emailcheck.adapters.storage.sqlite_job_store import SQLiteJobStore
 from emailcheck.application.jobs import JobService
 from emailcheck.application.verdict_cache import VerdictCache
 from emailcheck.application.verification import VerificationLimits
@@ -47,8 +49,9 @@ from emailcheck.apps.api import (
     ApiResponse,
     CheckApi,
 )
-from emailcheck.domain.job import JobState
+from emailcheck.domain.job import JobFailure, JobState
 from emailcheck.domain.verdict import Status
+from emailcheck.ports.job_executor import ExecutorFull
 
 pytestmark = pytest.mark.asyncio
 
@@ -629,3 +632,289 @@ async def test_the_response_never_names_the_principal() -> None:
     rendered = json.dumps(response.body)
     assert "acct-1" not in rendered
     assert KEY not in rendered
+
+
+# --- the durable read path (RA-05) ------------------------------------------
+#
+# `GET /v1/checks/{id}` goes through `JobService.fetch`, not `JobService.get`.
+# The difference is not stylistic: `get` answers from this process's registry
+# alone, and a job's authoritative state lives in the job store the moment a
+# deployment has one. The Remediation A focused review measured what the
+# in-memory read publishes — a persisted job answered `404` after a restart, and
+# a job another replica had already terminalized answered `pending` for ever —
+# and measured that reverting the one line left the whole suite green.
+#
+# So these tests are the API-level half of that fix. Every one of them uses the
+# real `SQLiteJobStore` over a temporary file and asserts on the HTTP-shaped
+# response, because the property is what a caller sees rather than which method
+# the handler happens to call.
+
+
+@dataclass
+class RefusesAfterObservation(RecordingExecutor):
+    """Blocks inside `submit`, then refuses.
+
+    The pause is the whole point: an executor that refuses immediately never
+    lets a second replica observe the `pending` job, so the stale-snapshot case
+    would be unreachable and the test would pass against the defect.
+    """
+
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def submit(self, job_id, work) -> None:  # type: ignore[no-untyped-def]
+        self.entered.set()
+        await self.release.wait()
+        raise ExecutorFull("the queue refused after another replica observed the job")
+
+
+class DurableApi:
+    """One process's API over a job database that outlives the process.
+
+    A "restart" is a second instance built over the same directory: new
+    registry, new executor, new `JobService`, new `CheckApi`, and nothing shared
+    but the file. Carrying the executor across would be carrying a queue this
+    project does not have, which is the mistake an earlier restart suite made.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        executor: RecordingExecutor | None = None,
+        prefix: str = "job",
+    ) -> None:
+        self.root = root
+        self.smtp = ScriptedSMTPVerification(reply_lines=("250 2.1.5 ok",))
+        self.service, self.resolver, self.sink = build_service(
+            smtp=self.smtp, resolver=resolver_with_route()
+        )
+        self.executor = executor if executor is not None else RecordingExecutor()
+        self.jobs = JobService(
+            verification=self.service,
+            executor=self.executor,
+            clock=FakeClock(),
+            # Distinct per instance, so a second process cannot mint the
+            # identifier the first one already used and pass by coincidence.
+            random=FakeRandomSource(prefix=prefix),
+            operator=self.sink,
+            correlation_key=CORRELATION_KEY,
+            store=self.job_store,
+        )
+        self.api = CheckApi(
+            verification=self.service,
+            authenticator=build_authenticator({"acct-1": KEY, "acct-2": OTHER_KEY}),
+            operator=self.sink,
+            jobs=self.jobs,
+        )
+
+    @property
+    def job_store(self) -> SQLiteJobStore:
+        store = SQLiteJobStore(path=self.root / "jobs.sqlite3")
+        store.initialize()
+        return store
+
+    async def submit(self, credential: str = KEY, **kwargs: object) -> ApiResponse:
+        return await self.api.handle(
+            ApiRequest(
+                path=ACTIVE_PATH,
+                method="POST",
+                body={"email": VALID},
+                credential=credential,
+                **kwargs,  # type: ignore[arg-type]
+            )
+        )
+
+    async def read(self, job_id: str, credential: str | None = KEY) -> ApiResponse:
+        return await self.api.handle(
+            ApiRequest(path=f"{JOB_PATH_PREFIX}{job_id}", method="GET", credential=credential)
+        )
+
+
+async def test_a_persisted_job_is_still_readable_after_a_whole_process_restart(
+    tmp_path: Path,
+) -> None:
+    """The restart the in-memory read path answers `404`.
+
+    A completed job with a stored result is the most ordinary thing a caller
+    polls for, and a process restart is the most ordinary thing that happens to
+    a service. The published answer must not depend on which process is
+    serving, so this asserts the *whole body* is identical across the boundary
+    as well as the fields individually — and that reading it re-ran nothing.
+    """
+    first = DurableApi(tmp_path, prefix="first")
+    submitted = await first.submit()
+    job_id = submitted.body["job"]["id"]  # type: ignore[index]
+    await first.executor.run_pending()
+    before = await first.read(job_id)
+    assert before.status_code == 200
+    assert before.body["state"] == JobState.COMPLETED.value
+
+    second = DurableApi(tmp_path, prefix="second")
+    # The registry really is empty, so a 200 below can only have come from disk.
+    assert second.jobs._jobs == {}
+
+    response = await second.read(job_id)
+
+    assert response.status_code == 200, "a persisted job was answered 404 after a restart"
+    assert response.body["id"] == job_id
+    assert response.body["state"] == JobState.COMPLETED.value
+    result = response.body["result"]
+    assert isinstance(result, dict)
+    assert result["status"] == Status.LIKELY_DELIVERABLE.value
+    assert result["primary_reason"] == "rcpt_accepted"
+    assert json.dumps(response.body) == json.dumps(before.body), "the restart was visible"
+    # Reading a job is a read. The second process probed nothing and enqueued
+    # nothing to produce this answer.
+    assert second.executor.submitted == []
+    assert second.smtp.calls == []
+
+
+async def test_the_published_result_is_the_one_the_store_actually_holds(
+    tmp_path: Path,
+) -> None:
+    """The expectation comes from the durable row, not from the read path.
+
+    Asserting only that two API calls agree would pass against a handler that
+    invented the same answer twice. This compares the published projection
+    against what a third party — the store — independently holds.
+    """
+    first = DurableApi(tmp_path, prefix="first")
+    submitted = await first.submit()
+    job_id = submitted.body["job"]["id"]  # type: ignore[index]
+    await first.executor.run_pending()
+    stored = await first.job_store.load(job_id)
+    assert stored is not None
+
+    response = await DurableApi(tmp_path, prefix="second").read(job_id)
+
+    result = response.body["result"]
+    assert isinstance(result, dict)
+    assert response.body["state"] == stored.state.value
+    assert result["status"] == stored.status
+    assert result["confidence"] == stored.confidence
+    assert result["primary_reason"] == stored.primary_reason
+    assert list(result["reasons"]) == list(stored.reasons)  # type: ignore[call-overload]
+
+
+async def test_a_replica_publishes_the_durable_state_rather_than_its_own_snapshot(
+    tmp_path: Path,
+) -> None:
+    """RA-01's public symptom, at the API.
+
+    One replica owns the job and its executor refuses; another has already
+    answered a request about that job and holds a `pending` snapshot of it. The
+    second replica must publish what the store says, not what it remembers —
+    otherwise a caller polling the observing replica is told `pending` for ever
+    about an operation that terminally failed on the other one.
+
+    Both submissions and the assertion all go through `handle`, so nothing here
+    depends on a service method a caller cannot reach.
+    """
+    gate = RefusesAfterObservation()
+    owner = DurableApi(tmp_path, executor=gate, prefix="owner")
+    observer = DurableApi(tmp_path, prefix="observer")
+    key = "shared-handle-" + "a" * 12
+
+    submitting = asyncio.create_task(owner.submit(idempotency_key=key))
+    async with asyncio.timeout(5.0):
+        await gate.entered.wait()
+        # The observing replica answers a request about the owner's job, which
+        # is what leaves it holding a snapshot.
+        seeded = await observer.submit(idempotency_key=key)
+        job_id = seeded.body["job"]["id"]  # type: ignore[index]
+        assert seeded.body["job"]["state"] == JobState.PENDING.value  # type: ignore[index]
+
+        gate.release.set()
+        refused = await submitting
+
+    assert refused.status_code == 503, "the owning caller was not told the queue refused"
+    assert observer.jobs._jobs[job_id].state is JobState.PENDING, "the snapshot was not stale"
+
+    response = await observer.read(job_id)
+
+    assert response.status_code == 200
+    assert response.body["state"] == JobState.FAILED.value, "a stale pending snapshot was published"
+    assert response.body["failure"] == JobFailure.CAPACITY_UNAVAILABLE.value
+    assert response.body["result"] is None, "an admission failure published a mailbox result"
+    # The observing replica read the state. It never admitted the job itself.
+    assert observer.executor.submitted == []
+
+
+async def test_a_persisted_job_is_not_disclosed_to_another_account_after_a_restart(
+    tmp_path: Path,
+) -> None:
+    """Reading from disk changes state freshness and nothing about ownership.
+
+    A foreign job answers exactly what an unknown identifier answers, byte for
+    byte — the property ADR 0014 keeps and the one a store lookup is most
+    likely to erode, because the row is right there.
+    """
+    first = DurableApi(tmp_path, prefix="first")
+    submitted = await first.submit(credential=KEY)
+    job_id = submitted.body["job"]["id"]  # type: ignore[index]
+
+    second = DurableApi(tmp_path, prefix="second")
+    mine = await second.read(job_id, credential=KEY)
+    theirs = await second.read(job_id, credential=OTHER_KEY)
+    unknown = await second.read("nosuchjobnosuchjobnosuch", credential=OTHER_KEY)
+
+    assert mine.status_code == 200
+    assert theirs.status_code == 404
+    assert theirs.body["error"]["code"] == ERROR_NOT_FOUND  # type: ignore[index]
+    assert json.dumps(theirs.body) == json.dumps(unknown.body)
+
+
+async def test_a_durable_read_needs_authentication_before_it_discloses_anything(
+    tmp_path: Path,
+) -> None:
+    """Authentication is still first, and a refused request names no job."""
+    first = DurableApi(tmp_path, prefix="first")
+    submitted = await first.submit()
+    job_id = submitted.body["job"]["id"]  # type: ignore[index]
+
+    second = DurableApi(tmp_path, prefix="second")
+    anonymous = await second.read(job_id, credential=None)
+
+    assert anonymous.status_code == 401
+    assert set(anonymous.body) == {"error"}
+    error = anonymous.body["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == ERROR_UNAUTHENTICATED
+    assert set(error) == ERROR_BODY_KEYS
+    # Nothing about the job was disclosed on the way to the refusal.
+    assert job_id not in json.dumps(anonymous.body)
+
+
+async def test_a_durable_read_publishes_no_part_of_the_new_internal_state_machine(
+    tmp_path: Path,
+) -> None:
+    """The regression is about freshness, not about a wider surface.
+
+    `JobAdmission`, `RecipientTouch`, and both correlation digests are the
+    fields Remediation A added to the stored row. A read that answers from that
+    row is exactly the place they could reach a response by being added to a
+    projection later, so the published body is asserted to be the same six keys
+    it always was, and each stored value is checked absent by its own text.
+    """
+    first = DurableApi(tmp_path, prefix="first")
+    key = "internals-" + "b" * 12
+    submitted = await first.submit(idempotency_key=key)
+    job_id = submitted.body["job"]["id"]  # type: ignore[index]
+    await first.executor.run_pending()
+    stored = await first.job_store.load(job_id)
+    assert stored is not None
+    assert stored.idempotency_digest is not None and stored.target_digest is not None
+
+    response = await DurableApi(tmp_path, prefix="second").read(job_id)
+    rendered = json.dumps(response.body)
+
+    assert set(response.body) == {"id", "state", "created_at", "updated_at", "result", "failure"}
+    for hidden in (
+        stored.admission.value,
+        stored.recipient_touch.value,
+        stored.idempotency_digest,
+        stored.target_digest,
+        key,
+    ):
+        assert hidden not in rendered, hidden
