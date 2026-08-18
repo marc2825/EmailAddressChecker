@@ -1157,8 +1157,22 @@ one: each is one process's memory, and a build that relied on them recreated a
 deleted account after reporting success.
 
 The batch store is deleted from **when it is composed**, which the shipped stack
-does not do — Phase 10 remains unwired. Composing it means passing its store to
-this service too.
+does not do — Phase 10 remains unwired, and `prompts/10-batch.md`'s non-goals
+keep it out of every request surface and out of this module. Remediation D made
+it *safe* to compose rather than composing it: `SQLiteBatchStore` now carries the
+same `account_fence` and `store_authority` tables as the job and verdict stores,
+every account-owned batch write is conditional on the generation inside its own
+transaction, and account deletion raises the batch fence before removing a row.
+Composing it means passing its store to this service and binding it to the same
+authority.
+
+Batch scheduling has one owner: `BatchStore.claim_row`, a single conditional
+write that decides which replica may schedule a row. The transition is
+`queued -> claimed`, because a state a row does not leave excludes nobody; a row
+another process left `claimed` is re-driven through its persisted idempotency
+handle rather than claimed again, which is how recovery stays safe without
+replaying a recipient touch. `BatchStore.bind_child` writes a row's child job
+identifier once and refuses to move it.
 
 ## Dependency direction
 

@@ -8,7 +8,7 @@ pay for a file. The persistence, restart, expiry, and deletion tests use the
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from tests.phase6_fixtures import (
@@ -28,7 +28,7 @@ from tests.phase7_fixtures import ACCOUNT, CORRELATION_KEY, PRINCIPAL
 from emailcheck.application.batch import BatchService
 from emailcheck.application.jobs import JobService
 from emailcheck.application.verdict_cache import VerdictCache
-from emailcheck.domain.batch import BatchApproval, BatchLimits, BatchSettings
+from emailcheck.domain.batch import BatchApproval, BatchLimits, BatchRowState, BatchSettings
 from emailcheck.domain.dns import AddressLookup, MXLookup, MXRecord, apply_ttl_policy
 from emailcheck.ports.batch_store import (
     BatchArtifact,
@@ -82,8 +82,66 @@ class InMemoryBatchStore:
     #: Every `update_rows` call, so a test can read the write-ahead ordering
     #: rather than infer it.
     writes: list[tuple[str, int, str]] = field(default_factory=list)
+    #: The account fence, exactly as the SQL enforces it, so a fake cannot
+    #: accept a write the real adapter refuses.
+    fences: dict[str, int] = field(default_factory=dict)
 
-    async def save_batch(self, record: StoredBatch) -> None:
+    async def fence(self, *, account: str, generation: int) -> int:
+        held = max(self.fences.get(account, 0), generation)
+        self.fences[account] = held
+        return held
+
+    def _may_mutate(self, batch_id: str, expected: int | None) -> bool:
+        """A missing parent refuses, exactly as the SQL does."""
+        held = self.batches.get(batch_id)
+        if held is None:
+            return False
+        if expected is None:
+            return True
+        return self.fences.get(held.account, 0) == expected
+
+    async def claim_row(
+        self,
+        *,
+        batch_id: str,
+        number: int,
+        schedulable: tuple[str, ...],
+        claimed: str,
+        expected_generation: int | None = None,
+    ) -> bool:
+        if not self._may_mutate(batch_id, expected_generation):
+            return False
+        held = self.batches[batch_id]
+        by_number = {row.number: row for row in held.rows}
+        row = by_number.get(number)
+        if row is None or row.state.value not in schedulable:
+            return False
+        by_number[number] = replace(row, state=BatchRowState(claimed))
+        self.batches[batch_id] = replace(held, rows=tuple(by_number[n] for n in sorted(by_number)))
+        return True
+
+    async def bind_child(
+        self,
+        *,
+        batch_id: str,
+        number: int,
+        job_id: str,
+        expected_generation: int | None = None,
+    ) -> bool:
+        if not self._may_mutate(batch_id, expected_generation):
+            return False
+        held = self.batches[batch_id]
+        by_number = {row.number: row for row in held.rows}
+        row = by_number.get(number)
+        if row is None or row.job_id is not None:
+            return False
+        by_number[number] = replace(row, job_id=job_id)
+        self.batches[batch_id] = replace(held, rows=tuple(by_number[n] for n in sorted(by_number)))
+        return True
+
+    async def save_batch(
+        self, record: StoredBatch, *, expected_generation: int | None = None
+    ) -> bool:
         if record.batch_id not in self.batches and len(self.batches) >= self.max_batches:
             expired = [
                 key for key, held in self.batches.items() if held.expires_at <= record.created_at
@@ -93,12 +151,24 @@ class InMemoryBatchStore:
                 self.artifacts.pop(key, None)
             if len(self.batches) >= self.max_batches:
                 raise BatchStoreFull("the batch store is at capacity")
+        if (
+            expected_generation is not None
+            and self.fences.get(record.account, 0) != expected_generation
+        ):
+            return False
         self.batches[record.batch_id] = record
+        return True
 
-    async def update_rows(self, batch_id: str, rows: tuple[StoredBatchRow, ...]) -> None:
+    async def update_rows(
+        self,
+        batch_id: str,
+        rows: tuple[StoredBatchRow, ...],
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
         held = self.batches.get(batch_id)
-        if held is None:
-            return
+        if held is None or not self._may_mutate(batch_id, expected_generation):
+            return False
         by_number = {row.number: row for row in held.rows}
         for row in rows:
             by_number[row.number] = row
@@ -113,11 +183,12 @@ class InMemoryBatchStore:
             cancelled=held.cancelled,
             rows=tuple(by_number[number] for number in sorted(by_number)),
         )
+        return True
 
-    async def set_cancelled(self, batch_id: str) -> None:
+    async def set_cancelled(self, batch_id: str, *, expected_generation: int | None = None) -> bool:
         held = self.batches.get(batch_id)
-        if held is None:
-            return
+        if held is None or not self._may_mutate(batch_id, expected_generation):
+            return False
         self.batches[batch_id] = StoredBatch(
             batch_id=held.batch_id,
             account=held.account,
@@ -128,6 +199,7 @@ class InMemoryBatchStore:
             cancelled=True,
             rows=held.rows,
         )
+        return True
 
     async def load_batch(self, batch_id: str, *, account: str, now: datetime) -> StoredBatch | None:
         held = self.batches.get(batch_id)
@@ -135,8 +207,15 @@ class InMemoryBatchStore:
             return None
         return held
 
-    async def save_artifact(self, artifact: BatchArtifact) -> None:
+    async def save_artifact(
+        self, artifact: BatchArtifact, *, expected_generation: int | None = None
+    ) -> bool:
+        if expected_generation is not None and self.fences.get(artifact.account, 0) != (
+            expected_generation
+        ):
+            return False
         self.artifacts[artifact.batch_id] = artifact
+        return True
 
     async def load_artifact(
         self, batch_id: str, *, account: str, now: datetime

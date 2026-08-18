@@ -311,7 +311,7 @@ class AcceptAllExperiment:
             return AcceptAllResult(outcome=AcceptAllOutcome.REFUSED, refused="not_authorized")
 
         now = self.clock.now()
-        key = self._key(domain)
+        key = self._key(domain, route)
         cached = await self.cache.get(key, now=now)
         if cached is not None:
             # A cache hit probes nothing. The seven-day window exists so that a
@@ -373,12 +373,25 @@ class AcceptAllExperiment:
         return AcceptAllResult(outcome=outcome, checked_at=checked_at)
 
     async def _authorize_destination(self, domain: str, route: MailRoute) -> None:
-        """The Phase 7 controls, plus the separate accept-all domain budget."""
+        """The Phase 7 controls, plus the separate accept-all domain budget.
+
+        **Every candidate this experiment could reach, not only the first
+        one.** The verification below walks the route's candidates in
+        preference order and falls back when an earlier one fails before the
+        recipient stage, so authorizing only `candidates[0]` authorized a
+        destination the probe might never use while leaving the ones it would
+        fall back to unchecked. An operator who blocks an exchanger has blocked
+        it — a block that a preceding host's connect failure can step past is
+        not a block. Refusing the whole experiment when *any* reachable
+        candidate is blocked is the conservative reading and costs one refused
+        experiment.
+        """
         guard = self.guard
         guard.check_destination(domain=domain, sender_identity=self.sender_identity)  # type: ignore[attr-defined]
+        for candidate in route.connectable_candidates:
+            if guard.exchanger_blocked(candidate.host.value):  # type: ignore[attr-defined]
+                raise AcceptAllRefused("a reachable exchanger is administratively blocked")
         preferred = route.connectable_candidates[0].host.value
-        if guard.exchanger_blocked(preferred):  # type: ignore[attr-defined]
-            raise AcceptAllRefused("the preferred exchanger is administratively blocked")
         await guard.authorize_accept_all(  # type: ignore[attr-defined]
             domain=domain, mx_host=preferred, sender_identity=self.sender_identity
         )
@@ -432,16 +445,26 @@ class AcceptAllExperiment:
             ),
         )
 
-    def _key(self, domain: str) -> AcceptAllCacheKey:
-        """A domain, an identity, and a version. **No local part, ever.**
+    def _key(self, domain: str, route: MailRoute) -> AcceptAllCacheKey:
+        """A domain, an identity, a version, and the route. **No local part, ever.**
 
         Accept-all is a property of the domain's configuration, so keying on the
         caller's mailbox would file one domain's answer under every address
         anybody asked about — and would put a target in a store that outlives
         the request by a week.
+
+        The route joins them because the answer is about the *mail system*: a
+        domain whose exchangers have been replaced is running somebody else's
+        recipient policy, and serving the predecessor's answer for the rest of
+        the window would be describing a system this project never probed. The
+        hosts are canonical and sorted, so preference reordering — which changes
+        nothing about policy — is the same route.
         """
+        hosts = sorted(candidate.host.value for candidate in route.connectable_candidates)
+        material = "|".join(f"{len(host)}:{host}" for host in hosts) or "no-route"
         return AcceptAllCacheKey(
             domain_digest=correlation_digest(self.correlation_key, domain),
             sender_digest=correlation_digest(self.correlation_key, self.sender_identity),
             experiment_version=EXPERIMENT_VERSION,
+            route_digest=correlation_digest(self.correlation_key, material),
         )

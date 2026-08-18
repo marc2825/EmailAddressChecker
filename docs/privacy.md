@@ -100,12 +100,14 @@ the same thing:
 | batch store — batches, rows, retained plaintext, artifacts | yes | **no** |
 
 The batch row is the one to read carefully. `AccountDeletionService` accepts a
-`BatchStore` and deletes from it, and that path has its own tests — but Phase 10
-is deliberately not wired into `composition.py`, so the shipped
-`VerificationStack` holds no batch store and `delete_account_data` has none to
-erase. When the batch subsystem is composed its store must be passed to the same
-deletion service; until then, a deployment that runs batches has wired them
-itself and is responsible for the same.
+`BatchStore`, raises its account fence before deleting from it, and deletes what
+it holds — and Remediation D put that store under the same durable generation
+model as the job and verdict stores, so a composed batch subsystem is inside the
+deletion guarantee rather than beside it. Phase 10 is still **not composed**:
+`VerificationStack` holds no batch store, so the shipped stack erases no batch
+data because it has none. A deployment that wires the batch subsystem must pass
+its `BatchStore` to the same deletion service, and it must bind that store to
+the same account-state authority as the others.
 
 It does not wait for the retention scheduler. Retention is a window; this is an
 operator action, and it takes effect when it is invoked.

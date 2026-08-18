@@ -503,7 +503,7 @@ async def test_the_cache_key_carries_no_local_part() -> None:
     """
     experiment, _ = build()
 
-    key = experiment._key(DOMAIN)
+    key = experiment._key(DOMAIN, two_hosts())
 
     assert key.experiment_version == EXPERIMENT_VERSION
     for forbidden in ("@", DOMAIN, "user"):
@@ -515,7 +515,7 @@ async def test_the_cache_key_carries_no_local_part() -> None:
 async def test_a_different_experiment_version_does_not_reuse_an_answer() -> None:
     """A cached answer means what the version that produced it meant."""
     experiment, _ = build()
-    key = experiment._key(DOMAIN)
+    key = experiment._key(DOMAIN, two_hosts())
 
     assert key.experiment_version == EXPERIMENT_VERSION
     assert EXPERIMENT_VERSION in repr(key)
@@ -749,8 +749,8 @@ def test_two_domains_do_not_share_a_cache_key() -> None:
     """The same sender and the same version, and the keys still differ."""
     experiment, _ = build()
 
-    first = experiment._key(DOMAIN)
-    second = experiment._key(OTHER_DOMAIN)
+    first = experiment._key(DOMAIN, two_hosts())
+    second = experiment._key(OTHER_DOMAIN, two_hosts())
 
     assert first.domain_digest != second.domain_digest
     # The other two components are held constant on purpose: if they were what
@@ -763,7 +763,7 @@ def test_the_same_domain_reaches_the_same_cache_key() -> None:
     """Deterministic, so a hit is a hit rather than a coincidence."""
     experiment, _ = build()
 
-    assert experiment._key(DOMAIN) == experiment._key(DOMAIN)
+    assert experiment._key(DOMAIN, two_hosts()) == experiment._key(DOMAIN, two_hosts())
 
 
 @asyncio_test
@@ -823,7 +823,7 @@ def test_the_cache_key_still_carries_no_raw_identifier() -> None:
     """Partitioning by domain must not have been bought with the privacy."""
     experiment, _ = build()
 
-    key = experiment._key(DOMAIN)
+    key = experiment._key(DOMAIN, two_hosts())
 
     for raw in (DOMAIN, "@", "none", "user"):
         assert raw not in key.domain_digest
@@ -834,7 +834,7 @@ def test_the_cache_key_still_carries_no_raw_identifier() -> None:
 def test_a_different_experiment_version_is_a_different_key() -> None:
     """Advisable, per the review: the version component must matter too."""
     experiment, _ = build()
-    key = experiment._key(DOMAIN)
+    key = experiment._key(DOMAIN, two_hosts())
 
     other = dataclasses.replace(key, experiment_version="accept-all-elsewhen")
 

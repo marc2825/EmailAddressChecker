@@ -234,7 +234,11 @@ class AccountDeletionService:
             if "jobs" in fenced
             else 0
         )
-        batches = await self._attempt(failures, "batches", self._delete_batches, subject)
+        batches = (
+            await self._attempt(failures, "batches", self._delete_batches, subject)
+            if "batches" in fenced
+            else 0
+        )
 
         report = AccountDeletionReport(
             verdicts_removed=verdicts,
@@ -286,6 +290,18 @@ class AccountDeletionService:
                 failures.append("jobs")
         else:
             safe.add("jobs")
+        if self.batches is not None:
+            # The third store, once a deployment composes one. Remediation C
+            # left this out because no deployment held a batch store; a batch
+            # row recreated after a deletion is the account's data exactly as a
+            # job row is, so it gets the same fence and the same ordering.
+            try:
+                await self.batches.fence(account=account, generation=generation)
+                safe.add("batches")
+            except Exception:
+                failures.append("batches")
+        else:
+            safe.add("batches")
         return frozenset(safe)
 
     async def _attempt(

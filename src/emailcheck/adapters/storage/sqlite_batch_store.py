@@ -19,6 +19,7 @@ a new one would make submitting batches a way to erase somebody else's.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
@@ -27,6 +28,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from emailcheck.adapters.storage.account_fence import (
+    BEGIN_IMMEDIATE,
+    FENCE_SCHEMA,
+    bind_authority,
+    fenced_generation,
+    raise_fence,
+)
 from emailcheck.domain.batch import BatchRowState
 from emailcheck.ports.batch_store import (
     BatchArtifact,
@@ -38,13 +46,22 @@ from emailcheck.ports.batch_store import (
 #: Bumped when the shape changes. A file written by another shape is refused at
 #: start rather than migrated — `prompts/06-api-cli.md` says not to overbuild
 #: migrations for a development store, and this follows the same rule.
-SCHEMA_VERSION: Final = 1
+#: Version 2 is Remediation D: the account fence and the authority binding, on
+#: the shape `adapters/storage/account_fence.py` established for the job and
+#: verdict stores. A version 1 file records neither — it predates the deletion
+#: authority entirely — and adopting it under whichever one happens to be
+#: configured is the mistake the binding exists to catch, so it is refused.
+#: Version 3 binds each batch to the account generation it was admitted under.
+#: Without it a resumed batch would have to ask what the generation is *now*,
+#: which is exactly how stale work launders itself into current work after a
+#: deletion.
+SCHEMA_VERSION: Final = 3
 
 #: How many batches one store holds by default, and the ceiling on that.
 DEFAULT_MAX_BATCHES: Final = 256
 MAX_BATCHES_CEILING: Final = 65_536
 
-_SCHEMA: Final = """
+_TABLES: Final = """
 CREATE TABLE IF NOT EXISTS batch_schema_version (version INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS batches (
@@ -54,7 +71,8 @@ CREATE TABLE IF NOT EXISTS batches (
     expires_at   TEXT NOT NULL,
     input_rows   INTEGER NOT NULL,
     skipped_rows INTEGER NOT NULL,
-    cancelled    INTEGER NOT NULL
+    cancelled    INTEGER NOT NULL,
+    generation   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS batch_rows (
@@ -81,6 +99,45 @@ CREATE TABLE IF NOT EXISTS batch_artifacts (
 CREATE INDEX IF NOT EXISTS batches_owner ON batches (account, expires_at);
 """
 
+#: The store's own tables plus the fence and authority tables every store that
+#: holds account-owned rows carries. Shared with the job and verdict stores
+#: rather than reimplemented: one fencing model, one place it can be wrong.
+_SCHEMA: Final = _TABLES + FENCE_SCHEMA
+
+#: **The atomic scheduling claim.** Conditional on the row still being
+#: schedulable, so two replicas racing for one row produce exactly one winner —
+#: `rowcount` is the answer, decided by SQLite rather than by a `SELECT` the
+#: other replica can overtake. The previous design wrote `claimed`
+#: unconditionally, which is a claim only in name.
+#: The schedulable states arrive as one JSON parameter rather than as a
+#: generated `IN (?, ?, ...)`. A statement assembled at the call site is the
+#: shape an injection has, and `tests/unit/test_batch_isolation.py` reads the
+#: tree to forbid one; `json_each` keeps the whole statement a literal while
+#: still letting the caller name the states.
+_CLAIM_ROW: Final = """
+UPDATE batch_rows
+   SET state = ?
+ WHERE batch_id = ?
+   AND number = ?
+   AND state IN (SELECT value FROM json_each(?))
+"""
+
+#: **The child job identifier is written once.** `job_id = ?` guarded by
+#: `job_id IS NULL`, so a row that already names a child can never be pointed at
+#: a different one: a batch row whose binding moved would leave the first child
+#: running with nothing observing it.
+_BIND_CHILD: Final = """
+UPDATE batch_rows
+   SET job_id = ?
+ WHERE batch_id = ?
+   AND number = ?
+   AND job_id IS NULL
+"""
+
+#: The parent's owner, read inside the mutating transaction. `None` means the
+#: batch does not exist, which is a refusal rather than an authorization.
+_ROW_ACCOUNT: Final = "SELECT account FROM batches WHERE batch_id = ?"
+
 _VERSION: Final = "SELECT version FROM batch_schema_version"
 _RECORD_VERSION: Final = "INSERT INTO batch_schema_version (version) VALUES (?)"
 
@@ -88,8 +145,8 @@ _COUNT_BATCHES: Final = "SELECT COUNT(*) FROM batches"
 
 _INSERT_BATCH: Final = """
 INSERT OR REPLACE INTO batches
-    (batch_id, account, created_at, expires_at, input_rows, skipped_rows, cancelled)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+    (batch_id, account, created_at, expires_at, input_rows, skipped_rows, cancelled, generation)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _INSERT_ROW: Final = """
@@ -101,7 +158,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 #: Ownership **and** expiry in the predicate. Removing either is a mutation a
 #: test fails on.
 _SELECT_BATCH: Final = """
-SELECT batch_id, account, created_at, expires_at, input_rows, skipped_rows, cancelled
+SELECT batch_id, account, created_at, expires_at, input_rows, skipped_rows, cancelled,
+       generation
   FROM batches
  WHERE batch_id = ? AND account = ? AND expires_at > ?
 """
@@ -205,20 +263,66 @@ class SQLiteBatchStore:
 
     # --- the async surface --------------------------------------------------
 
-    async def save_batch(self, record: StoredBatch) -> None:
-        await asyncio.to_thread(self._save_batch, record)
+    def bind_authority(self, authority_id: str) -> str:
+        """Tie this file to one deletion authority, or refuse to open under another."""
+        with self._connect() as connection:
+            return bind_authority(connection, authority_id)
 
-    async def update_rows(self, batch_id: str, rows: tuple[StoredBatchRow, ...]) -> None:
-        await asyncio.to_thread(self._update_rows, batch_id, rows)
+    async def fence(self, *, account: str, generation: int) -> int:
+        """Raise this store's fence before its rows are deleted."""
+        return await asyncio.to_thread(self._fence, account, generation)
 
-    async def set_cancelled(self, batch_id: str) -> None:
-        await asyncio.to_thread(self._set_cancelled, batch_id)
+    async def claim_row(
+        self,
+        *,
+        batch_id: str,
+        number: int,
+        schedulable: tuple[str, ...],
+        claimed: str,
+        expected_generation: int | None = None,
+    ) -> bool:
+        """Take one row for scheduling, atomically. `False` means somebody else has it."""
+        return await asyncio.to_thread(
+            self._claim_row, batch_id, number, schedulable, claimed, expected_generation
+        )
+
+    async def bind_child(
+        self,
+        *,
+        batch_id: str,
+        number: int,
+        job_id: str,
+        expected_generation: int | None = None,
+    ) -> bool:
+        """Name this row's child job, once. `False` means it already names one."""
+        return await asyncio.to_thread(
+            self._bind_child, batch_id, number, job_id, expected_generation
+        )
+
+    async def save_batch(
+        self, record: StoredBatch, *, expected_generation: int | None = None
+    ) -> bool:
+        return await asyncio.to_thread(self._save_batch, record, expected_generation)
+
+    async def update_rows(
+        self,
+        batch_id: str,
+        rows: tuple[StoredBatchRow, ...],
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
+        return await asyncio.to_thread(self._update_rows, batch_id, rows, expected_generation)
+
+    async def set_cancelled(self, batch_id: str, *, expected_generation: int | None = None) -> bool:
+        return await asyncio.to_thread(self._set_cancelled, batch_id, expected_generation)
 
     async def load_batch(self, batch_id: str, *, account: str, now: datetime) -> StoredBatch | None:
         return await asyncio.to_thread(self._load_batch, batch_id, account, now)
 
-    async def save_artifact(self, artifact: BatchArtifact) -> None:
-        await asyncio.to_thread(self._save_artifact, artifact)
+    async def save_artifact(
+        self, artifact: BatchArtifact, *, expected_generation: int | None = None
+    ) -> bool:
+        return await asyncio.to_thread(self._save_artifact, artifact, expected_generation)
 
     async def load_artifact(
         self, batch_id: str, *, account: str, now: datetime
@@ -247,8 +351,87 @@ class SQLiteBatchStore:
         with closing(connection), connection:
             yield connection
 
-    def _save_batch(self, record: StoredBatch) -> None:
+    def _fence(self, account: str, generation: int) -> int:
         with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            return raise_fence(connection, account, generation)
+
+    def _account_of(self, connection: sqlite3.Connection, batch_id: str) -> str | None:
+        row = connection.execute(_ROW_ACCOUNT, (batch_id,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def _may_mutate(
+        self, connection: sqlite3.Connection, batch_id: str, expected: int | None
+    ) -> bool:
+        """Whether a write **to an existing batch** may proceed, in this transaction.
+
+        **A missing parent is a refusal, not a permission.** The first version of
+        this helper treated an unresolvable account as "a batch that does not
+        exist yet, whose own insert carries the check" — which is true of
+        creation and false of every child mutation. The independent review used
+        exactly that: after a completed deletion the parent was gone, so the
+        account could not be resolved, so a stale `update_rows` was waved
+        through and inserted an orphan `batch_rows` row for an account the
+        operator had been told was erased. Creation is a separate path with its
+        own account, and this one requires a parent.
+
+        `expected is None` is a deployment with no deletion authority, which
+        cannot delete and therefore has no fence to fail — the allowance
+        `application/jobs.py` makes, for the same reason. The parent must still
+        exist.
+        """
+        account = self._account_of(connection, batch_id)
+        if account is None:
+            return False
+        if expected is None:
+            return True
+        return fenced_generation(connection, account) == expected
+
+    def _claim_row(
+        self,
+        batch_id: str,
+        number: int,
+        schedulable: tuple[str, ...],
+        claimed: str,
+        expected_generation: int | None,
+    ) -> bool:
+        """One conditional `UPDATE`, so the winner is decided by the database.
+
+        `BEGIN IMMEDIATE` first on this package's rule, and the predicate names
+        the states a row may be claimed *from* — a row already `claimed` or
+        `submitted` matches nothing and the loser is told so by `rowcount`.
+        """
+        with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            # The parent and the fence, read under this transaction's write lock
+            # and before the update they guard. A claim is a mutation of an
+            # existing batch, so it is fenced exactly as `update_rows` is.
+            if not self._may_mutate(connection, batch_id, expected_generation):
+                return False
+            cursor = connection.execute(
+                _CLAIM_ROW, (claimed, batch_id, number, json.dumps(list(schedulable)))
+            )
+            return int(cursor.rowcount) == 1
+
+    def _bind_child(
+        self, batch_id: str, number: int, job_id: str, expected_generation: int | None
+    ) -> bool:
+        """The fence and the immutable binding, both, in one transaction."""
+        with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            if not self._may_mutate(connection, batch_id, expected_generation):
+                return False
+            cursor = connection.execute(_BIND_CHILD, (job_id, batch_id, number))
+            return int(cursor.rowcount) == 1
+
+    def _save_batch(self, record: StoredBatch, expected_generation: int | None) -> bool:
+        """Create or replace one batch, fenced. `False` means the account is being erased."""
+        with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            if expected_generation is not None and (
+                fenced_generation(connection, record.account) != expected_generation
+            ):
+                return False
             existing = connection.execute(_OWNED, (record.batch_id, record.account)).fetchone()
             if existing is None:
                 # Clear what the clock has already released before deciding the
@@ -268,9 +451,11 @@ class SQLiteBatchStore:
                     record.input_rows,
                     record.skipped_rows,
                     int(record.cancelled),
+                    record.generation,
                 ),
             )
             self._write_rows(connection, record.batch_id, record.rows)
+        return True
 
     @staticmethod
     def _write_rows(
@@ -292,13 +477,24 @@ class SQLiteBatchStore:
             ],
         )
 
-    def _update_rows(self, batch_id: str, rows: tuple[StoredBatchRow, ...]) -> None:
+    def _update_rows(
+        self, batch_id: str, rows: tuple[StoredBatchRow, ...], expected_generation: int | None
+    ) -> bool:
+        """Row state and result, fenced in the same transaction as the write."""
         with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            if not self._may_mutate(connection, batch_id, expected_generation):
+                return False
             self._write_rows(connection, batch_id, rows)
+        return True
 
-    def _set_cancelled(self, batch_id: str) -> None:
+    def _set_cancelled(self, batch_id: str, expected_generation: int | None) -> bool:
         with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            if not self._may_mutate(connection, batch_id, expected_generation):
+                return False
             connection.execute(_CANCEL, (batch_id,))
+        return True
 
     def _load_batch(self, batch_id: str, account: str, now: datetime) -> StoredBatch | None:
         with self._connect() as connection:
@@ -314,6 +510,7 @@ class SQLiteBatchStore:
             input_rows=int(row[4]),
             skipped_rows=int(row[5]),
             cancelled=bool(row[6]),
+            generation=int(row[7]),
             rows=tuple(
                 StoredBatchRow(
                     number=int(item[0]),
@@ -327,8 +524,14 @@ class SQLiteBatchStore:
             ),
         )
 
-    def _save_artifact(self, artifact: BatchArtifact) -> None:
+    def _save_artifact(self, artifact: BatchArtifact, expected_generation: int | None) -> bool:
+        """The report is the account's data too, so it is fenced like the rows."""
         with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            if expected_generation is not None and (
+                fenced_generation(connection, artifact.account) != expected_generation
+            ):
+                return False
             connection.execute(
                 _INSERT_ARTIFACT,
                 (
@@ -341,6 +544,7 @@ class SQLiteBatchStore:
                     int(artifact.complete),
                 ),
             )
+        return True
 
     def _load_artifact(self, batch_id: str, account: str, now: datetime) -> BatchArtifact | None:
         with self._connect() as connection:

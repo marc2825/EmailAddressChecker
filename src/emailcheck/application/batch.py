@@ -81,6 +81,7 @@ from emailcheck.domain.batch import (
 )
 from emailcheck.domain.job import IdempotencyKey, JobId, JobState
 from emailcheck.domain.principal import Principal
+from emailcheck.ports.account_state import INITIAL_GENERATION, AccountStateStore
 from emailcheck.ports.batch_store import BatchArtifact, BatchStore, StoredBatch, StoredBatchRow
 from emailcheck.ports.clock import Clock
 from emailcheck.ports.random_source import RandomSource
@@ -124,6 +125,12 @@ class _Pending:
     #: The submitted text. `repr=False`: a batch is a list of addresses, and the
     #: scheduler's own values are the last place one could leak from.
     submitted: str = field(repr=False, default="")
+    #: Whether this row still has to be claimed. A row already `claimed` was
+    #: taken by a process that did not finish; re-driving it is safe because its
+    #: idempotency handle is already persisted and `JobService.submit` answers
+    #: with the existing job, and it must **not** be claimed again because the
+    #: claim is what excludes a second live replica.
+    unclaimed: bool = True
 
 
 @dataclass(slots=True)
@@ -348,7 +355,18 @@ class BatchService:
     #: rather than at its next persistence read. The persisted flag is the
     #: authority; this is the fast path. `repr=False`, like everything else here
     #: that could name a caller's work.
+    #: The durable deletion authority, when this deployment has one.
+    #:
+    #: Optional exactly as it is for `RetentionService`: a deployment may run a
+    #: batch stack over an in-memory store with no deletion contract at all. When
+    #: it is present, every account-owned batch write carries the generation the
+    #: batch was admitted under and the store refuses it in the same transaction
+    #: once a deletion has raised the fence — the model
+    #: `adapters/storage/account_fence.py` states, applied to the third store.
+    account_state: AccountStateStore | None = None
     _cancelled: set[str] = field(default_factory=set, repr=False)
+    #: The generation each live batch was admitted under, by batch id.
+    _generations: dict[str, int] = field(default_factory=dict, repr=False)
 
     # --- submission ---------------------------------------------------------
 
@@ -365,6 +383,11 @@ class BatchService:
         parsed = parse_batch_csv(content, limits=self.settings.limits)
         started = self.clock.now()
         batch_id = BatchId(self.random_source.token(_IDENTIFIER_BYTES))
+        # **The fencing token is taken here, at admission, and then persisted.**
+        # Every later write for this batch presents this value rather than
+        # asking what the generation is now — a scheduler that re-read it after
+        # a deletion would launder its own stale work into current work.
+        generation = await self._admitted_generation(account)
         record = StoredBatch(
             batch_id=batch_id.value,
             account=account,
@@ -372,9 +395,11 @@ class BatchService:
             expires_at=started + timedelta(seconds=self.settings.result_retention_seconds),
             input_rows=len(parsed.rows),
             skipped_rows=parsed.skipped,
+            generation=generation,
             rows=self._initial_rows(parsed, batch_id=batch_id, account=account),
         )
-        await self.store.save_batch(record)
+        if not await self.store.save_batch(record, expected_generation=generation):
+            raise BatchRefused("this account is not accepting new work")
         return await self._drive(record, principal=principal)
 
     async def resume(self, batch_id: BatchId, *, principal: Principal) -> BatchReport | None:
@@ -449,7 +474,7 @@ class BatchService:
         if record is None:
             return False
         self._cancelled.add(batch_id.value)
-        await self.store.set_cancelled(batch_id.value)
+        await self.store.set_cancelled(batch_id.value, expected_generation=record.generation)
         await self.store.update_rows(
             batch_id.value,
             tuple(
@@ -488,7 +513,16 @@ class BatchService:
             )
         return account
 
+    async def _admitted_generation(self, account: str) -> int:
+        """The account's generation now. `INITIAL_GENERATION` with no authority."""
+        if self.account_state is None:
+            return INITIAL_GENERATION
+        return await self.account_state.generation(account)
+
     async def _drive(self, record: StoredBatch, *, principal: Principal) -> BatchReport:
+        # The batch's own persisted token, never a fresh reading: a resume of a
+        # batch admitted before a deletion must stay refused.
+        self._generations[record.batch_id] = record.generation
         rotation = FairRotation()
         for row in record.rows:
             if row.state not in RESUMABLE_ROW_STATES:
@@ -507,6 +541,7 @@ class BatchService:
                     target_digest=row.target_digest,
                     idempotency=row.idempotency,
                     submitted=row.submitted,
+                    unclaimed=row.state is not BatchRowState.CLAIMED,
                 )
             )
 
@@ -568,6 +603,26 @@ class BatchService:
         never a verdict: ADR 0013's rule, and the reason a full executor or an
         exhausted quota cannot become a claim about an address.
         """
+        # **The store decides who schedules this row, not this loop.** Two
+        # replicas driving one batch — a resume on each, an operator retry
+        # beside a running scheduler — both reach here for the same row, and a
+        # write that simply set `claimed` would let both submit the same
+        # address. `claim_row` is one conditional write in one transaction, so
+        # exactly one caller is told to proceed.
+        # **`queued` only.** The transition is what excludes a second replica, so
+        # the state a row is claimed *from* must be one it leaves: claiming a
+        # `claimed` row would match for every caller and exclude nobody. A row
+        # already `claimed` belongs to a process that did not finish, and is
+        # re-driven below through its persisted idempotency handle rather than
+        # taken again.
+        if row.unclaimed and not await self.store.claim_row(
+            batch_id=record.batch_id,
+            number=row.number,
+            schedulable=(BatchRowState.QUEUED.value,),
+            claimed=BatchRowState.CLAIMED.value,
+            expected_generation=record.generation,
+        ):
+            return
         await self._persist(record.batch_id, row.number, BatchRowState.CLAIMED, pending=row)
         try:
             outcome = await self.jobs.submit(
@@ -582,6 +637,15 @@ class BatchService:
             await self._persist(record.batch_id, row.number, BatchRowState.REFUSED, pending=row)
             return
         rotation.learn(row.domain, outcome.scheduling_key)
+        # Written once and never moved: a row already naming a child keeps it,
+        # so a second scheduler cannot repoint this row at a second
+        # verification of the same address.
+        await self.store.bind_child(
+            batch_id=record.batch_id,
+            number=row.number,
+            job_id=outcome.job.id.value,
+            expected_generation=record.generation,
+        )
         await self._persist(
             record.batch_id,
             row.number,
@@ -620,6 +684,7 @@ class BatchService:
                     submitted=None if terminal or pending is None else pending.submitted,
                 ),
             ),
+            expected_generation=self._generations.get(batch_id),
         )
 
     # --- composing a report --------------------------------------------------
@@ -703,7 +768,8 @@ class BatchService:
                 media_type=RESULT_MEDIA_TYPE,
                 content=render_batch_csv(report.rows),
                 complete=report.complete,
-            )
+            ),
+            expected_generation=self._generations.get(report.batch_id.value),
         )
 
     def _handle(self, batch_id: BatchId, number: int, account: str, digest: str) -> str:

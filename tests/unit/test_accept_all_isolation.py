@@ -300,7 +300,10 @@ def test_the_cache_key_has_no_field_a_local_part_could_occupy() -> None:
 
     fields = set(AcceptAllCacheKey.__dataclass_fields__)
 
-    assert fields == {"domain_digest", "sender_digest", "experiment_version"}
+    # `route_digest` joined them in Remediation D: an answer is about the mail
+    # system behind the domain, so a domain that moved to different exchangers
+    # must not inherit its predecessor's policy for the rest of the window.
+    assert fields == {"domain_digest", "sender_digest", "experiment_version", "route_digest"}
     for absent in ("local_part", "target", "address", "mailbox"):
         assert absent not in fields
 

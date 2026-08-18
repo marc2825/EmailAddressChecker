@@ -109,6 +109,14 @@ class StoredBatch:
     skipped_rows: int
     #: Set by `cancel`. Persisted, so a restart cannot resume a cancelled batch.
     cancelled: bool = False
+    #: The account deletion generation this batch was admitted under.
+    #:
+    #: **Persisted, because a resumed batch must not ask what the generation is
+    #: now.** A scheduler that re-read the current generation after a deletion
+    #: would launder its own stale work into current work; carrying the admitted
+    #: value means a batch that outlived a deletion is refused by every store it
+    #: tries to write to.
+    generation: int = 0
     rows: tuple[StoredBatchRow, ...] = ()
 
     def __post_init__(self) -> None:
@@ -186,7 +194,59 @@ class BatchStore(Protocol):
     record an implementation can still answer with.
     """
 
-    async def save_batch(self, record: StoredBatch) -> None:
+    async def fence(self, *, account: str, generation: int) -> int:
+        """Raise this store's own deletion fence for `account`. Returns the value held.
+
+        The same contract `ports/job_store.py` states, for the same reason: a
+        batch row recreated after a deletion is the account's data exactly as a
+        job row is. `application/account_deletion.py` raises this **before** it
+        removes anything.
+        """
+        ...
+
+    async def claim_row(
+        self,
+        *,
+        batch_id: str,
+        number: int,
+        schedulable: tuple[str, ...],
+        claimed: str,
+        expected_generation: int | None = None,
+    ) -> bool:
+        """Take one row for scheduling. `True` for exactly one caller.
+
+        **The scheduling authority, and it is the store's rather than the
+        scheduler's.** An implementation decides this with one conditional write
+        in one transaction — a `SELECT` for schedulable rows followed by an
+        `UPDATE` is the same race with more steps, and two replicas driving one
+        batch would both submit the same address. `schedulable` names the states
+        a row may be claimed *from*, so a row already claimed matches nothing.
+        """
+        ...
+
+    async def bind_child(
+        self,
+        *,
+        batch_id: str,
+        number: int,
+        job_id: str,
+        expected_generation: int | None = None,
+    ) -> bool:
+        """Name this row's child job, once and never again. `False` if it already has one.
+
+        The binding is immutable because the alternative is a batch row pointing
+        at a second verification of the same address while the first is still
+        running — which is the duplicate recipient touch this project's whole
+        threat model is organized against.
+
+        Generation-fenced on the same terms as `claim_row`, and for the same
+        reason: it mutates an existing child.
+        """
+        ...
+
+    async def save_batch(
+        self, record: StoredBatch, *, expected_generation: int | None = None
+    ) -> bool:
         """Create or replace one batch and all of its rows.
 
         Raises `BatchStoreFull` when the store is at capacity and every batch in
@@ -195,11 +255,19 @@ class BatchStore(Protocol):
         """
         ...
 
-    async def update_rows(self, batch_id: str, rows: tuple[StoredBatchRow, ...]) -> None:
+    async def update_rows(
+        self,
+        batch_id: str,
+        rows: tuple[StoredBatchRow, ...],
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
         """Replace these rows of an existing batch, leaving the others alone."""
         ...
 
-    async def set_cancelled(self, batch_id: str) -> None: ...
+    async def set_cancelled(
+        self, batch_id: str, *, expected_generation: int | None = None
+    ) -> bool: ...
 
     async def load_batch(self, batch_id: str, *, account: str, now: datetime) -> StoredBatch | None:
         """This account's live batch, or `None`.
@@ -210,7 +278,9 @@ class BatchStore(Protocol):
         """
         ...
 
-    async def save_artifact(self, artifact: BatchArtifact) -> None: ...
+    async def save_artifact(
+        self, artifact: BatchArtifact, *, expected_generation: int | None = None
+    ) -> bool: ...
 
     async def load_artifact(
         self, batch_id: str, *, account: str, now: datetime

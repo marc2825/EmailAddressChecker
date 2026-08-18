@@ -50,6 +50,15 @@ class AcceptAllCacheKey:
     #: `EXPERIMENT_VERSION`. What the experiment asked, and how the reply was
     #: read, are part of what the answer means.
     experiment_version: str
+    #: An HMAC of the exchangers the answer was obtained against.
+    #:
+    #: **Accept-all is a property of a mail system, not of a name.** The answer
+    #: describes what the hosts behind the domain do with an unknown recipient,
+    #: so a domain that has moved to a different mail system has not merely
+    #: changed address — the stored answer is now about somebody else's
+    #: configuration. Keying on the route means such a move misses the cache and
+    #: is asked again, rather than inheriting a week of a predecessor's policy.
+    route_digest: str = ""
 
 
 @dataclass(frozen=True, slots=True)
