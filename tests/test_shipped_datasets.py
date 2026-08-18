@@ -51,7 +51,7 @@ def test_the_role_dataset_ships_populated_with_its_provenance() -> None:
     metadata = datasets.roles.metadata
 
     assert datasets.roles.size >= 18
-    assert "EmailChecker" in metadata.source_url
+    assert "EmailAddressChecker" in metadata.source_url
     assert metadata.license
     assert metadata.version
     assert metadata.maintainer

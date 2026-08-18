@@ -12,7 +12,7 @@ The following files define behavior. In conflicts, the order below wins:
 6. Phase prompt
 7. implementation comments
 
-`CLAUDE.md` imports `AGENTS.md`; together they define the implementation workflow and invariants.
+`CONTRIBUTING.md` carries the engineering and safety invariants a change must preserve.
 
 ## Documents
 
@@ -25,7 +25,6 @@ The following files define behavior. In conflicts, the order below wins:
 - `test-strategy.md`: deterministic fixtures and acceptance metrics.
 - `operations.md`: sender identity, deployment gates, kill switches, and runbooks.
 - `data-sources.md`: dataset license and update requirements.
-- `claude-code-setup.md`: Claude Code memory, skills, hooks, and Phase workflow.
 - `adr/`: durable architecture decisions.
 
 ## Informative references

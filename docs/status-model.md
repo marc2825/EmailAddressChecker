@@ -372,6 +372,20 @@ section 4 resolves all of them to `unknown` or `temporary_unknown`.
 | This project's own budget stopped the session | `deadline_exhausted` true | `smtp_connection_timeout` |
 | This project failed | outcome `internal_error` | `internal_error` |
 
+### The TLS-required default has a measurement obligation
+
+`TLSPolicy.REQUIRED` is the default, and a destination that advertises no
+STARTTLS therefore becomes `smtp_tls_failure` — `tls.reason` `not_offered` —
+rather than a plaintext session. That default is a judgement about how much of
+the real mail population still refuses TLS, and this project has **not measured
+it**. Phase 8's readiness work names a representative measurement as the
+evidence needed before the default is revisited.
+
+Until that measurement exists, relaxing the default is not one of the options.
+Weakening it on the strength of a guess would silently convert a refusal to
+negotiate TLS into an ordinary probe, which is the one direction the evidence
+cannot support.
+
 Three consequences are not negotiable:
 
 - **a `550` to `MAIL FROM` is never `rcpt_rejected_address` and never

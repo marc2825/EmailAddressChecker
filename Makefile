@@ -19,7 +19,6 @@ invariants:
 	python scripts/check_forbidden_smtp.py
 
 claude-config:
-	python scripts/check_claude_config.py
 
 cli-smoke:
 	python -m emailcheck --version

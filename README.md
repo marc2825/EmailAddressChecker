@@ -1,117 +1,171 @@
-# emailcheck — Claude Code starter
+# EmailAddressChecker
 
-メール本文を送信せず、メールアドレスの到達可能性を根拠付きで推定する
-サービスの、Claude Code向け段階実装リポジトリです。
+A conservative email deliverability verifier.
 
-## 現在地
+**It estimates deliverability. It does not prove that a mailbox exists.**
 
-この配布物は **Phase 0 baseline** です。
+That distinction is the point of the project. An SMTP server accepting a
+recipient tells you the server accepted a recipient — not that a person reads
+mail there, not that a later message will arrive. Many tools quietly round that
+up. This one refuses to, and the refusal is enforced by tests rather than by
+good intentions.
 
-- 要件、脅威モデル、状態モデルを固定
-- Claude Code用`CLAUDE.md`を追加
-- `AGENTS.md`を共通規約として再利用
-- Phase 0〜10の実装プロンプトを同梱
-- `/implement-phase`と`/review-phase`スキルを追加
-- 読取専用レビューサブエージェントを追加
-- 危険な直接SMTP操作を止めるフックを追加
-- 初期状態では外部DNS・SMTPへ接続しない
+## What it does
 
-## 最初に読む順番
+- **Syntax validation** — RFC-shaped parsing with IDNA/Unicode handling, without
+  silently broadening what it accepts.
+- **DNS and MX analysis** — MX resolution with TTL policy, address lookup, and
+  explicit Null MX (`.`) handling.
+- **Passive classification** — disposable, free-mail, role-account, and provider
+  patterns from versioned local datasets, with content-derived cache identity so
+  a dataset edit cannot serve a stale verdict.
+- **Restricted SMTP evidence** — an optional active check that stops at the
+  `RCPT` stage and never transmits message content.
+- **Conservative aggregation** — structured evidence folded into one published
+  status, with ambiguity resolving downward.
+- **Risk flags** — reported separately from deliverability, never mixed into it.
+- **CLI** — `emailcheck`, which performs no SMTP for a local check.
 
-1. `CLAUDE.md`
-2. `AGENTS.md`
-3. `docs/INDEX.md`
-4. `docs/requirements.md`
-5. `docs/threat-model.md`
-6. `docs/status-model.md`
-7. `docs/claude-code-setup.md`
+Two subsystems exist in the codebase but are **not** ordinary public features.
+The accept-all experiment is optional, disabled by default, and gated behind
+operator authorization, a separate budget, and a separate cache. The batch
+subsystem is deliberately not composed into the shipped stack and is reachable
+from no request surface.
 
-## セットアップ
+## Verdicts
 
-Python 3.12以上を使用します。
+Four published statuses, and no fifth:
+
+| Status | Meaning |
+|---|---|
+| `likely_deliverable` | Evidence supports delivery being likely. Not proof of a mailbox. |
+| `invalid` | Authoritative evidence that the address cannot receive mail. |
+| `temporary_unknown` | A transient condition prevented a conclusion. Ask again later. |
+| `unknown` | Evidence was absent or ambiguous. |
+
+Risk flags — disposable, role account, accept-all suspected, domain
+configuration anomaly, and others — are carried **separately** from status. A
+flag never upgrades or downgrades the verdict on its own.
+
+Two consequences worth stating plainly:
+
+- **A bare `250` is not mailbox-existence proof.** Many servers accept every
+  recipient.
+- **An ambiguous permanent failure is not automatically `invalid`.** A bare
+  `550` becomes `unknown`; only an authoritative enhanced status code such as
+  `5.1.1` supports `invalid`.
+
+See [docs/status-model.md](docs/status-model.md) for the full mapping.
+
+## Safety model
+
+- **Active probing is not authorized by default.** It must be explicitly
+  configured *and* explicitly authorized, and publishing this source authorizes
+  nothing.
+- **TLS is required** for active SMTP under the current policy.
+- **At most one recipient touch per ordinary verification operation** — in
+  total, across MX fallback, temporary replies, lost replies, partial writes,
+  retries, and restarts.
+- **No recipient-stage replay.** A retry is available only to an attempt that
+  provably did not reach the recipient.
+- **No `DATA`, no `AUTH`, no `VRFY`, no `EXPN`**, and no message content of any
+  kind. A repository check enforces this against the source.
+- **Unsafe destinations are rejected** — private and reserved ranges, with the
+  selected IP and the actual peer both validated.
+- **Operator controls** — a global kill switch, account and key suspension, and
+  domain and exchanger blocks, each audited.
+- **Per-deployment readiness** is required before any external beta.
+
+## Installation
+
+Python 3.12 or newer. There is no published package or container image; install
+from a checkout:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+git clone https://github.com/marc2825/EmailAddressChecker.git
+cd EmailAddressChecker
+python -m venv .venv && source .venv/bin/activate
+python -m pip install -e .
 ```
 
-Windows PowerShell:
+## Quick start
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
-```
-
-初期検証:
+A local check is passive. It performs **no SMTP** and contacts no mail server:
 
 ```bash
+emailcheck user@example.com
+emailcheck user@example.com --json
+```
+
+Other read-only commands:
+
+```bash
+emailcheck --check-deployment    # advisory gate report; contacts nothing
+emailcheck --report-versions     # aggregation ruleset and dataset versions
+```
+
+> **Active probing is a separate decision.** Enabling it means connecting to
+> third-party mail exchangers from your address. Before doing so you must
+> complete [docs/readiness-checklist.md](docs/readiness-checklist.md) — static
+> IP, outbound port 25, PTR and forward DNS, SPF, monitored sender and abuse
+> mailboxes, reviewed hosting terms, a tested kill switch, tested rate limits,
+> blocked private-network egress, tested retention deletion, and a named
+> incident owner — and probe only addresses you own or are explicitly
+> authorized to test.
+
+## Configuration
+
+See [`.env.example`](.env.example) for the shape. It ships with the
+`local-passive` profile, active probes disabled, and placeholder values only.
+
+Never commit real configuration. The correlation/HMAC key is rejected if empty,
+and a deployment with a persistent store must configure the account-state
+authority or it will refuse to start.
+
+## Development
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy src
+python scripts/check_forbidden_smtp.py
 make check
 ```
 
-## Claude Codeを開始
+The default test path and CI are **offline**: no external DNS, SMTP, or HTTP.
+Tests needing a server bind to loopback; the rest use fakes, scripted
+transports, and fake clocks.
 
-リポジトリルートで:
+## Architecture
 
-```bash
-claude
+```
+apps → application → ports/domain ← adapters
+                          ↑
+                    composition.py
 ```
 
-最初に:
+- [docs/architecture.md](docs/architecture.md) — layering, persistence, fencing.
+- [docs/threat-model.md](docs/threat-model.md) — what this defends against.
+- [docs/status-model.md](docs/status-model.md) — evidence to verdict.
 
-```text
-/context
-/status
-/doctor
-```
+## Responsible operation
 
-その後:
+- [SECURITY.md](SECURITY.md) — reporting and responsible use.
+- [docs/operations.md](docs/operations.md) — operator controls and runbooks.
+- [docs/readiness-checklist.md](docs/readiness-checklist.md) — deployment gates.
 
-```text
-/implement-phase 00
-```
+Publication, implementation readiness, and deployment authorization are three
+different things. This repository being public means only the first.
 
-Phase実装後は別セッションで:
+## Project status
 
-```text
-/review-phase 00
-```
+See [STATUS.md](STATUS.md).
 
-Phase 0が通ったら、`01`、`02`の順に進めます。一度に複数Phaseを
-実装させないでください。
+## Contributing
 
-## 重要な制約
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-本サービスは、メールボックスの存在、利用中、所有者、最終配送を保証しません。
+## License
 
-主要状態:
-
-- `likely_deliverable`
-- `invalid`
-- `temporary_unknown`
-- `unknown`
-
-`disposable`、`role_account`、`free_mail`、
-`accept_all_suspected`は別軸の`risk_flags`です。
-
-SMTP実装はメッセージ本文を送るコマンドや状態を持ちません。`VRFY`、
-`EXPN`、プロバイダーのアカウント列挙、制限回避のIPローテーションも
-実装しません。
-
-## Claude Code用ファイル
-
-```text
-CLAUDE.md
-CLAUDE.local.md.example
-.claude/settings.json
-.claude/hooks/pretool_guard.py
-.claude/rules/
-.claude/skills/implement-phase/
-.claude/skills/review-phase/
-.claude/agents/
-```
-
-詳細は`docs/claude-code-setup.md`を参照してください。
+Apache-2.0. See [LICENSE](LICENSE).

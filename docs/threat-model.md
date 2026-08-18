@@ -473,6 +473,13 @@ and an admin summary shows a count and a name.
 |---|---|---|
 | Quota store unavailable | active refused, passive still served | `test_abuse_budgets.py` |
 | Quota table full of live counters | refused, never evicts a live budget | `test_quota_store.py` |
+
+**The budget layers, named.** Enumeration is bounded by several independent
+counters rather than one, so exhausting a single dimension does not open the
+rest. The layers are the **API key**, the **account**, the **source IP**, the
+**target domain**, and a **daily total**. The accept-all experiment carries a
+*separate* domain budget of its own, which is why an ordinary verification's
+target-domain budget can never be spent on a control probe.
 | Operator sink raises | never changes a verdict | `test_failure_injection.py` |
 | Metrics sink raises | never changes a verdict | `test_failure_injection.py` |
 | Retention run fails | counted and audited, never propagated | `test_retention.py` |

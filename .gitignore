@@ -19,3 +19,59 @@ coverage.xml
 junit.xml
 CLAUDE.local.md
 .claude/settings.local.json
+
+# --- public-release hardening -------------------------------------------------
+# SQLite sidecars. `*.db` and `*.sqlite3` were already ignored; a WAL or SHM file
+# left by an interrupted run is the same data under a different suffix.
+*.sqlite
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+
+# Local environment overrides. `.env.example` is tracked on purpose and stays.
+.env.*
+!.env.example
+
+# Credentials. Nothing of the sort is tracked today; these keep it that way.
+# `tests/fixtures/tls/*.key` are documented throwaway test certificates and are
+# deliberately exempted below.
+*.pem
+*.key
+!tests/fixtures/tls/*.key
+credentials.*
+secrets.*
+
+# Runtime output.
+*.log
+logs/
+tmp/
+temp/
+
+# Completed deployment evidence. `docs/readiness-checklist.md` is a blank
+# template and stays public; a *filled-in* copy names a host, an egress IP, and
+# an incident owner, so it belongs here rather than in a public repository.
+evidence/private/
+reports/private/
+
+# Editors and OS.
+*.swp
+*.swo
+Thumbs.db
+
+# --- private development material -------------------------------------------
+# Untracked for publication but kept on disk. Root-anchored so a similarly named
+# file elsewhere in the tree is unaffected.
+/prompts/
+/.claude/
+/plans/
+/CLAUDE.md
+/CLAUDE.local.md
+/CLAUDE.local.md.example
+/MANIFEST.md
+/PLANS.md
+/IMPLEMENTATION_STATUS.md
+/AGENTS.md
+/docs/claude-code-setup.md
+AGENTS.md
+CLAUDE.md

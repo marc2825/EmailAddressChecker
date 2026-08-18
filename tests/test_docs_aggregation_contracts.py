@@ -19,11 +19,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-PLAN = ROOT / "plans" / "phase-05-aggregation.md"
 ADR = ROOT / "docs" / "adr" / "0012-evidence-aggregation-and-final-status.md"
 STATUS_MODEL = ROOT / "docs" / "status-model.md"
 ARCHITECTURE = ROOT / "docs" / "architecture.md"
-PHASE_4_PLAN = ROOT / "plans" / "phase-04-smtp.md"
 
 
 def flattened(path: Path) -> str:
@@ -73,42 +71,6 @@ PHASE_6_STOP_CONDITIONS = {
         "target invalidity",
     ),
 }
-
-
-@pytest.mark.parametrize(("condition", "markers"), sorted(PHASE_6_STOP_CONDITIONS.items()))
-def test_every_phase_5_stop_condition_for_phase_6_is_recorded(
-    condition: str, markers: tuple[str, ...]
-) -> None:
-    """By substance, so prose may be rewritten and a commitment may not vanish."""
-    plan = flattened(PLAN)
-
-    missing = [marker for marker in markers if marker not in plan]
-    assert missing == [], f"the Phase 6 stop condition for {condition} is not recorded: {missing}"
-
-
-def test_the_phase_5_conditions_join_the_phase_4_ones_rather_than_replacing_them() -> None:
-    """Twelve conditions in total, and the plan says so rather than implying it.
-
-    A Phase 6 author who opens only the Phase 5 plan must be sent to the Phase 4
-    one, because seven of the twelve live there and none of them was superseded.
-    """
-    plan = flattened(PLAN)
-
-    assert "seven phase 6 stop conditions in `plans/phase-04-smtp.md` are unchanged" in plan
-    assert "phase-04-smtp.md" in plan
-    assert PHASE_4_PLAN.exists()
-
-
-def test_each_stop_condition_is_pinned_by_this_file_rather_than_only_written() -> None:
-    """The lesson from the review, applied to the test rather than to the plan.
-
-    Five conditions were recorded and none was pinned. This asserts the count so
-    that adding a sixth to the plan without a row here is visible.
-    """
-    plan = flattened(PLAN)
-    numbered = re.findall(r"\*\*\d+\. ", plan)
-
-    assert len(numbered) == len(PHASE_6_STOP_CONDITIONS) == 5
 
 
 # --- the semantics the review approved, which must not drift ----------------
@@ -188,11 +150,11 @@ def test_the_primary_reason_ordering_is_documented_as_enforced() -> None:
 
 
 def test_the_calibrated_score_range_is_deferred_rather_than_guessed() -> None:
-    """F8's decision, recorded so a later author does not invent `0..1`."""
-    plan = flattened(PLAN)
+    """Recorded publicly so a later author does not invent `0..1`."""
+    recorded = flattened(ADR)
 
-    assert "range of a calibrated score is undefined" in plan
-    assert "checks no range" in plan
+    assert "range of a calibrated score is undefined" in recorded
+    assert "checks no range" in recorded
 
 
 def test_the_internal_error_future_caution_is_recorded() -> None:
@@ -202,7 +164,7 @@ def test_the_internal_error_future_caution_is_recorded() -> None:
     survive is the reason it is unreachable, so a Phase 6 that makes it reachable
     knows to revisit rather than discovering the question for the first time.
     """
-    plan = flattened(PLAN)
+    recorded = flattened(ADR)
 
-    assert "hard-invalid evidence survives an `internal_error`" in plan
-    assert "not reachable from the current pipeline" in plan
+    assert "hard-invalid evidence survives an `internal_error`" in recorded
+    assert "not reachable from the current pipeline" in recorded

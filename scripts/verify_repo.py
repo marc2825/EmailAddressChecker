@@ -10,7 +10,6 @@ COMMANDS = [
     [sys.executable, "-m", "ruff", "check", "."],
     [sys.executable, "-m", "mypy", "src"],
     [sys.executable, "scripts/check_forbidden_smtp.py"],
-    [sys.executable, "scripts/check_claude_config.py"],
     [sys.executable, "-m", "emailcheck", "--version"],
 ]
 

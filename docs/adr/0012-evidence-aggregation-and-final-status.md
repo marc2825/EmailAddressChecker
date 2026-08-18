@@ -368,3 +368,20 @@ internal failure and never falls through to another exchanger, and a DNS
 If a later Phase makes it reachable, the rule to revisit is whether an
 `internal_error` from the *same layer* should demote that layer's hard-invalid
 evidence.
+
+## Two decisions recorded so a later author does not re-invent them
+
+**The range of a calibrated score is undefined.** `Confidence` carries an
+optional score and a `calibrated` flag, and nothing in this project defines what
+scale that score would use. It is deferred rather than guessed: an author who
+assumed `0..1` would be inventing a contract callers could come to rely on. The
+domain therefore checks no range, and defining one is a deliberate decision with
+its own ADR.
+
+**Hard-invalid evidence survives an `internal_error`, and that is currently
+unreachable.** The aggregation policy keeps authoritative invalid evidence even
+when the pipeline also reports an internal error. That combination is not
+reachable from the current pipeline, so the behaviour is a statement of policy
+rather than an observed path. It is recorded here because a later change that
+makes it reachable needs to revisit the question deliberately rather than
+discover it.

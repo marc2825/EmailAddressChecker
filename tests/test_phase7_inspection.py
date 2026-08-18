@@ -132,11 +132,17 @@ def test_every_layer_the_prompt_names_is_enforced_or_accounted_for() -> None:
     assert not set(here.values()) & added_by_later_phases
 
 
-def test_the_prompt_lists_the_layers_this_project_claims_it_does() -> None:
-    """Read from the prompt, so the two cannot drift apart silently."""
-    prompt = (ROOT / "prompts/07-hardening.md").read_text(encoding="utf-8")
+def test_the_public_documentation_lists_the_layers_this_project_claims() -> None:
+    """Read from the published threat model, so the two cannot drift apart.
+
+    The list used to be read from an internal implementation prompt, which is
+    not part of the published repository. The durable claim — which quota layers
+    exist — belongs in `docs/threat-model.md`, where an operator reading about
+    enumeration control can find it.
+    """
+    published = (ROOT / "docs" / "threat-model.md").read_text(encoding="utf-8")
     for layer in ("API key", "account", "source IP", "target domain", "daily total"):
-        assert layer in prompt
+        assert layer in published, layer
 
 
 # --- purity ------------------------------------------------------------------

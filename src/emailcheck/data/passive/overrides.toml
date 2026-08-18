@@ -28,8 +28,8 @@ disposable = []
 
 [metadata]
 name = "disposable_overrides"
-source_url = "https://github.com/marc2825/EmailChecker (operator-maintained)"
-license = "Same licence as this repository."
+source_url = "https://github.com/marc2825/EmailAddressChecker (operator-maintained)"
+license = "Apache-2.0; repository-owned."
 version = "empty-2026-08-07"
 retrieved_at = "2026-08-07"
 checksum = "empty"

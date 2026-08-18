@@ -25,8 +25,7 @@ THREAT_MODEL = ROOT / "docs" / "threat-model.md"
 ORCHESTRATION_ADR = ROOT / "docs" / "adr" / "0011-verification-orchestration-and-rate-limiting.md"
 STATE_MACHINE = ROOT / "docs" / "smtp-state-machine.md"
 DIALOGUE_ADR = ROOT / "docs" / "adr" / "0009-smtp-dialogue-and-tls.md"
-PLAN = ROOT / "plans" / "phase-04-smtp.md"
-STATUS_FILE = ROOT / "IMPLEMENTATION_STATUS.md"
+OPERATIONS = ROOT / "docs" / "operations.md"
 
 
 def text_of(path: Path) -> str:
@@ -183,7 +182,7 @@ def test_the_documented_stage_set_is_the_one_the_code_uses() -> None:
 # --- the Phase 5 stop conditions are recorded where a Phase 5 author looks ---
 
 
-@pytest.mark.parametrize("document", [STATUS_MODEL, PLAN, STATUS_FILE])
+@pytest.mark.parametrize("document", [STATUS_MODEL])
 def test_the_positive_set_is_recorded_as_a_category_and_not_a_rule(document: Path) -> None:
     """The shortest correct-looking aggregation an author could write."""
     body = text_of(document)
@@ -195,7 +194,7 @@ def test_the_positive_set_is_recorded_as_a_category_and_not_a_rule(document: Pat
     assert "likely_deliverable" in flat, document.name
 
 
-@pytest.mark.parametrize("document", [STATUS_MODEL, PLAN, STATUS_FILE])
+@pytest.mark.parametrize("document", [STATUS_MODEL])
 def test_strength_is_recorded_as_evidence_and_never_as_truth(document: Path) -> None:
     body = text_of(document)
 
@@ -243,18 +242,6 @@ def test_the_generic_accepted_mapping_is_called_out_as_wrong() -> None:
     assert "basic_code" in mapping
 
 
-def test_the_252_entry_condition_is_carried_in_the_plan() -> None:
-    plan = text_of(PLAN)
-    assert "Stop conditions for 4D" in plan
-    assert "252" in plan
-    assert "basic_code" in plan
-
-
-def test_the_taxonomy_is_not_extended_by_phase_4d() -> None:
-    plan = text_of(PLAN)
-    assert "No new `RecipientStageOutcome` member" in plan
-
-
 # --- the TLS default has an argument, and a date --------------------------
 
 
@@ -272,7 +259,7 @@ def test_the_adr_gives_downgrade_resistance_as_the_reason_for_requiring_tls() ->
     assert "opportunistic" in adr
 
 
-@pytest.mark.parametrize("document", [STATUS_FILE, PLAN])
+@pytest.mark.parametrize("document", [STATUS_MODEL])
 def test_the_not_offered_rate_has_a_dated_measurement_obligation(document: Path) -> None:
     """A guess about real-world STARTTLS deployment is not an acceptable input."""
     body = text_of(document)
@@ -284,7 +271,7 @@ def test_the_not_offered_rate_has_a_dated_measurement_obligation(document: Path)
 
 
 def test_the_default_may_not_change_without_the_measurement() -> None:
-    for document in (STATUS_FILE, PLAN):
+    for document in (STATUS_MODEL,):
         body = text_of(document)
         assert "is not one of the options" in body, document.name
 
@@ -292,7 +279,7 @@ def test_the_default_may_not_change_without_the_measurement() -> None:
 # --- TLSTrust provenance ---------------------------------------------------
 
 
-@pytest.mark.parametrize("document", [PLAN, ROOT / "docs" / "threat-model.md"])
+@pytest.mark.parametrize("document", [ROOT / "docs" / "threat-model.md"])
 def test_trust_anchors_are_operator_configuration_only(document: Path) -> None:
     body = text_of(document)
     assert "TLSTrust" in body
@@ -300,19 +287,6 @@ def test_trust_anchors_are_operator_configuration_only(document: Path) -> None:
     assert "operator" in lowered
     for forbidden_source in ("request", "api"):
         assert forbidden_source in lowered
-
-
-def test_the_phase_6_stop_conditions_are_recorded() -> None:
-    """Plural since the Phase 4 final review: seven, not one.
-
-    Six were added by that review and all of them are about *composition* rather
-    than about a component, which is why they belong in the plan rather than in
-    any module's docstring.
-    """
-    plan = text_of(PLAN)
-    assert "Stop conditions for Phase 6" in plan
-    for number in range(1, 8):
-        assert f"> **{number}. " in plan, f"Phase 6 stop condition {number} is missing"
 
 
 # --- the state table and its description agree -----------------------------
@@ -406,33 +380,10 @@ PHASE_6_STOP_CONDITIONS = {
 }
 
 
-@pytest.mark.parametrize(("condition", "markers"), sorted(PHASE_6_STOP_CONDITIONS.items()))
-def test_every_phase_6_stop_condition_is_recorded(condition: str, markers: tuple[str, ...]) -> None:
-    """Each one, by substance rather than by heading, so prose may be rewritten."""
-    plan = flattened(text_of(PLAN))
-
-    missing = [marker for marker in markers if marker not in plan]
-    assert missing == [], f"the Phase 6 stop condition for {condition} is not recorded: {missing}"
-
-
-def test_the_forbidden_phase_6_wiring_is_named() -> None:
-    """A rule that names only the right answer does not catch the wrong one.
-
-    An API wired to `SMTPProbeService` is correct-looking code: it probes, it is
-    rate limited, it closes its connection. What it does not have is the
-    one-`RCPT TO` invariant, the attempt cap, or the candidate ordering, because
-    all three live one layer up.
-    """
-    plan = flattened(text_of(PLAN))
-
-    for forbidden in ("api → smtpprobeservice", "api → smtpconnector", "api → smtptransport"):
-        assert forbidden in plan, f"the plan does not forbid {forbidden}"
-
-
 # --- the documented rate-limit semantics match the implementation -----------
 
 
-@pytest.mark.parametrize("document", [ARCHITECTURE, THREAT_MODEL, STATUS_FILE])
+@pytest.mark.parametrize("document", [ARCHITECTURE, THREAT_MODEL])
 def test_the_documented_budget_is_per_recipient_domain(document: Path) -> None:
     """Three documents once described a three-part key the code never had.
 
@@ -478,23 +429,10 @@ def test_the_limiter_partitions_on_the_domain_alone() -> None:
     )
 
 
-def test_the_requirements_gap_is_recorded_rather_than_narrowed() -> None:
-    """Section 15 asks for per-account budgets and Phase 4 has none.
-
-    The requirement is right and stays; what was missing is the admission that
-    it is unmet. Closing it with the caller-supplied `account` string would be
-    per-account isolation in appearance only.
-    """
-    plan = flattened(text_of(PLAN))
-
-    assert "per-account abuse isolation required by requirements section 15 is not yet" in plan
-    assert "must not close this gap by partitioning on the caller-supplied" in plan
-
-
 # --- the documented worst case includes the rate-limit waits ----------------
 
 
-@pytest.mark.parametrize("document", [ORCHESTRATION_ADR, STATUS_FILE])
+@pytest.mark.parametrize("document", [ORCHESTRATION_ADR])
 def test_the_worst_case_latency_counts_the_rate_limit_waits(document: Path) -> None:
     """ "Three session budgets" left out a term and understated the bound."""
     flat = flattened(text_of(document))
@@ -520,7 +458,7 @@ def test_the_documented_worst_case_matches_the_configured_bounds() -> None:
 # --- the limiter's memory bound is stated at the size that holds ------------
 
 
-@pytest.mark.parametrize("document", [ARCHITECTURE, STATUS_FILE])
+@pytest.mark.parametrize("document", [ARCHITECTURE])
 def test_the_memory_bound_names_in_flight_callers(document: Path) -> None:
     """The bound is the cap *plus* in-flight callers, and they are not capped.
 

@@ -34,8 +34,8 @@ local_parts = [
 
 [metadata]
 name = "role_local_parts"
-source_url = "https://github.com/marc2825/EmailChecker (prompts/03-passive-classification.md)"
-license = "Same licence as this repository; no third-party data is included."
+source_url = "https://github.com/marc2825/EmailAddressChecker (repository-owned)"
+license = "Apache-2.0; repository-owned, no third-party data is included."
 version = "2026-08-07.1"
 retrieved_at = "2026-08-07"
 checksum = "not-applicable-authored-in-repository"
