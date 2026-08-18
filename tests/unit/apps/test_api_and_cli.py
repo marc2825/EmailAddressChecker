@@ -30,6 +30,7 @@ from tests.phase6_fixtures import (
 )
 
 from emailcheck.adapters.auth.api_keys import build_authenticator
+from emailcheck.adapters.storage.sqlite_account_state import SQLiteAccountStateStore
 from emailcheck.adapters.storage.sqlite_job_store import SQLiteJobStore
 from emailcheck.application.jobs import JobService
 from emailcheck.application.verdict_cache import VerdictCache
@@ -700,6 +701,10 @@ class DurableApi:
             operator=self.sink,
             correlation_key=CORRELATION_KEY,
             store=self.job_store,
+            # A durable store means a durable deletion authority: the two are
+            # composed together or not at all, which is what this fixture's
+            # "whole process restart" is meant to model.
+            account_state=self.account_state,
         )
         self.api = CheckApi(
             verification=self.service,
@@ -712,7 +717,14 @@ class DurableApi:
     def job_store(self) -> SQLiteJobStore:
         store = SQLiteJobStore(path=self.root / "jobs.sqlite3")
         store.initialize()
+        store.bind_authority(self.account_state.authority_id())
         return store
+
+    @property
+    def account_state(self) -> SQLiteAccountStateStore:
+        state = SQLiteAccountStateStore(path=self.root / "accounts.sqlite3")
+        state.initialize()
+        return state
 
     async def submit(self, credential: str = KEY, **kwargs: object) -> ApiResponse:
         return await self.api.handle(

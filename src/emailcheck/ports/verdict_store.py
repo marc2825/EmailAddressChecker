@@ -61,6 +61,14 @@ class StoredVerdict:
     #: Which aggregation produced this. A lookup that ignores it is a lookup
     #: that can answer with a verdict the current rules would not reach.
     aggregation_ruleset: str
+    #: Which passive dataset snapshot produced it, for exactly the same reason.
+    #:
+    #: The key held every input that could change the answer except the lists the
+    #: answer partly came from, so a verdict computed before an operator added a
+    #: domain to the role-account dataset was still served afterwards. The final
+    #: system audit found it. A bounded digest — never a path, never a version
+    #: string a reader could mistake for one.
+    passive_dataset_fingerprint: str
     #: Aware UTC, serialized with an explicit offset.
     created_at: datetime
     #: When this stops being answerable. ADR 0015 derives it from the shortest
@@ -89,8 +97,24 @@ class StoredVerdict:
 
 
 class VerdictStore(Protocol):
-    async def save(self, record: StoredVerdict) -> None:
-        """Persist one result."""
+    async def save(self, record: StoredVerdict, *, expected_generation: int) -> bool:
+        """Persist one result. `False` means the account fence refused it.
+
+        `expected_generation` is the account deletion generation the work that
+        produced this result was admitted under, and an implementation must
+        compare it with its own fence **inside the same transaction** as the
+        write. A cached verdict recreated after a deletion is the account's data
+        exactly as a job row is, and the focused review reproduced both through
+        a check that ended before the write began.
+        """
+        ...
+
+    async def fence(self, *, account_digest: str, generation: int) -> int:
+        """Raise this store's own deletion fence. Returns the value held.
+
+        Keyed by digest rather than by account, because that is the only form of
+        an account identifier this store is ever given.
+        """
         ...
 
     async def find(
@@ -100,6 +124,7 @@ class VerdictStore(Protocol):
         target_digest: str,
         sender_identity_digest: str,
         aggregation_ruleset: str,
+        passive_dataset_fingerprint: str,
         now: datetime,
     ) -> StoredVerdict | None:
         """The most recent live matching result, or `None`.
@@ -108,5 +133,30 @@ class VerdictStore(Protocol):
         afterwards, so an implementation cannot answer with a row the current
         rules did not produce, a row obtained through a different sender, or a
         row whose evidence has expired.
+        """
+        ...
+
+    async def delete_account(self, *, account_digest: str) -> int:
+        """Remove every record this account owns. Returns how many went.
+
+        `docs/privacy.md` section 7 promises account-requested deletion and
+        `docs/runbooks/privacy-deletion.md` describes an operator performing it.
+        No production operation did it: the runbook's steps were manual, and the
+        final system audit found the promise had no implementation.
+        `application/account_deletion.py` orchestrates the set; this is one
+        store's half.
+
+        **The account digest is the key, and it is the only key.** Every record
+        here carries one precisely so that "everything belonging to A" is a
+        `WHERE` clause rather than an inference. Deleting by target digest would
+        remove whatever other account had checked the same mailbox.
+
+        **Every fingerprint and every ruleset**, so a deletion is not scoped to
+        the snapshot this process happens to be running: an entry written under
+        an older passive dataset is still the account's data.
+
+        Unbounded, unlike `purge_expired`. Routine housekeeping must not hold a
+        write lock; an account deletion is a rare operator action whose whole
+        value is that it finishes.
         """
         ...

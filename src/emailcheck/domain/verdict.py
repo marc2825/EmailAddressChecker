@@ -28,6 +28,7 @@ from typing import Final
 
 from emailcheck.domain.evidence import Evidence
 from emailcheck.domain.reasons import ReasonCode
+from emailcheck.domain.risk import RiskFlag
 
 
 class Status(StrEnum):
@@ -43,14 +44,20 @@ class ConfidenceLevel(StrEnum):
     LOW = "low"
 
 
-class RiskFlag(StrEnum):
-    DISPOSABLE = "disposable"
-    ROLE_ACCOUNT = "role_account"
-    FREE_MAIL = "free_mail"
-    ACCEPT_ALL_SUSPECTED = "accept_all_suspected"
-    PROVIDER_OPAQUE = "provider_opaque"
-    INTERNATIONALIZED_LOCAL_PART = "internationalized_local_part"
-    DOMAIN_CONFIGURATION_ANOMALY = "domain_configuration_anomaly"
+#: Re-exported so every existing `from emailcheck.domain.verdict import RiskFlag`
+#: keeps working. The definition moved to `domain/risk.py` because
+#: `domain/evidence.py` needs it too and this module already imports `Evidence`,
+#: so the flag had to sit below both. `__all__` names it explicitly rather than
+#: relying on the import being visible, which is what a type checker asks for
+#: and what stops the re-export being deleted as unused.
+__all__ = [
+    "HARD_INVALID_REASONS",
+    "Confidence",
+    "ConfidenceLevel",
+    "RiskFlag",
+    "Status",
+    "Verdict",
+]
 
 
 #: The only reasons that may be the primary reason of an `invalid` verdict.

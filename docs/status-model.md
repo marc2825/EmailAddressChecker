@@ -37,6 +37,16 @@ Examples:
 - no MX and no implicit A/AAAA route;
 - RCPT-stage enhanced code explicitly indicating recipient does not exist.
 
+### A note on `domain_configuration_anomaly`
+
+It reaches a verdict as a **producer-stated risk flag** on the route
+observation (`Evidence.risk_flags`), not as `ReasonCode.MX_CONFIGURATION_ANOMALY`
+— which is a tier 4 reason and would drop the status to `unknown`. That is
+correct for the route outcome with nowhere to connect, and wrong for a usable
+route that also publishes a Null MX. So the flag is raised and the status
+precedence is untouched, which is what section 1's separation of risk from
+deliverability requires.
+
 ### A note on `no_message_data_sent`
 
 It is a **safety assertion**, not a status, a confidence, or a reason, and

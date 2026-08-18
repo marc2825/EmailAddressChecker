@@ -176,7 +176,7 @@ async def test_the_safety_field_round_trips_through_a_fresh_store(
     """
     store = SQLiteJobStore(path=tmp_path / "jobs.db")
     store.initialize()
-    await store.save(stored_for(value))
+    await store.save(stored_for(value), expected_generation=0)
 
     reopened = SQLiteJobStore(path=tmp_path / "jobs.db")
     reopened.initialize()

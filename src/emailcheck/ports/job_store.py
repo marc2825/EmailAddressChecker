@@ -176,7 +176,7 @@ class StoredJob:
 
 
 class ClaimStatus(StrEnum):
-    """How an atomic idempotency claim ended. Three answers and no fourth."""
+    """How an atomic idempotency claim ended. Four answers and no fifth."""
 
     #: This caller won. The proposed job now exists, and it owns the key.
     NEW_CLAIM = "new_claim"
@@ -187,6 +187,13 @@ class ClaimStatus(StrEnum):
     #: territory: the proposed job was not written, and the existing binding is
     #: untouched.
     CONFLICT_DIFFERENT_TARGET = "conflict_different_target"
+    #: This account's data is being erased and the store refused to create any.
+    #: Not a conflict and not a win: nothing was written, nothing holds the key,
+    #: and the caller's admitted generation is no longer the current one. The
+    #: focused review reproduced a stale claim recreating a deleted binding, so
+    #: this answer is decided inside the claim's own transaction rather than by
+    #: a check the caller made earlier.
+    ACCOUNT_FENCED = "account_fenced"
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,18 +201,27 @@ class ClaimResult:
     """What one `claim_idempotency` decided, and what already held the key."""
 
     status: ClaimStatus
-    #: The job that already owns the key, for both non-winning answers, and
-    #: `None` for a win. Present so a caller can reconnect to the existing job
-    #: without a second, non-atomic lookup that could observe a different row.
+    #: The job that already owns the key, for the two answers where one does,
+    #: and `None` for a win and for a fenced account. Present so a caller can
+    #: reconnect to the existing job without a second, non-atomic lookup that
+    #: could observe a different row.
     existing: StoredJob | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, ClaimStatus):
             raise JobError("a claim result must carry a published status")
-        won = self.status is ClaimStatus.NEW_CLAIM
-        if won and self.existing is not None:
+        if self.status is ClaimStatus.NEW_CLAIM and self.existing is not None:
             raise JobError("a winning claim names no existing job")
-        if not won and self.existing is None:
+        if self.status is ClaimStatus.ACCOUNT_FENCED and self.existing is not None:
+            # A fenced claim wrote nothing and read nothing: the account's rows
+            # are being erased, and answering with one of them would hand back
+            # data the deletion is in the middle of removing.
+            raise JobError("a fenced claim names no existing job")
+        holds_key = self.status in {
+            ClaimStatus.EXISTING_SAME_TARGET,
+            ClaimStatus.CONFLICT_DIFFERENT_TARGET,
+        }
+        if holds_key and self.existing is None:
             raise JobError("a claim that did not win must name the job that holds the key")
 
 
@@ -218,7 +234,9 @@ class JobStore(Protocol):
     the distinction the ownership rule exists to withhold.
     """
 
-    async def claim_idempotency(self, record: StoredJob) -> ClaimResult:
+    async def claim_idempotency(
+        self, record: StoredJob, *, expected_generation: int
+    ) -> ClaimResult:
         """Take `(owner, idempotency_digest)` for `record`, atomically.
 
         **The single decision point for whether a submission is new.** It exists
@@ -239,22 +257,47 @@ class JobStore(Protocol):
         or one whose address did not parse, has no identity to claim and goes
         through `save`.
 
-        Returns rather than raises for all three answers, including the
-        conflict: which of the three happened is the caller's decision to
+        `expected_generation` is the account deletion generation this work was
+        admitted under, and the implementation must compare it against its own
+        fence **inside the same transaction** as the insert, answering
+        `ACCOUNT_FENCED` on a mismatch.
+
+        Returns rather than raises for all four answers, including the
+        conflict: which of them happened is the caller's decision to
         translate — `application/jobs.py` owns the mapping onto
         `IdempotencyConflict` and onto the `409` a caller sees, and a store that
         raised would be deciding an API response.
         """
         ...
 
-    async def save(self, record: StoredJob) -> None:
-        """Create or update one job.
+    async def fence(self, *, account: str, generation: int) -> int:
+        """Raise this store's own deletion fence for `account`. Returns the value held.
+
+        Called by `application/account_deletion.py` **before** it deletes this
+        store's rows, so that no write admitted under an older generation can
+        land between the two steps. Monotonic: a lower generation leaves the
+        held one alone, because a fence that can fall re-authorizes work whose
+        data is already gone.
+        """
+        ...
+
+    async def save(self, record: StoredJob, *, expected_generation: int) -> bool:
+        """Create or update one job. `False` means the account fence refused it.
 
         **Identity is immutable.** For an existing `job_id`, `owner`,
         `created_at`, `idempotency_digest`, and `target_digest` must match the
         inserted row exactly. Only operational state, result, retry/touch,
         admission, and `updated_at` may change. An implementation fails closed
         on an identity mismatch and never deletes or rebinds the winner.
+
+        **The fence is part of the write, not a question asked before it.**
+        `expected_generation` must be compared with this store's own fence
+        inside the same transaction as the insert. The first Remediation C
+        design compared a generation held in another database and then wrote
+        this one; the focused review paused a replica between those two steps
+        and recreated a deleted account's job row after the operator had been
+        told the deletion was complete. A `False` return is that refusal, and
+        is not an error: there is nothing to retry.
         """
         ...
 
@@ -293,6 +336,29 @@ class JobStore(Protocol):
 
         Never executor-admission compensation: once a claim is committed,
         another replica may have observed it and the identity must stay stable.
+        """
+        ...
+
+    async def delete_account(self, *, owner: str) -> int:
+        """Remove **everything** this account owns. Returns how many records went.
+
+        `docs/privacy.md` section 7 promises account-requested deletion and
+        `docs/runbooks/privacy-deletion.md` describes an operator performing it.
+        No production operation did it: the runbook's steps were manual, and the
+        final system audit found the promise had no implementation. This is that
+        implementation for one store; `application/account_deletion.py`
+        orchestrates the set.
+
+        **The owner is the key, and it is the only key.** Never a target, never
+        a digest of an address, never a scan of retained text: this project
+        stores an account identifier alongside every record precisely so that
+        "everything belonging to A" is a `WHERE` clause rather than an
+        inference. Deleting by anything else could remove another account's row
+        that happens to name the same mailbox.
+
+        Unbounded on purpose, unlike the retention sweep. A retention sweep is
+        routine housekeeping that must not hold a write lock; an account
+        deletion is a rare operator action whose whole value is that it finishes.
         """
         ...
 

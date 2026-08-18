@@ -39,12 +39,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
+from emailcheck.adapters.storage.account_fence import (
+    FENCE_SCHEMA,
+    bind_authority,
+    fenced_generation,
+    raise_fence,
+)
 from emailcheck.domain.job import JobAdmission, JobFailure, JobState
 from emailcheck.domain.recipient_touch import RecipientTouch
 from emailcheck.ports.job_store import ClaimResult, ClaimStatus, StoredJob
 
 #: Bumped when the shape changes. A file written by another shape is refused at
 #: start rather than migrated.
+#:
+#: Version 5 adds the account fence and the authority binding. A version 4 file
+#: predates both: it carries no record of which deletion authority it belongs
+#: to, and adopting it under whichever one happens to be configured is the
+#: mistake `adapters/storage/account_fence.py` refuses to make. Refused loudly,
+#: as every earlier version of this file is.
 #:
 #: Version 4 is Remediation B: it persists the completed result's
 #: `no_message_data_sent`. A version 3 file has no column for it, and the value
@@ -61,9 +73,9 @@ from emailcheck.ports.job_store import ClaimResult, ClaimStatus, StoredJob
 #: error from the driver at some unrelated moment; refusing the file by version
 #: fails at start, with a sentence, which is the convention
 #: `adapters/storage/sqlite_store.py` set.
-SCHEMA_VERSION: Final = 4
+SCHEMA_VERSION: Final = 5
 
-_SCHEMA: Final = """
+_TABLES: Final = """
 CREATE TABLE IF NOT EXISTS job_schema_version (version INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -93,6 +105,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency
  WHERE idempotency_digest IS NOT NULL;
 CREATE INDEX IF NOT EXISTS jobs_terminal ON jobs (state, updated_at);
 """
+
+#: The store's own tables plus the fence and authority tables every
+#: account-owned store carries.
+_SCHEMA: Final = _TABLES + FENCE_SCHEMA
 
 _VERSION: Final = "SELECT version FROM job_schema_version"
 _VERSION_TABLE: Final = (
@@ -184,6 +200,11 @@ _SELECT_NONTERMINAL: Final = (
 
 _DELETE: Final = "DELETE FROM jobs WHERE job_id = ?"
 
+#: Every job this account owns, whatever its state, whatever it holds. The
+#: `owner` column is the deletion key and the only one: a job's target is a
+#: digest, and two accounts checking one address share it.
+_DELETE_ACCOUNT: Final = "DELETE FROM jobs WHERE owner = ?"
+
 #: Bounded, on the `_PURGE` precedent, and **terminal only**: removing a job
 #: that is still running is work that stops existing while something waits for
 #: it, which is the rule `JobService.purge_finished` already keeps in memory.
@@ -257,11 +278,22 @@ class SQLiteJobStore:
         row = connection.execute(_VERSION).fetchone()
         return None if row is None else int(row[0])
 
-    async def claim_idempotency(self, record: StoredJob) -> ClaimResult:
-        return await asyncio.to_thread(self._claim_idempotency, record)
+    def bind_authority(self, authority_id: str) -> str:
+        """Tie this file to one deletion authority, or refuse to open under another."""
+        with self._connect() as connection:
+            return bind_authority(connection, authority_id)
 
-    async def save(self, record: StoredJob) -> None:
-        await asyncio.to_thread(self._save, record)
+    async def fence(self, *, account: str, generation: int) -> int:
+        """Raise this store's fence before its rows are deleted."""
+        return await asyncio.to_thread(self._fence, account, generation)
+
+    async def claim_idempotency(
+        self, record: StoredJob, *, expected_generation: int
+    ) -> ClaimResult:
+        return await asyncio.to_thread(self._claim_idempotency, record, expected_generation)
+
+    async def save(self, record: StoredJob, *, expected_generation: int) -> bool:
+        return await asyncio.to_thread(self._save, record, expected_generation)
 
     async def load(self, job_id: str) -> StoredJob | None:
         return await asyncio.to_thread(self._load, job_id)
@@ -277,6 +309,9 @@ class SQLiteJobStore:
     async def delete(self, job_id: str) -> None:
         await asyncio.to_thread(self._delete, job_id)
 
+    async def delete_account(self, *, owner: str) -> int:
+        return await asyncio.to_thread(self._delete_account, owner)
+
     async def purge_terminal(self, *, before: datetime, limit: int) -> int:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise ValueError("a purge batch must be a positive whole number")
@@ -290,7 +325,12 @@ class SQLiteJobStore:
         with closing(connection), connection:
             yield connection
 
-    def _claim_idempotency(self, record: StoredJob) -> ClaimResult:
+    def _fence(self, account: str, generation: int) -> int:
+        with self._connect() as connection:
+            connection.execute(_BEGIN_IMMEDIATE)
+            return raise_fence(connection, account, generation)
+
+    def _claim_idempotency(self, record: StoredJob, expected_generation: int) -> ClaimResult:
         """Decide and write in one transaction, or read the winner in the same one.
 
         ```text
@@ -317,6 +357,11 @@ class SQLiteJobStore:
             raise ValueError("a claim needs both an idempotency digest and a target digest")
         with self._connect() as connection:
             connection.execute(_BEGIN_IMMEDIATE)
+            # Inside the claim's own write transaction, before the insert it
+            # guards. A claim creates both a job row and an idempotency binding,
+            # so an unfenced one recreates two pieces of a deleted account.
+            if fenced_generation(connection, record.owner) != expected_generation:
+                return ClaimResult(status=ClaimStatus.ACCOUNT_FENCED)
             cursor = connection.execute(_CLAIM_INSERT, _row_for(record))
             if cursor.rowcount == 1:
                 return ClaimResult(status=ClaimStatus.NEW_CLAIM)
@@ -337,9 +382,20 @@ class SQLiteJobStore:
         )
         return ClaimResult(status=status, existing=existing)
 
-    def _save(self, record: StoredJob) -> None:
+    def _save(self, record: StoredJob, expected_generation: int) -> bool:
+        """The fence and the write, in one transaction. `False` means fenced.
+
+        `BEGIN IMMEDIATE` first, so the fence read happens under this
+        connection's write lock and an account deletion raising the fence in
+        this same database must either come before it or wait for it. A `False`
+        return is a refusal rather than an error: the account's data is being
+        erased, and there is nothing for the caller to retry.
+        """
         try:
             with self._connect() as connection:
+                connection.execute(_BEGIN_IMMEDIATE)
+                if fenced_generation(connection, record.owner) != expected_generation:
+                    return False
                 cursor = connection.execute(_INSERT, _row_for(record))
                 if cursor.rowcount != 1:
                     raise JobStoreConflictError(
@@ -353,6 +409,7 @@ class SQLiteJobStore:
             raise JobStoreConflictError(
                 "this idempotency binding belongs to a different job"
             ) from exc
+        return True
 
     def _load(self, job_id: str) -> StoredJob | None:
         with self._connect() as connection:
@@ -372,6 +429,10 @@ class SQLiteJobStore:
     def _delete(self, job_id: str) -> None:
         with self._connect() as connection:
             connection.execute(_DELETE, (job_id,))
+
+    def _delete_account(self, owner: str) -> int:
+        with self._connect() as connection:
+            return int(connection.execute(_DELETE_ACCOUNT, (owner,)).rowcount)
 
     def _purge_terminal(self, before: datetime, limit: int) -> int:
         with self._connect() as connection:

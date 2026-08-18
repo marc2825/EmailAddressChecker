@@ -16,6 +16,7 @@ from tests.phase6_fixtures import (
     FakeClock,
     FakeRandomSource,
     FakeResolver,
+    InMemoryAccountStateStore,
     InMemoryVerdictStore,
     RecordingExecutor,
     ScriptedSMTPVerification,
@@ -214,6 +215,7 @@ def build_jobs(
     resolver: FakeResolver | None = None,
     routes: dict[str, str] | None = None,
     job_store: object | None = None,
+    account_state: object | None = None,
     verdicts: object | None = None,
     executor: RecordingExecutor | None = None,
     random_prefix: str = "job",
@@ -242,6 +244,15 @@ def build_jobs(
         operator=sink,
         correlation_key=CORRELATION_KEY,
         store=job_store,  # type: ignore[arg-type]
+        # A durable store needs the deletion authority: `JobService` refuses to
+        # be built without one, because the focused review measured what a
+        # persistent service with no authority does to a deleted account. Tests
+        # that do not care which authority get a fresh in-memory one.
+        account_state=(  # type: ignore[arg-type]
+            account_state
+            if account_state is not None
+            else (InMemoryAccountStateStore() if job_store is not None else None)
+        ),
         cache=VerdictCache(
             store=verdicts if verdicts is not None else InMemoryVerdictStore(),  # type: ignore[arg-type]
             clock=FakeClock(),

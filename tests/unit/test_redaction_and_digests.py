@@ -133,7 +133,20 @@ def test_the_store_version_moved_with_the_addressing() -> None:
     """Adding the canonicalization version changed every digest once, so every
     row in a version-2 file addresses something nothing will find again. A store
     of unreachable rows looks like a cache that never hits, which is a worse
-    failure than refusing to open. ADR 0016."""
+    failure than refusing to open. ADR 0016.
+
+    Version 4 is Remediation C: the passive dataset fingerprint joined the key.
+    A version-3 row carries no fingerprint, and the one value a migration could
+    assume for it — "whatever this process has configured now" — is exactly the
+    assumption the column exists to prevent, so the file is refused instead.
+
+    Version 5 is the C11 fencing follow-up: the account fence and the authority
+    binding are in this file now, because a fence held in another database is
+    one a second transaction can overtake. A version-4 file records neither, and
+    adopting it under whichever deletion authority happens to be configured is
+    the configuration mistake the binding exists to catch — so it is refused
+    rather than migrated.
+    """
     from emailcheck.adapters.storage.sqlite_store import SCHEMA_VERSION
 
-    assert SCHEMA_VERSION == 3
+    assert SCHEMA_VERSION == 5

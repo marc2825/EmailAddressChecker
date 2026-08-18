@@ -107,6 +107,7 @@ from emailcheck.domain.job import (
 from emailcheck.domain.principal import Principal
 from emailcheck.domain.recipient_touch import RecipientTouch
 from emailcheck.domain.source import SourceIdentity
+from emailcheck.ports.account_state import INITIAL_GENERATION, AccountStateStore
 from emailcheck.ports.clock import Clock
 from emailcheck.ports.job_executor import ExecutorFull, JobExecutor
 from emailcheck.ports.job_store import ClaimStatus, JobStore, StoredJob
@@ -413,7 +414,60 @@ class JobService:
     #: Jobs whose executor handoff this process owns. Rehydrated nonterminal jobs
     #: are observers and must re-read the store before being returned again.
     _owned: set[str] = field(default_factory=set, repr=False)
+    #: The durable account-deletion barrier, when a deployment has one.
+    #:
+    #: **The cross-replica authority.** `_deleted_accounts` below is this
+    #: process's own memory and a second replica cannot see it, which is exactly
+    #: how a deleted account was recreated after an operator was told the
+    #: deletion had finished. Every persistent write for an account is checked
+    #: against the generation the work was admitted under, and this store is
+    #: what every replica reads.
+    #:
+    #: `None` is a deployment with no such store — a single-process development
+    #: stack — and every call site checks, so an absent barrier is visibly
+    #: absent rather than silently permissive.
+    account_state: AccountStateStore | None = None
+    #: `job id -> the account generation this job was admitted under`.
+    _generations: dict[str, int] = field(default_factory=dict, repr=False)
+    #: Accounts whose data has been deleted in this process.
+    #:
+    #: **A tombstone, and the smallest one that is actually complete.** A
+    #: verification already running when an account is deleted finishes some
+    #: milliseconds later and writes its result — recreating, in a store the
+    #: operator has just emptied, exactly the record they asked to be removed.
+    #: Cancellation alone cannot close that: a worker past its last cancellation
+    #: point still returns. So the write is refused instead.
+    #:
+    #: **Defence in depth, and not the authority.** It closes the same-process
+    #: case one round trip earlier than the durable barrier would, which is
+    #: worth having; it closes nothing at all across replicas, because a second
+    #: `JobService` has its own empty set. `account_state` above is what makes
+    #: the guarantee true, and the focused review measured what happens when a
+    #: process-local set is asked to carry it alone.
+    _deleted_accounts: set[str] = field(default_factory=set, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def __post_init__(self) -> None:
+        """A persistent service without the deletion authority does not exist.
+
+        **Fail closed at composition, not during a deletion race.** The focused
+        review started a `JobService` holding a real `JobStore` and no
+        `AccountStateStore`, and it wrote a deleted account's rows straight back
+        — every write permitted, because there was nothing to ask. A deployment
+        that persists account-owned rows participates in the deletion contract
+        whether or not it was configured to, so the missing collaborator is a
+        construction error with a sentence rather than a silent permission.
+
+        A service with no store persists nothing and needs no authority: the
+        local-passive profile builds no `JobService` at all, and the in-memory
+        registry used by tests and by synchronous callers holds nothing a
+        deletion could fail to erase.
+        """
+        if self.store is not None and self.account_state is None:
+            raise JobError(
+                "a job service with a durable store needs the account state that "
+                "makes account deletion enforceable"
+            )
 
     # --- submission ---------------------------------------------------------
 
@@ -486,6 +540,12 @@ class JobService:
                 )
 
         job = self._new_job(account=account, state=JobState.PENDING, key=idempotency_key)
+        # **Captured before the claim, carried until the job settles.** This is
+        # the value every later write for this job is checked against, so it has
+        # to be read once, at admission, rather than re-read at write time —
+        # re-reading would always agree with itself and would authorize a worker
+        # whose account was deleted while it ran.
+        self._generations[job.id.value] = await self._current_generation(account)
         # **The claim is durable before it is local**, on the same write-ahead
         # argument Phase 10's batch row uses and for one further reason
         # Remediation A added: a process that stops between enqueueing and
@@ -663,7 +723,7 @@ class JobService:
             # the answer exists and refusing to return it because a disk is
             # unavailable would turn a storage fault into a lost result.
             await self._persist_best_effort(job_id)
-            await self._cache(outcome, account=principal.rate_limit_account)
+            await self._cache(outcome, account=principal.rate_limit_account, job_id=job_id)
             return
 
         # A retry is different: it is a promise that something will run later, so
@@ -692,16 +752,28 @@ class JobService:
                 detail="retry scheduling",
             )
 
-    async def _cache(self, outcome: VerificationOutcome, *, account: str) -> None:
+    async def _cache(self, outcome: VerificationOutcome, *, account: str, job_id: JobId) -> None:
         """Store a completed active verdict, when ADR 0015 prices it."""
         if self.cache is None or outcome.target is None:
             return
-        await self.cache.save(
+        if not await self._may_write(account, job_id.value):
+            # The authority check, which is what refuses a write when the
+            # generation has already moved or cannot be read at all. It is not
+            # the fence: the fence is inside the store's own transaction below.
+            return
+        written = await self.cache.save(
             outcome.target,
             account=account,
             verdict=outcome.verdict,
             route_ttl=outcome.route_ttl_seconds,
+            expected_generation=await self._admitted_generation(account, job_id.value),
         )
+        if not written:
+            # Either the verdict was not cacheable or the store's fence refused
+            # it. Only the second is worth an operator event, and the cache
+            # cannot tell them apart from here, so this stays silent: the
+            # refusal already did its job, which was to write nothing.
+            return
 
     # --- registry -----------------------------------------------------------
 
@@ -886,7 +958,10 @@ class JobService:
                             target_digest=held_identity[0],
                             idempotency=held_identity[1],
                             admission=JobAdmission.ADMISSION_FAILED,
-                        )
+                        ),
+                        expected_generation=await self._admitted_generation(
+                            job.owner, job.id.value
+                        ),
                     )
                 except Exception:
                     self.operator.record(
@@ -916,8 +991,14 @@ class JobService:
                 target_digest=target_digest,
                 idempotency=digest,
                 admission=self._admissions[job.id.value],
-            )
+            ),
+            expected_generation=await self._admitted_generation(job.owner, job.id.value),
         )
+        if result.status is ClaimStatus.ACCOUNT_FENCED:
+            # The account was erased between this submission's admission and its
+            # claim. Nothing was written and nothing holds the key.
+            self._refuse_write(detail="claim after account deletion")
+            raise JobError("this account is not accepting new work")
         if result.status is ClaimStatus.NEW_CLAIM:
             self._persisted[job.id.value] = (target_digest, digest)
             return None
@@ -1061,6 +1142,8 @@ class JobService:
         """Write one job's current state, when this deployment has a store."""
         if self.store is None:
             return
+        if not await self._may_write(job.owner, job.id.value):
+            return
         held = self._persisted.get(job.id.value)
         digest = target_digest if target_digest is not None else (held or (None, None))[0]
         idempotency = (held or (None, None))[1]
@@ -1069,17 +1152,80 @@ class JobService:
         admission = self._admissions.get(job.id.value)
         if admission is None:
             raise JobError("a persisted job must carry an executor-admission fact")
-        await self.store.save(
+        written = await self.store.save(
             _stored(
                 job,
                 target_digest=digest,
                 idempotency=idempotency,
                 admission=admission,
-            )
+            ),
+            expected_generation=await self._admitted_generation(job.owner, job.id.value),
         )
+        if not written:
+            # The store's fence refused it inside its own write transaction.
+            # This is the case no earlier check can cover: the account was
+            # deleted after `_may_write` answered and before this write reached
+            # the disk.
+            self._refuse_write(detail="write after account deletion")
+            return
         # Only a successful write authorizes later state writes to reuse these
         # immutable identity values.
         self._persisted[job.id.value] = (digest, idempotency)
+
+    async def _admitted_generation(self, account: str, job_id: str | None) -> int:
+        """The generation a write must present to this account's store fences.
+
+        The value recorded when this process admitted the job, so a worker
+        carries the generation it started under all the way to the disk. Work
+        this process did not admit — a rehydrated observer, a recovery scan —
+        has none recorded and presents the account's current generation, which
+        is the conservative reading: it may write only while nothing has been
+        deleted underneath it.
+        """
+        recorded = self._generations.get(job_id) if job_id is not None else None
+        if recorded is not None:
+            return recorded
+        return await self._current_generation(account)
+
+    async def _current_generation(self, account: str) -> int:
+        """This account's generation now, or the initial one with no store."""
+        if self.account_state is None:
+            return INITIAL_GENERATION
+        return await self.account_state.generation(account)
+
+    async def _may_write(self, account: str, job_id: str | None) -> bool:
+        """Whether work admitted for `job_id` may still persist this account's data.
+
+        Two checks, and only the second one crosses a process boundary:
+
+        - the local tombstone, which answers immediately for work this process
+          knows was deleted;
+        - the durable generation, which is the authority. The job's admitted
+          generation is compared with the account's current one, so a worker
+          that started before a deletion is refused even though its own process
+          never saw the deletion happen.
+
+        A store that cannot answer refuses the write. There is no safe default
+        for "I could not tell whether this account still exists": persisting
+        anyway is how a deletion an operator has already reported comes undone.
+        """
+        if account in self._deleted_accounts:
+            self._refuse_write(detail="write after account deletion")
+            return False
+        if self.account_state is None:
+            return True
+        admitted = await self._admitted_generation(account, job_id)
+        try:
+            permitted = await self.account_state.permits(account, admitted)
+        except Exception:
+            self._refuse_write(detail="account state unavailable")
+            return False
+        if not permitted:
+            self._refuse_write(detail="write after account deletion")
+        return permitted
+
+    def _refuse_write(self, *, detail: str) -> None:
+        self.operator.record(OperatorEvent(kind=OperatorEventKind.INTERNAL_ERROR, detail=detail))
 
     async def _persist_id(self, job_id: JobId) -> None:
         """Write whatever the registry now holds for `job_id`."""
@@ -1224,7 +1370,12 @@ class JobService:
                     failure=JobFailure.INTERRUPTED,
                     admission=JobAdmission.INTERRUPTED,
                     updated_at=self._now(),
-                )
+                ),
+                # Recovery never admitted this job, so it carries the account's
+                # generation as it stands now. A row whose account was deleted
+                # while this scan ran is refused rather than marked interrupted,
+                # which is the same answer as "there is nothing to recover".
+                expected_generation=await self._current_generation(stored.owner),
             )
             interrupted += 1
             if not stored.recipient_touch.replay_is_safe:
@@ -1241,6 +1392,38 @@ class JobService:
             unsafe_to_replay=unsafe,
             skipped_live=live,
         )
+
+    def forget_account(self, account: str) -> int:
+        """Drop this account's registry state and refuse its later writes.
+
+        Returns how many in-process records went — jobs and idempotency
+        bindings — so a deletion report can say what the durable counts do not.
+
+        **Three things happen, and the order is the point.** The account is
+        tombstoned first, so a worker that finishes during the next two steps is
+        already refused. Its live jobs are then cancelled, which stops what can
+        still be stopped. Its registry entries and bindings go last, so nothing
+        is republished by `get` or `fetch` after the durable rows are removed.
+
+        Cancellation here is state only: `executor.cancel` is async and this is
+        not, and a job whose worker keeps running is covered by the tombstone
+        rather than by the cancellation. That is the conservative half — a
+        cancelled job that ran to completion writes nothing, which is the
+        property the deletion needs.
+        """
+        self._deleted_accounts.add(account)
+        removed = 0
+        for job_id, job in list(self._jobs.items()):
+            if job.owner != account:
+                continue
+            del self._jobs[job_id]
+            self._forget_bindings(job_id)
+            self._forget_job_metadata(job_id)
+            removed += 1
+        for binding_key in [key for key in self._by_key if key[0] == account]:
+            del self._by_key[binding_key]
+            removed += 1
+        return removed
 
     def purge_finished(self, *, before: datetime, limit: int) -> int:
         """Forget terminal jobs older than `before`. Returns how many went.
@@ -1280,6 +1463,7 @@ class JobService:
         """Drop process-local persistence and handoff metadata for one job."""
         self._persisted.pop(job_id, None)
         self._admissions.pop(job_id, None)
+        self._generations.pop(job_id, None)
         self._owned.discard(job_id)
 
     def _evict(self) -> None:

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from emailcheck.application.public_job import PublicJob
+from emailcheck.ports.public_contract import PublicJob
 
 
 class RemoteCheckError(Exception):

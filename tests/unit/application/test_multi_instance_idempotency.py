@@ -269,10 +269,12 @@ async def test_the_database_refuses_a_duplicate_binding_the_application_never_se
     store = SQLiteJobStore(path=tmp_path / "jobs.db")
     store.initialize()
     winner = _record("winner" + "x" * 18)
-    assert (await store.claim_idempotency(winner)).status is ClaimStatus.NEW_CLAIM
+    assert (
+        await store.claim_idempotency(winner, expected_generation=0)
+    ).status is ClaimStatus.NEW_CLAIM
 
     with pytest.raises(JobStoreConflictError):
-        await store.save(_record("usurper" + "x" * 17))
+        await store.save(_record("usurper" + "x" * 17), expected_generation=0)
 
     survivor = await store.load(winner.job_id)
     assert survivor is not None, "the winner's row was replaced"
@@ -295,10 +297,10 @@ async def test_an_ordinary_save_cannot_rewrite_each_identity_field(
     store = SQLiteJobStore(path=tmp_path / "jobs.db")
     store.initialize()
     original = _record("immutable" + "x" * 15)
-    await store.save(original)
+    await store.save(original, expected_generation=0)
 
     with pytest.raises(JobStoreConflictError):
-        await store.save(replace(original, **{field_name: changed}))
+        await store.save(replace(original, **{field_name: changed}), expected_generation=0)
 
     assert await store.load(original.job_id) == original
 
@@ -321,10 +323,10 @@ async def test_an_ordinary_save_cannot_add_or_clear_an_idempotency_identity(
         idempotency_digest=before,
         target_digest=None if before is None else "target-digest",
     )
-    await store.save(original)
+    await store.save(original, expected_generation=0)
 
     with pytest.raises(JobStoreConflictError):
-        await store.save(replace(original, idempotency_digest=after))
+        await store.save(replace(original, idempotency_digest=after), expected_generation=0)
 
     assert await store.load(original.job_id) == original
 
@@ -334,7 +336,7 @@ async def test_an_ordinary_save_still_updates_every_mutable_job_field(tmp_path: 
     store = SQLiteJobStore(path=tmp_path / "jobs.db")
     store.initialize()
     original = _record("mutable" + "x" * 17)
-    await store.save(original)
+    await store.save(original, expected_generation=0)
     updated = replace(
         original,
         state=JobState.RUNNING,
@@ -344,7 +346,7 @@ async def test_an_ordinary_save_still_updates_every_mutable_job_field(tmp_path: 
         recipient_touch=RecipientTouch.MAYBE_TOUCHED,
     )
 
-    await store.save(updated)
+    await store.save(updated, expected_generation=0)
 
     assert await store.load(original.job_id) == updated
 
@@ -357,10 +359,14 @@ async def test_a_claim_reports_the_three_answers_and_writes_only_on_the_first(
     store = SQLiteJobStore(path=tmp_path / "jobs.db")
     store.initialize()
 
-    won = await store.claim_idempotency(_record("first" + "x" * 19))
-    same = await store.claim_idempotency(_record("second" + "x" * 18))
-    other = await store.claim_idempotency(_record("third" + "x" * 19, target="other-target"))
-    elsewhere = await store.claim_idempotency(_record("fourth" + "x" * 18, owner="acct-9"))
+    won = await store.claim_idempotency(_record("first" + "x" * 19), expected_generation=0)
+    same = await store.claim_idempotency(_record("second" + "x" * 18), expected_generation=0)
+    other = await store.claim_idempotency(
+        _record("third" + "x" * 19, target="other-target"), expected_generation=0
+    )
+    elsewhere = await store.claim_idempotency(
+        _record("fourth" + "x" * 18, owner="acct-9"), expected_generation=0
+    )
 
     assert won.status is ClaimStatus.NEW_CLAIM and won.existing is None
     assert same.status is ClaimStatus.EXISTING_SAME_TARGET

@@ -1126,7 +1126,11 @@ def test_no_mapping_produces_a_status_or_a_risk_flag(lines: tuple[str, ...]) -> 
     assert evidence.strength in set(EvidenceStrength)
     assert not hasattr(evidence, "status")
     assert not hasattr(evidence, "confidence")
-    assert not hasattr(evidence, "risk_flags")
+    # `Evidence` carries a `risk_flags` field since Remediation C, so the rule
+    # is that this mapper **states none** rather than that the field cannot
+    # exist: a flag derived from what a server said about one recipient would be
+    # a property of the reply, not of the address.
+    assert evidence.risk_flags == frozenset()
 
 
 def test_the_ruleset_version_is_recorded_on_every_piece_of_evidence() -> None:

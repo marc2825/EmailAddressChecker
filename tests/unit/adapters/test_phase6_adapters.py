@@ -178,6 +178,10 @@ def test_a_short_correlation_key_is_refused() -> None:
 
 WRITTEN_AT = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 SENDER = "probe.example.test|verify@probe.example.test"
+#: The passive dataset snapshot a stored verdict was computed under. Part of the
+#: key since Remediation C: a verdict produced from one snapshot is not evidence
+#: under another.
+DATASET_FINGERPRINT = "a" * 32
 
 
 def stored(
@@ -187,6 +191,7 @@ def stored(
     account: str = "acct-1",
     sender: str = SENDER,
     lifetime_seconds: int = 3600,
+    fingerprint: str = DATASET_FINGERPRINT,
 ) -> StoredVerdict:
     return StoredVerdict(
         record_id=record_id,
@@ -200,6 +205,7 @@ def stored(
         risk_flags=(),
         checks=(("dns", "mx_available"), ("smtp", "rcpt_accepted")),
         aggregation_ruleset=ruleset,
+        passive_dataset_fingerprint=fingerprint,
         created_at=WRITTEN_AT,
         expires_at=WRITTEN_AT + timedelta(seconds=lifetime_seconds),
     )
@@ -212,6 +218,7 @@ def lookup(record: StoredVerdict, **overrides: object) -> dict[str, object]:
         "target_digest": record.target_digest,
         "sender_identity_digest": record.sender_identity_digest,
         "aggregation_ruleset": record.aggregation_ruleset,
+        "passive_dataset_fingerprint": record.passive_dataset_fingerprint,
         "now": WRITTEN_AT,
     }
     key.update(overrides)
@@ -225,7 +232,7 @@ async def test_a_saved_verdict_is_found_under_the_ruleset_that_produced_it(
     store = SQLiteVerdictStore(path=tmp_path / "verdicts.sqlite3")
     store.initialize()
     record = stored()
-    await store.save(record)
+    await store.save(record, expected_generation=0)
 
     found = await store.find(**lookup(record))  # type: ignore[arg-type]
     assert found is not None
@@ -247,7 +254,7 @@ async def test_a_verdict_from_a_different_ruleset_is_invisible(tmp_path: Path) -
     store = SQLiteVerdictStore(path=tmp_path / "verdicts.sqlite3")
     store.initialize()
     record = stored(ruleset="aggregation-1999-01-01")
-    await store.save(record)
+    await store.save(record, expected_generation=0)
 
     assert (
         await store.find(**lookup(record, aggregation_ruleset="aggregation-2026-08-09"))  # type: ignore[arg-type]
@@ -261,7 +268,7 @@ async def test_one_account_never_sees_another_accounts_result(tmp_path: Path) ->
     store = SQLiteVerdictStore(path=tmp_path / "verdicts.sqlite3")
     store.initialize()
     record = stored()
-    await store.save(record)
+    await store.save(record, expected_generation=0)
 
     assert (
         await store.find(
@@ -306,6 +313,7 @@ def bare_record(**overrides: object) -> StoredVerdict:
         "risk_flags": (),
         "checks": (),
         "aggregation_ruleset": "r",
+        "passive_dataset_fingerprint": "f",
         "created_at": datetime(2026, 8, 10, tzinfo=UTC),
         "expires_at": datetime(2026, 8, 10, 1, tzinfo=UTC),
     }
@@ -348,7 +356,7 @@ async def test_a_verdict_obtained_through_another_sender_is_invisible(tmp_path: 
     store = SQLiteVerdictStore(path=tmp_path / "verdicts.sqlite3")
     store.initialize()
     record = stored(sender="probe.example.test|verify@probe.example.test")
-    await store.save(record)
+    await store.save(record, expected_generation=0)
 
     other = correlation_digest(CORRELATION_KEY, "other.example.test|verify@other.example.test")
     assert await store.find(**lookup(record, sender_identity_digest=other)) is None  # type: ignore[arg-type]
@@ -366,7 +374,7 @@ async def test_an_expired_row_is_unreachable_rather_than_merely_stale(tmp_path: 
     store = SQLiteVerdictStore(path=tmp_path / "verdicts.sqlite3")
     store.initialize()
     record = stored(lifetime_seconds=3600)
-    await store.save(record)
+    await store.save(record, expected_generation=0)
 
     just_before = record.expires_at - timedelta(seconds=1)
     after = record.expires_at + timedelta(seconds=1)
@@ -381,8 +389,8 @@ async def test_expired_rows_can_be_purged(tmp_path: Path) -> None:
     """A cache that only grows is a retention policy nobody wrote."""
     store = SQLiteVerdictStore(path=tmp_path / "verdicts.sqlite3")
     store.initialize()
-    await store.save(stored(record_id="live", lifetime_seconds=7200))
-    await store.save(stored(record_id="dead", lifetime_seconds=60))
+    await store.save(stored(record_id="live", lifetime_seconds=7200), expected_generation=0)
+    await store.save(stored(record_id="dead", lifetime_seconds=60), expected_generation=0)
 
     removed = await store.purge_expired(now=WRITTEN_AT + timedelta(seconds=600))
 
@@ -400,10 +408,22 @@ def test_the_schema_version_moved_with_the_shape() -> None:
     store full of unreachable rows looks like a cache that never hits, which is
     a worse failure than refusing to open, so the version moved with the
     *addressing* rather than only with the shape.
+
+    Version 4 is Remediation C: the passive dataset fingerprint joined the key.
+    A version-3 row carries no fingerprint, and the one value a migration could
+    assume for it — "whatever this process has configured now" — is exactly the
+    assumption the column exists to prevent, so the file is refused instead.
+
+    Version 5 is the C11 fencing follow-up: the account fence and the authority
+    binding are in this file now, because a fence held in another database is
+    one a second transaction can overtake. A version-4 file records neither, and
+    adopting it under whichever deletion authority happens to be configured is
+    the configuration mistake the binding exists to catch — so it is refused
+    rather than migrated.
     """
     from emailcheck.adapters.storage.sqlite_store import SCHEMA_VERSION
 
-    assert SCHEMA_VERSION == 3
+    assert SCHEMA_VERSION == 5
 
 
 # --- Phase 7: one account, several credentials ------------------------------

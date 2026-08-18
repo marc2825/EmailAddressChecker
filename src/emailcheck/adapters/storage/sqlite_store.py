@@ -39,6 +39,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from emailcheck.adapters.storage.account_fence import (
+    BEGIN_IMMEDIATE,
+    FENCE_SCHEMA,
+    bind_authority,
+    fenced_generation,
+    raise_fence,
+)
 from emailcheck.domain.verdict import Status
 from emailcheck.ports.verdict_store import StoredVerdict
 
@@ -56,9 +63,16 @@ from emailcheck.ports.verdict_store import StoredVerdict
 #: longer be found**. A store whose rows are unreachable is worse than one that
 #: refuses to open, because it looks like a cache that never hits — so the
 #: version moves even though the columns do not. ADR 0016.
-SCHEMA_VERSION: Final = 3
+#: Version 4 is Remediation C: the passive dataset fingerprint joins the key.
+#: A version 3 row has no fingerprint, and the one value a migration could
+#: assume for it — "whatever is configured now" — is exactly the assumption the
+#: column exists to prevent, so such a file is refused by version instead.
+#: Version 5 adds the account fence and the authority binding. Like the job
+#: store, a version 4 file records no deletion authority and is refused rather
+#: than adopted under whichever one happens to be configured.
+SCHEMA_VERSION: Final = 5
 
-_SCHEMA: Final = """
+_TABLES: Final = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 
 CREATE TABLE IF NOT EXISTS verdicts (
@@ -73,34 +87,42 @@ CREATE TABLE IF NOT EXISTS verdicts (
     risk_flags             TEXT NOT NULL,
     checks                 TEXT NOT NULL,
     aggregation_ruleset    TEXT NOT NULL,
+    passive_dataset_fingerprint TEXT NOT NULL,
     created_at             TEXT NOT NULL,
     expires_at             TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS verdicts_lookup
     ON verdicts (account_digest, target_digest, sender_identity_digest,
-                 aggregation_ruleset, expires_at DESC);
+                 aggregation_ruleset, passive_dataset_fingerprint, expires_at DESC);
 """
+
+#: The store's own tables plus the fence and authority tables every
+#: account-owned store carries.
+_SCHEMA: Final = _TABLES + FENCE_SCHEMA
 
 _INSERT: Final = """
 INSERT OR REPLACE INTO verdicts (
     record_id, account_digest, target_digest, sender_identity_digest, status,
     confidence, primary_reason, reasons, risk_flags, checks,
-    aggregation_ruleset, created_at, expires_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    aggregation_ruleset, passive_dataset_fingerprint, created_at, expires_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
-#: Four key components and the expiry, all in the predicate. Removing any one of
-#: them is a mutation a test fails on.
+#: Five key components and the expiry, all in the predicate. Removing any one of
+#: them is a mutation a test fails on. The fingerprint is the newest and was the
+#: missing one: without it a verdict computed under one passive dataset snapshot
+#: was served after the snapshot changed.
 _SELECT: Final = """
 SELECT record_id, account_digest, target_digest, sender_identity_digest, status,
        confidence, primary_reason, reasons, risk_flags, checks,
-       aggregation_ruleset, created_at, expires_at
+       aggregation_ruleset, passive_dataset_fingerprint, created_at, expires_at
   FROM verdicts
  WHERE account_digest = ?
    AND target_digest = ?
    AND sender_identity_digest = ?
    AND aggregation_ruleset = ?
+   AND passive_dataset_fingerprint = ?
    AND expires_at > ?
  ORDER BY created_at DESC
  LIMIT 1
@@ -116,6 +138,11 @@ DELETE FROM verdicts
        SELECT record_id FROM verdicts WHERE expires_at <= ? LIMIT ?
  )
 """
+
+#: The owner predicate is the whole operation. A deletion without it removes
+#: every account's rows, which is why a mutation that drops it is one of the
+#: required kills.
+_DELETE_ACCOUNT: Final = "DELETE FROM verdicts WHERE account_digest = ?"
 
 _VERSION: Final = "SELECT version FROM schema_version"
 
@@ -149,8 +176,17 @@ class SQLiteVerdictStore:
                     f"this store is schema version {row[0]}, and this build writes {SCHEMA_VERSION}"
                 )
 
-    async def save(self, record: StoredVerdict) -> None:
-        await asyncio.to_thread(self._save, record)
+    def bind_authority(self, authority_id: str) -> str:
+        """Tie this file to one deletion authority, or refuse to open under another."""
+        with self._connect() as connection:
+            return bind_authority(connection, authority_id)
+
+    async def fence(self, *, account_digest: str, generation: int) -> int:
+        """Raise this store's fence before its rows are deleted."""
+        return await asyncio.to_thread(self._fence, account_digest, generation)
+
+    async def save(self, record: StoredVerdict, *, expected_generation: int) -> bool:
+        return await asyncio.to_thread(self._save, record, expected_generation)
 
     async def find(
         self,
@@ -159,6 +195,7 @@ class SQLiteVerdictStore:
         target_digest: str,
         sender_identity_digest: str,
         aggregation_ruleset: str,
+        passive_dataset_fingerprint: str,
         now: datetime,
     ) -> StoredVerdict | None:
         return await asyncio.to_thread(
@@ -167,8 +204,12 @@ class SQLiteVerdictStore:
             target_digest,
             sender_identity_digest,
             aggregation_ruleset,
+            passive_dataset_fingerprint,
             now,
         )
+
+    async def delete_account(self, *, account_digest: str) -> int:
+        return await asyncio.to_thread(self._delete_account, account_digest)
 
     async def purge_expired(self, *, now: datetime, limit: int = 1_000) -> int:
         """Delete rows the clock has passed, at most `limit` of them.
@@ -200,8 +241,23 @@ class SQLiteVerdictStore:
         with closing(connection), connection:
             yield connection
 
-    def _save(self, record: StoredVerdict) -> None:
+    def _fence(self, account_digest: str, generation: int) -> int:
         with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            return raise_fence(connection, account_digest, generation)
+
+    def _save(self, record: StoredVerdict, expected_generation: int) -> bool:
+        """The fence and the write, in one transaction. `False` means fenced.
+
+        The same shape as the job store's, for the same reason: a cached verdict
+        recreated after a deletion is the account's data as much as a job row
+        is, and the review reproduced exactly that through the earlier
+        pre-check.
+        """
+        with self._connect() as connection:
+            connection.execute(BEGIN_IMMEDIATE)
+            if fenced_generation(connection, record.account_digest) != expected_generation:
+                return False
             connection.execute(
                 _INSERT,
                 (
@@ -216,10 +272,12 @@ class SQLiteVerdictStore:
                     json.dumps(list(record.risk_flags)),
                     json.dumps([list(pair) for pair in record.checks]),
                     record.aggregation_ruleset,
+                    record.passive_dataset_fingerprint,
                     record.created_at.isoformat(),
                     record.expires_at.isoformat(),
                 ),
             )
+        return True
 
     def _find(
         self,
@@ -227,6 +285,7 @@ class SQLiteVerdictStore:
         target_digest: str,
         sender_identity_digest: str,
         aggregation_ruleset: str,
+        passive_dataset_fingerprint: str,
         now: datetime,
     ) -> StoredVerdict | None:
         with self._connect() as connection:
@@ -237,6 +296,7 @@ class SQLiteVerdictStore:
                     target_digest,
                     sender_identity_digest,
                     aggregation_ruleset,
+                    passive_dataset_fingerprint,
                     now.isoformat(),
                 ),
             ).fetchone()
@@ -254,9 +314,14 @@ class SQLiteVerdictStore:
             risk_flags=tuple(json.loads(row[8])),
             checks=tuple((str(pair[0]), str(pair[1])) for pair in json.loads(row[9])),
             aggregation_ruleset=row[10],
-            created_at=datetime.fromisoformat(row[11]),
-            expires_at=datetime.fromisoformat(row[12]),
+            passive_dataset_fingerprint=row[11],
+            created_at=datetime.fromisoformat(row[12]),
+            expires_at=datetime.fromisoformat(row[13]),
         )
+
+    def _delete_account(self, account_digest: str) -> int:
+        with self._connect() as connection:
+            return int(connection.execute(_DELETE_ACCOUNT, (account_digest,)).rowcount)
 
     def _purge_expired(self, now: datetime, limit: int) -> int:
         with self._connect() as connection:

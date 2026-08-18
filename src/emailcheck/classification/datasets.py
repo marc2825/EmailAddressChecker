@@ -13,8 +13,10 @@ same domain a user typed.
 
 from __future__ import annotations
 
+import hashlib
 import tomllib
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -118,6 +120,44 @@ class DatasetMetadata:
                 raise DatasetError(f"dataset metadata field {field_name!r} {problem}")
 
 
+#: How many hex characters of a content digest each dataset publishes.
+#:
+#: A prefix rather than the whole SHA-256: this value goes into a cache key, a
+#: stored row, and an operator's version report, and 32 hex characters is far
+#: past the point where two configured snapshots collide.
+CONTENT_DIGEST_LENGTH: Final = 32
+
+
+def content_digest(kind: str, *groups: Iterable[str]) -> str:
+    """A deterministic digest of one dataset's effective contents.
+
+    **Length-framed, never concatenated.** Each entry is written as its UTF-8
+    byte length, a colon, and the entry, and each group ends with a marker that
+    cannot appear in a framed entry. Plain joining with a separator is what
+    creates structural collisions: `{"a.b", "c"}` and `{"a", "b.c"}` share a
+    naive `.`-joined form, and two datasets whose contents differ would then
+    share an identity.
+
+    **Sorted, because these datasets are sets.** `frozenset` has no order and a
+    file's line order carries no meaning, so two files listing the same domains
+    differently are the same dataset and must digest the same. A dataset whose
+    order *did* matter would pass its entries already ordered and must not use
+    this helper's sorting for that group.
+
+    `kind` is the semantic dataset name, so two datasets that happen to hold the
+    same strings — a domain list and a role list both containing `support` —
+    do not share a digest.
+    """
+    hasher = hashlib.sha256()
+    hasher.update(f"{len(kind)}:{kind}\x00".encode())
+    for group in groups:
+        for entry in sorted(group):
+            hasher.update(f"{len(entry.encode())}:".encode())
+            hasher.update(entry.encode())
+        hasher.update(b"\x01")
+    return hasher.hexdigest()[:CONTENT_DIGEST_LENGTH]
+
+
 @dataclass(frozen=True, slots=True)
 class DomainDataset:
     """A set of normalized ASCII domains."""
@@ -127,6 +167,20 @@ class DomainDataset:
 
     def contains(self, ascii_domain: str) -> bool:
         return ascii_domain in self.domains
+
+    @property
+    def content_fingerprint(self) -> str:
+        """This dataset's identity, computed from what it actually holds.
+
+        **Not the declared version, and not the declared checksum.** A version
+        is a string an operator types and may forget to change; a checksum is a
+        string the file declares and this loader does not verify. Either can say
+        "unchanged" about a file that was edited, and the final system audit
+        measured exactly that: two role lists with one entry each and the same
+        version collided, so a cached verdict computed under the first was
+        served under the second with the wrong risk flags.
+        """
+        return content_digest("domain", self.domains)
 
     @property
     def size(self) -> int:
@@ -142,6 +196,11 @@ class LocalPartDataset:
 
     def contains(self, comparison_form: str) -> bool:
         return comparison_form in self.local_parts
+
+    @property
+    def content_fingerprint(self) -> str:
+        """This dataset's identity, from its entries. See `DomainDataset`."""
+        return content_digest("local_part", self.local_parts)
 
     def canonical(self, comparison_form: str) -> RoleName | None:
         """Return the dataset's own entry for this comparison form, or None.
@@ -168,6 +227,23 @@ class ProviderPatternDataset:
     @property
     def size(self) -> int:
         return len(self.patterns)
+
+    @property
+    def content_fingerprint(self) -> str:
+        """Every field of every rule that can change a classification.
+
+        A pattern's family and suffix both decide what it matches and what it
+        answers, so both are in the digest. `evidence` is a note for a human and
+        is included too: it costs nothing and leaving it out would mean two
+        provider files a reviewer can tell apart share one identity.
+        """
+        return content_digest(
+            "provider",
+            (
+                f"{pattern.family.value}|{pattern.suffix}|{pattern.evidence}"
+                for pattern in self.patterns
+            ),
+        )
 
 
 class OverrideTarget(StrEnum):
@@ -210,6 +286,20 @@ class OverrideDataset:
     not_disposable: dict[str, str]
     disposable: dict[str, str]
     target: OverrideTarget = OverrideTarget.DISPOSABLE
+
+    @property
+    def content_fingerprint(self) -> str:
+        """Both correction lists and the target they correct.
+
+        Two groups rather than one merged set: a domain moving from
+        `not_disposable` to `disposable` inverts the answer, and a digest that
+        merged them would not notice.
+        """
+        return content_digest(
+            f"override:{self.target.value}",
+            (f"{domain}|{reason}" for domain, reason in self.not_disposable.items()),
+            (f"{domain}|{reason}" for domain, reason in self.disposable.items()),
+        )
 
     def override_for(self, ascii_domain: str) -> tuple[bool, str] | None:
         """Return `(matched, reason)` when an override decides this domain."""

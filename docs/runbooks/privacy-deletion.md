@@ -116,3 +116,64 @@ not by reading it:
 4. Confirm a *failure* is also handled: make the store unavailable, run the
    sweep, and confirm it counts and audits the failure rather than raising.
 5. Record who did this and when, in [../readiness-checklist.md](../readiness-checklist.md).
+
+## Account-requested deletion, as an operation
+
+Since Remediation C this is one call rather than a list of manual steps:
+
+```python
+report = await stack.delete_account_data(account_id)
+assert report.complete
+```
+
+It advances the account's durable deletion generation, suspends the account
+locally, clears this process's registry state, and empties the **verdict and job
+stores** of everything that account owns — every dataset fingerprint and every
+ruleset, not only the current ones.
+
+**It does not erase batch data in the shipped stack**, because Phase 10 is not
+composed and the stack holds no batch store. The capability exists: a deployment
+that wires the batch subsystem must pass its `BatchStore` to the same deletion
+service, and until it does, batch data is that deployment's own responsibility.
+
+**A deployment with no `account_state_path` no longer starts.** Configuring a
+persistent store without the deletion authority is refused at composition, so
+the case where this operation had nothing to raise a barrier with cannot reach
+production. If it is somehow reached anyway, the operation returns
+`complete=False` with `failed_stores=("account_state",)` and deletes nothing.
+
+**Workers on other replicas are already handled.** The generation is advanced
+before any row is deleted, and is then written into each store as a fence that
+every account-owned write is checked against inside its own transaction — so
+work admitted anywhere before that moment is refused when it tries to write,
+including work that had already passed its own check. You do not need to stop
+the other replicas first, and the fence survives a restart of all of them.
+
+**A busy store can make this fail, and that is deliberate.** Raising a fence is
+a write, so a deletion contending with a long-running write on the same database
+may time out. It then reports `complete=False` naming that store, having deleted
+nothing from it. Retry; the account's data is still there and no stale replica
+can add to it.
+
+**All the stores must share one authority.** Each is bound to the `accounts.db`
+it was first opened under and refuses to open under another. If start-up fails
+naming a different account-state authority, a replica has been pointed at the
+wrong file — fix the configuration rather than repointing the store, because a
+deletion recorded by one authority is invisible to the other. A store file from
+an older schema version is refused for the same reason and needs a deliberate
+migration, not a new authority.
+
+**Check `report.complete`.** There is no cross-store transaction. If a store was
+unreachable, `failed_stores` names it, `complete` is `False`, and the account is
+**not** fully deleted. Fix the store and run the operation again; it is safe to
+repeat and the account stays suspended in the meantime.
+
+**What it does not do.** It is logical deletion: rows are removed and retained
+plaintext is set to `NULL`. SQLite free pages, the write-ahead log, and any
+backup taken before the run are outside what this project touches. If a request
+requires those, it requires storage-level or backup-level erasure, which is an
+infrastructure procedure rather than an application one.
+
+Record the returned counts and `failed_stores` in the incident notes. The report
+carries no address, job identifier, idempotency key, or path, so it is safe to
+paste as it stands.

@@ -42,7 +42,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Final
 
-from emailcheck.application.public_job import PublicJob, public_job_from_json_object
+from emailcheck.ports.public_contract import PublicJob, public_job_from_json_object
 from emailcheck.ports.remote_check import RemoteCheckError
 from emailcheck.security.remote_url import join_api_path
 

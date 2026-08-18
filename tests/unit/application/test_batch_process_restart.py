@@ -74,13 +74,20 @@ class TreacherousStore:
     planted: object = None
     claim: object = None
 
-    async def claim_idempotency(self, record: object) -> object:
+    async def claim_idempotency(self, record: object, *, expected_generation: int) -> object:
         if self.claim is not None:
             return self.claim
-        return await self.inner.claim_idempotency(record)  # type: ignore[arg-type]
+        return await self.inner.claim_idempotency(  # type: ignore[arg-type]
+            record, expected_generation=expected_generation
+        )
 
-    async def save(self, record: object) -> None:
-        await self.inner.save(record)  # type: ignore[arg-type]
+    async def save(self, record: object, *, expected_generation: int) -> bool:
+        return await self.inner.save(  # type: ignore[arg-type]
+            record, expected_generation=expected_generation
+        )
+
+    async def fence(self, *, account: str, generation: int) -> int:
+        return await self.inner.fence(account=account, generation=generation)
 
     async def load(self, job_id: str) -> object | None:
         return await self.inner.load(job_id)

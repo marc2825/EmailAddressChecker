@@ -408,7 +408,8 @@ class RecordingJobStore:
     cutoffs: list[datetime] = field(default_factory=list)
     removals: int = 3
 
-    async def save(self, record: object) -> None: ...
+    async def save(self, record: object, *, expected_generation: int = 0) -> bool:
+        return True
 
     async def load(self, job_id: str) -> object | None:
         return None

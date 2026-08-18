@@ -23,6 +23,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from emailcheck.domain.reasons import ReasonCode
+from emailcheck.domain.risk import RiskFlag
 
 
 class EvidenceLayer(StrEnum):
@@ -58,6 +59,26 @@ class Evidence:
     observed_at: datetime
     temporary: bool = False
     source_version: str | None = None
+    #: Risk flags this observation raises **in addition to** whatever its reason
+    #: code implies. Typed, published vocabulary, and read by exactly one place.
+    #:
+    #: **It exists because a risk flag and a status tier are different
+    #: questions, and one reason code could only answer both the same way.**
+    #: `application/mail_route.py` can see an MX configuration anomaly on a route
+    #: that is otherwise perfectly usable — `NULL_MX_WITH_OTHER_RECORDS` is the
+    #: measured case — and `docs/requirements.md` section 4 makes
+    #: `domain_configuration_anomaly` a risk flag, orthogonal to deliverability.
+    #: Publishing that as `ReasonCode.MX_CONFIGURATION_ANOMALY` would have raised
+    #: the flag *and* dropped the verdict to `unknown`, because that reason sits
+    #: in the aggregator's tier 4 — correctly, for the route outcome that has
+    #: nowhere to connect. The final system audit found the flag missing
+    #: entirely; adding it through the reason would have traded a lost flag for a
+    #: wrong status.
+    #:
+    #: So a producer states the flag directly. Nothing here decides a status: the
+    #: aggregator reads this **after** the tier is chosen, and no branch that
+    #: picks a tier consults it.
+    risk_flags: frozenset[RiskFlag] = frozenset()
     details: Mapping[str, str | int | bool | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -77,6 +98,11 @@ class Evidence:
             raise ValueError("evidence permanence must be a boolean")
         if self.source_version is not None and not isinstance(self.source_version, str):
             raise ValueError("a source version must be a string")
+        if not isinstance(self.risk_flags, frozenset):
+            raise ValueError("evidence risk flags must be a frozenset")
+        for flag in self.risk_flags:
+            if not isinstance(flag, RiskFlag):
+                raise ValueError("evidence must carry published risk flags")
         for key, value in self.details.items():
             if not isinstance(key, str):
                 raise ValueError("every evidence detail key must be a string")

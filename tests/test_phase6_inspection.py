@@ -33,6 +33,12 @@ PHASE_6_MODULES = {
     "admission": SOURCE / "application" / "admission.py",
     "public_result": SOURCE / "application" / "public_result.py",
     "public_job": SOURCE / "application" / "public_job.py",
+    # The published data contract itself. Remediation C moved the shape, its
+    # validation, and its serialization down to `ports/` so that
+    # `ports/remote_check.py` could name the type it speaks without a port
+    # importing the application layer. The projection stayed in
+    # `application/public_*.py`, so both halves are scanned.
+    "public_contract": SOURCE / "ports" / "public_contract.py",
     "jobs": SOURCE / "application" / "jobs.py",
     "retry": SOURCE / "application" / "retry.py",
     "verdict_cache": SOURCE / "application" / "verdict_cache.py",
@@ -223,7 +229,7 @@ def test_the_public_body_has_no_field_a_number_could_go_in() -> None:
     `as_json_object` names every key it emits, so adding a numeric one is a
     visible edit to this method rather than a field appearing by inheritance.
     """
-    tree = tree_of(PHASE_6_MODULES["public_result"])
+    tree = tree_of(PHASE_6_MODULES["public_contract"])
     method = next(
         node
         for node in ast.walk(tree)
@@ -743,7 +749,9 @@ def test_only_the_random_adapter_reaches_a_generator() -> None:
 def test_the_job_projection_publishes_a_result_only_for_a_completed_job() -> None:
     """A status invented before a verdict exists would be Phase 5 stop
     condition 1 in the most misleading possible place."""
-    source = code_without_docstrings(PHASE_6_MODULES["public_job"])
+    # The validation lives with the contract rather than with the projection
+    # since Remediation C; the rule it pins is unchanged.
+    source = code_without_docstrings(PHASE_6_MODULES["public_contract"])
     assert "JobState.COMPLETED" in source
     assert "only a completed job publishes a result" in source
 

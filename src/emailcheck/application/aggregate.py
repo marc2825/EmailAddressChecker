@@ -590,15 +590,25 @@ def _primary_reason(tiers: Mapping[ReasonCode, int], deciding_tier: int) -> Reas
 
 
 def _risk_flags(items: tuple[Evidence, ...]) -> frozenset[RiskFlag]:
-    """Risk flags, deduplicated by the set and derived only from reasons.
+    """Risk flags: the reason table, plus what a producer stated directly.
 
     Computed after the status and never consulted by it. A test asserts that
     adding any flag-raising evidence to any decided verdict leaves the status,
     the confidence, and the primary reason unchanged.
+
+    **Two sources, because one reason code cannot answer two questions.** The
+    table below derives a flag from a reason, which is right whenever the reason
+    and the flag say the same thing. `Evidence.risk_flags` covers the case where
+    they do not: an MX configuration anomaly on an otherwise usable route is a
+    risk flag whose matching reason code would also drop the verdict to
+    `unknown`. The union is a set, so a producer that states a flag the table
+    already derives changes nothing.
     """
-    return frozenset(
+    derived = {
         _RISK_FLAG_BY_REASON[item.reason] for item in items if item.reason in _RISK_FLAG_BY_REASON
-    )
+    }
+    stated = {flag for item in items for flag in item.risk_flags}
+    return frozenset(derived | stated)
 
 
 def _checks(items: tuple[Evidence, ...]) -> Mapping[str, object]:

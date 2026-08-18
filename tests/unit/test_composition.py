@@ -32,8 +32,27 @@ SENDER = {
 }
 
 
+def _with_authority(kwargs: dict[str, object]) -> dict[str, object]:
+    """A persistent deployment needs the deletion authority beside its stores.
+
+    Composition refuses one without it — a persistent store whose deletions no
+    other replica can see is the configuration the focused review used to bring
+    an erased account back — so a fixture that persists anything names the file
+    next to whichever store it configured.
+    """
+    if kwargs.get("account_state_path") is None:
+        for name in ("job_store_path", "store_path"):
+            configured = kwargs.get(name)
+            if isinstance(configured, Path):
+                kwargs["account_state_path"] = configured.parent / "accounts.sqlite3"
+                break
+    return kwargs
+
+
 def passive_deployment(**kwargs: object) -> Deployment:
-    return Deployment(api_keys={"acct-1": KEY}, correlation_key=CORRELATION_KEY, **kwargs)  # type: ignore[arg-type]
+    return Deployment(  # type: ignore[arg-type]
+        api_keys={"acct-1": KEY}, correlation_key=CORRELATION_KEY, **_with_authority(kwargs)
+    )
 
 
 LAB_ALLOWLIST = frozenset({"mx.test.example"})
@@ -56,7 +75,7 @@ def active_deployment(**kwargs: object) -> Deployment:
         correlation_key=CORRELATION_KEY,
         sender_identity=SENDER,
         active_probing=True,
-        **kwargs,  # type: ignore[arg-type]
+        **_with_authority(kwargs),  # type: ignore[arg-type]
     )
 
 

@@ -7,6 +7,7 @@ malformed file fails the load rather than degrading a later answer.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -29,6 +30,13 @@ from emailcheck.classification.datasets import (
     load_role_dataset,
     read_text,
 )
+
+#: How many hex characters of the snapshot digest the fingerprint keeps.
+#:
+#: Long enough that two configured snapshots colliding is not a thing that
+#: happens, short enough to sit in a cache key, a stored row, and an operator's
+#: version report without being mistaken for a secret.
+PASSIVE_FINGERPRINT_LENGTH: Final = 32
 
 DISPOSABLE_FILE: Final = "disposable_domains.toml"
 FREE_MAIL_FILE: Final = "free_mail_domains.toml"
@@ -71,6 +79,75 @@ class PassiveDatasets:
             "provider": self.providers.metadata.version,
             "disposable_overrides": self.disposable_overrides.metadata.version,
         }
+
+    @property
+    def content_fingerprints(self) -> dict[str, str]:
+        """Each dataset's content-derived identity, under the `versions` keys.
+
+        Reported beside `versions` rather than instead of it: a declared version
+        is what a human reads and cites, and this is what the cache compares.
+        Conflating them is how the cache came to trust a string an operator
+        types.
+        """
+        return {
+            "disposable": self.disposable.content_fingerprint,
+            "free_mail": self.free_mail.content_fingerprint,
+            "role": self.roles.content_fingerprint,
+            "provider": self.providers.content_fingerprint,
+            "disposable_overrides": self.disposable_overrides.content_fingerprint,
+        }
+
+    @property
+    def fingerprint(self) -> str:
+        """One bounded digest of the snapshot that decides passive answers.
+
+        **The cache key was missing it, and that is a correctness bug rather
+        than a tuning one.** `application/verdict_cache.py` keyed a stored
+        verdict by account, target, sender identity, and aggregation ruleset —
+        every input that could change the answer *except* the datasets the
+        answer partly came from. So an operator who added a domain to the
+        role-account list kept serving verdicts computed before it, for as long
+        as `docs/requirements.md` section 13 prices them.
+
+        **It is computed from contents, and the first attempt was not.** That
+        version hashed each dataset's *declared version and entry count*, which
+        the focused review broke in one line: two role lists, one entry each,
+        same declared version, different entry — identical fingerprint, and a
+        stale cached verdict served with the wrong risk flags. A declared
+        version is a string an operator may forget to change and
+        `DatasetMetadata.checksum` is a string this loader never verifies, so
+        neither can define cache identity. `content_fingerprint` hashes the
+        entries themselves, length-framed and sorted.
+
+        The declared version stays in the material **as well**. Two snapshots
+        with identical entries and different declared versions are two
+        deliberate snapshots — an operator who bumps a version is saying
+        something changed — and the conservative reading of that is a new cache
+        identity rather than a shared one. The entry count stays too: it costs
+        nothing and it keeps the material readable as a description of the
+        snapshot.
+
+        **Deterministic across processes.** `hashlib.sha256` over a sorted,
+        length-framed string — never `hash()`, which is salted per process and
+        would make every restart a cache flush, and never a path or an mtime,
+        which say where a file is rather than what it holds.
+
+        **It carries nothing.** The digests are one-way and the names are this
+        project's own vocabulary, so no address, dataset entry, filesystem path,
+        or secret can reach a cache row, a log line, or an operator report.
+        """
+        hasher = hashlib.sha256()
+        for name in sorted(self.versions):
+            for value in (
+                name,
+                self.versions[name],
+                self.content_fingerprints[name],
+                str(self.entry_counts[name]),
+            ):
+                hasher.update(f"{len(value.encode())}:".encode())
+                hasher.update(value.encode())
+            hasher.update(b"\x01")
+        return hasher.hexdigest()[:PASSIVE_FINGERPRINT_LENGTH]
 
     @property
     def entry_counts(self) -> dict[str, int]:

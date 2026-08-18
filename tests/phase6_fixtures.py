@@ -369,6 +369,34 @@ class FakeRandomSource:
 
 
 @dataclass
+class InMemoryAccountStateStore:
+    """An `AccountStateStore` in a dict, for tests that need one to exist.
+
+    A real cross-replica test uses the SQLite adapter over a real file, because
+    "shared by every replica" is the property under test and a dict is not
+    shared by anything. This is for the many tests that merely need a
+    `JobService` with a store to be constructible.
+    """
+
+    generations: dict[str, int] = field(default_factory=dict)
+    authority: str = "in-memory-authority"
+
+    async def generation(self, account: str) -> int:
+        return self.generations.get(account, 0)
+
+    async def advance(self, account: str) -> int:
+        moved = self.generations.get(account, 0) + 1
+        self.generations[account] = moved
+        return moved
+
+    async def permits(self, account: str, generation: int) -> bool:
+        return self.generations.get(account, 0) == generation
+
+    def authority_id(self) -> str:
+        return self.authority
+
+
+@dataclass
 class InMemoryVerdictStore:
     """A `VerdictStore` that keeps rows in a list. Counts what it was asked.
 
@@ -380,10 +408,21 @@ class InMemoryVerdictStore:
     rows: list[StoredVerdict] = field(default_factory=list)
     finds: int = 0
     saves: int = 0
+    fences: dict[str, int] = field(default_factory=dict)
 
-    async def save(self, record: StoredVerdict) -> None:
+    async def save(self, record: StoredVerdict, *, expected_generation: int = 0) -> bool:
+        # The fence exactly as the SQL enforces it, so a fake cannot accept a
+        # write the real adapter refuses.
+        if self.fences.get(record.account_digest, 0) != expected_generation:
+            return False
         self.saves += 1
         self.rows.append(record)
+        return True
+
+    async def fence(self, *, account_digest: str, generation: int) -> int:
+        held = max(self.fences.get(account_digest, 0), generation)
+        self.fences[account_digest] = held
+        return held
 
     async def find(
         self,
@@ -392,6 +431,7 @@ class InMemoryVerdictStore:
         target_digest: str,
         sender_identity_digest: str,
         aggregation_ruleset: str,
+        passive_dataset_fingerprint: str,
         now: datetime,
     ) -> StoredVerdict | None:
         self.finds += 1
@@ -402,6 +442,10 @@ class InMemoryVerdictStore:
             and row.target_digest == target_digest
             and row.sender_identity_digest == sender_identity_digest
             and row.aggregation_ruleset == aggregation_ruleset
+            # The whole key, exactly as the SQL compares it — including the
+            # dataset fingerprint, so a fake cannot answer a question the real
+            # adapter would refuse.
+            and row.passive_dataset_fingerprint == passive_dataset_fingerprint
             and row.expires_at > now
         ]
         return max(matching, key=lambda row: row.created_at, default=None)

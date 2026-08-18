@@ -130,6 +130,7 @@ def caching_deployment(tmp: pathlib.Path) -> Deployment:
         profile=DeploymentProfile.LAB_ACTIVE,
         lab_destination_allowlist=frozenset({"mx.test.example"}),
         store_path=tmp / "verdicts.sqlite",
+        account_state_path=tmp / "accounts.sqlite",
     )
 
 

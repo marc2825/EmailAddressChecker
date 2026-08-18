@@ -226,6 +226,33 @@ class BatchStore(Protocol):
         """
         ...
 
+    async def delete_account(self, *, account: str) -> int:
+        """Remove **everything** this account owns. Returns how many records went.
+
+        `docs/privacy.md` section 7 promises account-requested deletion and
+        `docs/runbooks/privacy-deletion.md` describes an operator performing it.
+        No production operation did it: the runbook's steps were manual, and the
+        final system audit found the promise had no implementation. This is that
+        implementation for one store; `application/account_deletion.py`
+        orchestrates the set.
+
+        **The owner is the key, and it is the only key.** Never a target, never
+        a digest of an address, never a scan of retained text: this project
+        stores an account identifier alongside every record precisely so that
+        "everything belonging to A" is a `WHERE` clause rather than an
+        inference. Deleting by anything else could remove another account's row
+        that happens to name the same mailbox.
+
+        Unbounded on purpose, unlike the retention sweep. A retention sweep is
+        routine housekeeping that must not hold a write lock; an account
+        deletion is a rare operator action whose whole value is that it finishes.
+
+        Batches, their rows, their retained plaintext, and their artifacts. A
+        batch whose rows outlived it would be exactly the residue this operation
+        exists to remove.
+        """
+        ...
+
     async def forget_inputs(self, *, before: datetime, limit: int) -> int:
         """Clear retained plaintext from batches created before `before`."""
         ...

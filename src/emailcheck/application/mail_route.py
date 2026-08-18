@@ -28,6 +28,7 @@ from emailcheck.domain.mail_route import (
     decide_outcome,
     strength_for,
 )
+from emailcheck.domain.verdict import RiskFlag
 from emailcheck.ports.clock import Clock
 from emailcheck.ports.dns import DNSResolver
 from emailcheck.security.destination import DestinationDecision, evaluate_destinations
@@ -186,13 +187,41 @@ class MailRouteService:
         )
 
     def evidence(self, route: MailRoute) -> Evidence:
-        """Express a route as one immutable observation for later aggregation."""
+        """Express a route as one immutable observation for later aggregation.
+
+        **The anomaly rides here as a risk flag rather than as a reason.** A
+        route can be perfectly usable and still be misconfigured — a Null MX
+        published alongside real exchangers is the case
+        `RouteAnomaly.NULL_MX_WITH_OTHER_RECORDS` names — and
+        `docs/requirements.md` section 4 makes `domain_configuration_anomaly` a
+        risk flag, orthogonal to deliverability. Until Remediation C the anomaly
+        reached `details["anomaly_count"]` and stopped: nothing downstream read
+        it, so the published risk flags were empty and the final system audit
+        found the observation lost between Phase 2 and Phase 5.
+
+        It is emitted from *here* rather than from `application/passive.py`,
+        which is where the finding first noticed it. Two reasons, both
+        structural: this is the layer that made the observation — the passive
+        classifier only re-reads `route.anomalies` through `_has_route_anomaly`
+        — and this evidence is emitted for **every** route, while the passive
+        layer emits none at all unless a dataset matched. A flag that depends on
+        the address happening to be a role account is not a property of the
+        domain's DNS.
+
+        `route.reason` is unchanged, so the tier this observation lands in and
+        the status it can decide are exactly what they were.
+        """
         return Evidence(
             layer=EvidenceLayer.DNS,
             reason=route.reason,
             strength=strength_for(route.outcome),
             observed_at=self.clock.now(),
             temporary=route.is_temporary,
+            risk_flags=(
+                frozenset({RiskFlag.DOMAIN_CONFIGURATION_ANOMALY})
+                if route.anomalies
+                else frozenset()
+            ),
             details={
                 "outcome": route.outcome.value,
                 "candidate_count": len(route.connectable_candidates),

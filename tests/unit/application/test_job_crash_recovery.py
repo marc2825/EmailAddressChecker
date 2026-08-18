@@ -94,16 +94,23 @@ class FaultyJobStore:
     fail_save_from: int = 0
     saves: int = 0
 
-    async def claim_idempotency(self, record: object) -> object:
+    async def claim_idempotency(self, record: object, *, expected_generation: int) -> object:
         if self.fail_claim:
             raise StoreStopped("the store is unavailable")
-        return await self.inner.claim_idempotency(record)  # type: ignore[arg-type]
+        return await self.inner.claim_idempotency(  # type: ignore[arg-type]
+            record, expected_generation=expected_generation
+        )
 
-    async def save(self, record: object) -> None:
+    async def save(self, record: object, *, expected_generation: int) -> bool:
         self.saves += 1
         if self.fail_save_from and self.saves >= self.fail_save_from:
             raise StoreStopped("the store is unavailable")
-        await self.inner.save(record)  # type: ignore[arg-type]
+        return await self.inner.save(  # type: ignore[arg-type]
+            record, expected_generation=expected_generation
+        )
+
+    async def fence(self, *, account: str, generation: int) -> int:
+        return await self.inner.fence(account=account, generation=generation)
 
     async def load(self, job_id: str) -> object | None:
         return await self.inner.load(job_id)

@@ -224,9 +224,11 @@ async def test_the_verdict_purge_deletes_at_most_one_batch(tmp_path: object) -> 
                 risk_flags=(),
                 checks=(),
                 aggregation_ruleset="r1",
+                passive_dataset_fingerprint="f1",
                 created_at=expired - timedelta(hours=2),
                 expires_at=expired - timedelta(hours=1),
-            )
+            ),
+            expected_generation=0,
         )
 
     assert await store.purge_expired(now=expired, limit=10) == 10

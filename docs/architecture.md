@@ -720,8 +720,31 @@ arranged by restarting either.
 `application/verdict_cache.py` and `domain/cache_policy.py`, decided in ADR
 0015. The key is every input that could change the answer — the normalized
 target, the sender identity the answer was obtained through, the aggregation
-ruleset, and the account — as HMACs under the operator's correlation key, all of
-them in the `WHERE` clause along with the expiry.
+ruleset, the **passive dataset fingerprint**, and the account — all of them in
+the `WHERE` clause along with the expiry.
+
+The fingerprint is Remediation C's. The key held every input except the lists
+the answer partly came from, so a verdict computed before an operator added a
+domain to the role-account dataset was still served afterwards for as long as
+section 13 priced it. `PassiveDatasets.fingerprint` is a bounded SHA-256 digest over, per dataset, its
+**content digest**, its declared version, and its entry count.
+
+The content digest is the load-bearing part and the first attempt did not have
+it: hashing the declared version and the entry count alone let two role lists
+with one entry each, the same declared version, and a *different* entry collide,
+and the focused review measured a stale cached verdict served with the wrong risk
+flags. A declared version is a string an operator may forget to change and
+`DatasetMetadata.checksum` is a string the loader never verifies, so neither can
+define cache identity. `content_fingerprint` hashes the entries themselves,
+sorted (these are sets, so file order carries no meaning) and length-framed (so
+`{"a.b", "c"}` and `{"a", "b.c"}` cannot share a form).
+
+The declared version stays in the material as well: an operator who bumps a
+version is saying something changed, and a new cache identity is the
+conservative reading. Deterministic across processes, and carrying no path,
+address, or secret. It is taken from the same
+`PassiveDatasets` object the classifier uses, so the cache cannot describe a
+snapshot this process is not classifying with. Store schema version 4.
 
 The lifetime is **the shortest among the evidence that decided the verdict**,
 composed from `docs/requirements.md` section 13's per-class defaults. Section 13
@@ -1091,3 +1114,75 @@ authorized caller explicitly requests a refresh and has budget.
 Scale by adding workers behind a shared fair scheduler. Do not change the
 semantic core. Multiple static identities, if ever needed, are fixed shards
 with shared destination limits, not a rotation mechanism.
+
+### Account deletion
+
+`docs/privacy.md` section 7's account-requested deletion is
+`AccountDeletionService`, reachable as
+`VerificationStack.delete_account_data`. Its cross-replica authority is
+`ports/account_state.py`: a durable per-account **generation**, advanced before
+any row is deleted. Work carries the generation it was admitted under, so a
+worker on another replica — the arrangement Remediation A exists to support —
+is refused when it tries to write, without that replica knowing a deletion
+happened.
+
+**The authority is not by itself a fence, and the difference is a transaction.**
+A generation read from `accounts.db` and then written to `jobs.db` is two
+transactions with a gap between them, and a replica paused in that gap recreated
+a job row, a cached verdict, and an idempotency binding after the operator had
+been told the deletion was complete. So each persistent store also holds the
+generation **in its own schema**, and every account-owned write is conditional
+on it inside the same `BEGIN IMMEDIATE` transaction as the write itself
+(`adapters/storage/account_fence.py`). Deletion raises that fence in each store
+before removing its rows, so the two operations contend for one database's write
+lock: the writer commits first and is then deleted, or the fence goes up first
+and the writer is refused. No cross-database atomicity is claimed anywhere.
+
+**One data store, one authority.** Each persistent store records the
+`authority_id` of the `accounts.db` it was first opened under and refuses to open
+under another, because two replicas sharing one `jobs.db` while trusting
+different deletion authorities is a deletion neither of them can see. A store
+file from an earlier schema version is refused rather than adopted: which
+authority it belonged to is not recoverable, and guessing is the mistake the
+binding exists to catch.
+
+**A persistent deployment without the authority does not start.** Configuring
+`store_path` or `job_store_path` without `account_state_path` is a composition
+error, and `JobService` refuses to be constructed with a store and no account
+state. A deployment that persists nothing needs neither.
+
+Process-local suspension and `JobService`'s tombstone remain as local cleanup
+and latency. They are not the authority and this document does not treat them as
+one: each is one process's memory, and a build that relied on them recreated a
+deleted account after reporting success.
+
+The batch store is deleted from **when it is composed**, which the shipped stack
+does not do — Phase 10 remains unwired. Composing it means passing its store to
+this service too.
+
+## Dependency direction
+
+```text
+apps  →  application  →  ports / domain  →  (adapters implement ports)
+```
+
+`ports/remote_check.py` imported `application/public_job.py` so that it could
+name the type crossing its boundary, which made a port depend on the layer above
+it. The final system audit found it. The **contract** moved down to
+`ports/public_contract.py` — the fields, their validation against published
+vocabulary, how they serialize, and how an untrusted body is parsed back — and
+the **projection** stayed in `application/public_result.py` and
+`application/public_job.py`, because reading a `Verdict` or a `CheckJob` is
+orchestration. Both application modules re-export the names, so no call site
+changed and the API body, the CLI output, and the remote wire schema are exactly
+what they were.
+
+`domain/risk.py` exists for the same reason one level down: `domain/verdict.py`
+imports `Evidence`, so `domain/evidence.py` cannot import it back, and
+`RiskFlag` had to sit below both once an observation could state one.
+
+`tests/unit/test_remediation_c.py` sweeps the whole of `domain/` and `ports/`
+for an import of `application/` rather than checking the one module that was
+wrong. **This is not a claim that the whole graph is a perfect DAG**: it is the
+one rule that is asserted, and other layering exceptions elsewhere are not
+covered by it.

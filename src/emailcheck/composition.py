@@ -68,6 +68,7 @@ from emailcheck.adapters.smtp.sender_identity import (
     ConfiguredSenderIdentityProvider,
     load_sender_identity,
 )
+from emailcheck.adapters.storage.sqlite_account_state import SQLiteAccountStateStore
 from emailcheck.adapters.storage.sqlite_job_store import SQLiteJobStore
 from emailcheck.adapters.storage.sqlite_store import SQLiteVerdictStore
 from emailcheck.adapters.system.clock import SystemClock, SystemMonotonicClock, SystemSleeper
@@ -75,6 +76,7 @@ from emailcheck.adapters.system.quota import InProcessQuotaStore
 from emailcheck.adapters.system.random_source import SystemRandomSource
 from emailcheck.adapters.system.rate_limit import InProcessRateLimiter
 from emailcheck.application.abuse import AbuseGuard
+from emailcheck.application.account_deletion import AccountDeletionReport, AccountDeletionService
 from emailcheck.application.admin import AdminControl
 from emailcheck.application.admission import AdmissionControl, AdmissionSettings
 from emailcheck.application.jobs import JobService, JobSettings
@@ -189,6 +191,18 @@ class Deployment:
     #: convention; an operator names it, and a composition test asserts that
     #: naming it is enough.
     job_store_path: Path | None = None
+    #: Where the per-account deletion generation lives.
+    #:
+    #: A **third** file rather than a table in one of the others: it is read on
+    #: every admission and every persistent write, its schema version moves
+    #: independently, and both other stores are things this one has to outlive
+    #: during a deletion.
+    #:
+    #: Configured, never derived — the rule `job_store_path` follows. Without it
+    #: a deployment has no cross-replica deletion barrier and
+    #: `AccountDeletionService` refuses to delete rather than emptying stores
+    #: another replica may refill.
+    account_state_path: Path | None = None
     profile: DeploymentProfile = DeploymentProfile.LOCAL_PASSIVE
     #: Whether this deployment may open SMTP connections at all.
     #: `docs/requirements.md` section 15's local-passive profile sets this false
@@ -232,6 +246,24 @@ class Deployment:
             # rather than ignored, on this type's rule that a setting which
             # cannot take effect is a misconfiguration.
             raise ValueError("the local-passive profile accepts no jobs and needs no job store")
+        if (self.store_path is not None or self.job_store_path is not None) and (
+            self.account_state_path is None
+        ):
+            # **A persistent store without the deletion authority is refused at
+            # configuration.** The focused review started exactly that — a real
+            # job store, no account state — and every write was permitted,
+            # including the ones that put a deleted account's rows back. A
+            # deployment holding account-owned rows participates in
+            # `docs/privacy.md`'s deletion contract whether or not it was
+            # configured to, so the missing file is a start-up failure with a
+            # sentence rather than a permission nobody chose.
+            #
+            # A deployment that persists nothing is unaffected: with neither
+            # path set there is no row a deletion could fail to erase.
+            raise ValueError(
+                "a deployment with a persistent store must configure account_state_path, "
+                "which is what makes account deletion enforceable across replicas"
+            )
 
     def lab_allowlist(self) -> DestinationAllowlist | None:
         """The configured allowlist as canonical identities, or `None`.
@@ -289,6 +321,9 @@ class VerificationStack:
     #: rather than trusting that the wiring happened. The final system audit
     #: found a build where this object existed and `JobService` did not have it.
     job_store: SQLiteJobStore | None = None
+    #: The durable cross-replica deletion barrier, held as a field so a test can
+    #: assert identity with what `JobService` and `AccountDeletionService` got.
+    account_state: SQLiteAccountStateStore | None = None
     cache: VerdictCache | None = None
     guard: AbuseGuard | None = None
     admin: AdminControl | None = None
@@ -297,6 +332,8 @@ class VerificationStack:
     #: The task that actually sweeps. `None` for a profile that owns no
     #: persistent active-service state — see `_build_retention_scheduler`.
     retention_scheduler: RetentionScheduler | None = None
+    #: The account-deletion operation `docs/privacy.md` section 7 promises.
+    deletion: AccountDeletionService | None = None
 
     async def start(self) -> None:
         """Start the executor and the retention sweep, if this deployment has them.
@@ -327,6 +364,25 @@ class VerificationStack:
             await self.retention_scheduler.aclose()
         if self.executor is not None:
             await self.executor.aclose()
+
+    async def delete_account_data(self, account: str) -> AccountDeletionReport:
+        """Erase one account, everywhere. **The operator-triggered deletion.**
+
+        `docs/privacy.md` section 7 promises account-requested deletion;
+        `docs/runbooks/privacy-deletion.md` is the procedure. It is an
+        application operation on the built stack rather than an HTTP route, for
+        the reason `run_retention` is: `docs/architecture.md` carries "no public
+        administrative interface" as a stop condition, and an endpoint through
+        which a caller could delete an account is a destructive control reachable
+        by whoever finds it. No ordinary verification request can reach this, and
+        no request field names an account other than the authenticated one.
+
+        A deployment with no deletion service answers with an empty report
+        rather than inventing one.
+        """
+        if self.deletion is None:
+            return AccountDeletionReport()
+        return await self.deletion.delete(account)
 
     async def run_retention(self) -> DeletionReport:
         """Sweep once, now. **The operator-triggered half.**
@@ -406,10 +462,21 @@ def build_verification_stack(
 
     smtp = _build_smtp(deployment, limiter=limiter, clock=clock, monotonic=monotonic)
 
+    # **Before either data store, because both are bound to it.** The authority
+    # identity has to exist before a store can be checked against it, and a
+    # store that cannot be checked is not opened.
+    account_state = None
+    if deployment.account_state_path is not None:
+        account_state = SQLiteAccountStateStore(path=deployment.account_state_path)
+        account_state.initialize()
+    authority = None if account_state is None else account_state.authority_id()
+
     store = None
     if deployment.store_path is not None:
         store = SQLiteVerdictStore(path=deployment.store_path)
         store.initialize()
+        assert authority is not None  # guaranteed by `Deployment.__post_init__`
+        store.bind_authority(authority)
 
     verification = AddressVerificationService(
         syntax=syntax,
@@ -432,6 +499,11 @@ def build_verification_stack(
             random=random,
             correlation_key=deployment.correlation_key,
             sender_identity=_sender_identity_key(deployment),
+            # **From the same object the classifier uses.** A fingerprint
+            # derived from a second reading of the configuration could describe
+            # a snapshot this process is not actually classifying with, which is
+            # the failure the fingerprint exists to prevent, one level up.
+            passive_dataset_fingerprint=deployment.passive_datasets.fingerprint,
         )
 
     executor = None
@@ -448,6 +520,12 @@ def build_verification_stack(
         if deployment.job_store_path is not None:
             job_store = SQLiteJobStore(path=deployment.job_store_path)
             job_store.initialize()
+            assert authority is not None  # guaranteed by `Deployment.__post_init__`
+            # The same identity the verdict store was bound to. Two replicas
+            # sharing this file and trusting different deletion authorities is
+            # the configuration the focused review used to make a deletion
+            # invisible, and this is where it stops being startable.
+            job_store.bind_authority(authority)
         jobs = JobService(
             verification=verification,
             executor=executor,
@@ -464,6 +542,7 @@ def build_verification_stack(
             # operation that may already have touched a recipient — are exactly
             # the ones nothing else would notice.
             store=job_store,
+            account_state=account_state,
             guard=guard,
             settings=deployment.jobs,
         )
@@ -476,6 +555,19 @@ def build_verification_stack(
         jobs=jobs,
         job_store=job_store,
         quota=guard.quota,
+    )
+    deletion = AccountDeletionService(
+        admin=admin,
+        operator=sink,
+        account_state=account_state,
+        cache=cache,
+        jobs=jobs,
+        job_store=job_store,
+        # The batch store is deliberately absent, exactly as it is from
+        # `RetentionService` here: Phase 10 is not wired into composition and an
+        # inspection test refuses this module naming that feature at all.
+        # `AccountDeletionService` accepts one, and a deployment that wires the
+        # feature wires its deletion with it.
     )
     retention_scheduler = _build_retention_scheduler(
         deployment, retention=retention, sleeper=sleeper, operator=sink
@@ -492,12 +584,14 @@ def build_verification_stack(
         executor=executor,
         jobs=jobs,
         job_store=job_store,
+        account_state=account_state,
         cache=cache,
         guard=guard,
         admin=admin,
         metrics=metrics,
         retention=retention,
         retention_scheduler=retention_scheduler,
+        deletion=deletion,
     )
 
 

@@ -131,6 +131,16 @@ _DELETE_BATCH: Final = "DELETE FROM batches WHERE batch_id = ?"
 _DELETE_ROWS: Final = "DELETE FROM batch_rows WHERE batch_id = ?"
 _DELETE_ARTIFACT: Final = "DELETE FROM batch_artifacts WHERE batch_id = ?"
 
+#: Every batch this account owns. The rows and the artifact go through the
+#: existing per-batch removal so that one place decides what a batch consists
+#: of — a second list of tables here is how one of them gets forgotten.
+_ACCOUNT_BATCH_IDS: Final = "SELECT batch_id FROM batches WHERE account = ?"
+
+#: A second, independent predicate over the artifact table. `batch_artifacts`
+#: carries its own `account` column, so an artifact orphaned by any earlier bug
+#: is still removed by the account's deletion rather than surviving it.
+_DELETE_ACCOUNT_ARTIFACTS: Final = "DELETE FROM batch_artifacts WHERE account = ?"
+
 #: Bounded, on the `_PURGE` precedent: an unbounded `DELETE` holds a write lock
 #: for as long as the backlog is.
 _EXPIRED_IDS: Final = "SELECT batch_id FROM batches WHERE expires_at <= ? LIMIT ?"
@@ -217,6 +227,9 @@ class SQLiteBatchStore:
 
     async def delete_batch(self, batch_id: str, *, account: str) -> bool:
         return await asyncio.to_thread(self._delete_batch, batch_id, account)
+
+    async def delete_account(self, *, account: str) -> int:
+        return await asyncio.to_thread(self._delete_account, account)
 
     async def forget_inputs(self, *, before: datetime, limit: int) -> int:
         _positive(limit)
@@ -366,6 +379,17 @@ class SQLiteBatchStore:
         connection.execute(_DELETE_ROWS, (batch_id,))
         connection.execute(_DELETE_ARTIFACT, (batch_id,))
         connection.execute(_DELETE_BATCH, (batch_id,))
+
+    def _delete_account(self, account: str) -> int:
+        """Every batch, row, retained address, and artifact this account owns."""
+        with self._connect() as connection:
+            identifiers = [
+                row[0] for row in connection.execute(_ACCOUNT_BATCH_IDS, (account,)).fetchall()
+            ]
+            for batch_id in identifiers:
+                self._remove(connection, batch_id)
+            connection.execute(_DELETE_ACCOUNT_ARTIFACTS, (account,))
+        return len(identifiers)
 
     def _forget_inputs(self, before: datetime, limit: int) -> int:
         """Clear stale plaintext. Returns batches **actually changed**.
