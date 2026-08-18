@@ -26,15 +26,45 @@ At minimum:
 - one sender identity;
 - one account/API key;
 - one target domain;
-- one target MX;
-- automatic retries;
-- raw evidence retention.
+- one target MX.
 
 `application/admin.py` implements every switch above, with an audit trail
-behind each one. It publishes **no route**: binding an interface that can
-disable a security control to the public application is what "non-public
-interface" exists to prevent, and `docs/architecture.md` carries that as a stop
-condition on the ASGI binding.
+behind each one: each goes through `AdminControl._record`, which appends an
+`AuditEvent` naming the operation, a digest of the subject, and whether the
+state actually changed.
+
+**Two things an earlier version of this section listed are not switches**, and
+an operator reaching for them during an incident would not find them. They are
+here as what they actually are, so the distinction is legible before it is
+needed:
+
+*Automatic retries are bounded structurally, not toggled.* `MAX_RETRIES` is 1,
+and `docs/requirements.md` section 14's retry is available **only** to an
+attempt that provably did not reach the recipient stage —
+`RecipientTouch.replay_is_safe`, which `application/jobs.py` checks before
+scheduling one. A safe pre-recipient retry (a DNS failure, a refused banner) can
+still happen; a recipient-stage replay cannot, whatever an operator does. There
+is nothing to disable, which is stronger than a switch somebody has to remember
+to throw. To stop retries along with everything else, use the global
+active-checks switch.
+
+*Raw evidence retention is configuration and scheduling, not a runtime toggle.*
+What is kept and for how long is `RetentionSettings` — `job_retention_seconds`,
+`interval_seconds`, and `batch_limit` — read at composition, with
+`application/retention.py` sweeping on that interval and calling
+`AdminControl.record_deletion`, which audits the sweep under the `run_deletion`
+event kind. That event kind is the audit record of a sweep having run; it is not
+an operator command, and no method named `run_deletion` exists. Erasing one
+account's data on request is `AccountDeletionService`
+(`docs/runbooks/privacy-deletion.md`), which is a separate operation with its
+own report and is not a retention setting. Changing what is retained means
+changing the deployment's settings and restarting it.
+
+**The administrative control surface publishes no public application route.**
+`application/admin.py` holds no transport, and no request surface reaches it:
+binding a control that can disable a security mechanism to the public
+application is what "non-public interface" exists to prevent, and
+`docs/architecture.md` carries that as a stop condition on the ASGI binding.
 
 **A destination switch is canonicalized before it is stored.** A domain or
 exchanger block goes through the same `HostName` identity the mail route uses —

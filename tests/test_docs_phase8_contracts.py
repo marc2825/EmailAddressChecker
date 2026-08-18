@@ -457,3 +457,106 @@ def test_the_report_template_authorizes_nothing() -> None:
 
     assert "ready for manual gate" in template
     assert "external_probing_authorized" in template
+
+
+# --- the operator runbook's switch list against the real control surface ------
+
+#: Which `AdminState` fields each `docs/operations.md` section 2 bullet is the
+#: operator-facing name for. **A translation table, not the contract**: the
+#: contract is that the bullets actually present in the document and the fields
+#: actually present in `AdminState` describe the same set of controls, and this
+#: only says which words name which field.
+#:
+#: One bullet may cover several fields — the runbook says "one account/API key"
+#: for a control that suspends either — so the value is a set. A bullet with no
+#: entry is a promise nothing implements; a field no parsed bullet reaches is a
+#: control the runbook lost. The final system re-audit found the first kind
+#: ("automatic retries" and "raw evidence retention" listed as switches that did
+#: not exist), and the first version of these tests could not see the second,
+#: because it compared `AdminState` against this table rather than against the
+#: document.
+SWITCH_FIELDS: Final[dict[str, frozenset[str]]] = {
+    "global active checks": frozenset({"active_probing_enabled"}),
+    "one sender identity": frozenset({"disabled_sender_identities"}),
+    "one account/API key": frozenset({"suspended_accounts", "suspended_keys"}),
+    "one target domain": frozenset({"blocked_domains"}),
+    "one target MX": frozenset({"blocked_mx_hosts"}),
+}
+
+
+def documented_switch_fields() -> set[str]:
+    """The controls the runbook currently documents, as `AdminState` field names.
+
+    Derived from the bullets actually parsed out of the document, so deleting a
+    bullet removes its fields here — which is the direction the earlier version
+    of this check could not see.
+    """
+    fields: set[str] = set()
+    for bullet in kill_switch_bullets():
+        fields |= SWITCH_FIELDS.get(bullet, frozenset())
+    return fields
+
+
+def kill_switch_bullets() -> list[str]:
+    """Section 2's bullet list, read from the document rather than retyped."""
+    text = Path("docs/operations.md").read_text()
+    section = text.split("## 2. Kill switches", 1)[1].split("`application/admin.py`", 1)[0]
+    return [line[2:].rstrip(".;") for line in section.splitlines() if line.startswith("- ")]
+
+
+def test_every_documented_kill_switch_names_a_real_control() -> None:
+    """A switch the runbook promises must exist in `AdminState`.
+
+    An operator reads this list during an incident. A bullet with nothing behind
+    it is worse than a missing bullet, because it is looked for and not found.
+    """
+    from emailcheck.application.admin import AdminState
+
+    fields = set(AdminState.__dataclass_fields__)
+    bullets = kill_switch_bullets()
+
+    assert bullets, "section 2's bullet list could not be read"
+    for bullet in bullets:
+        assert bullet in SWITCH_FIELDS, f"the runbook promises {bullet!r} and nothing maps to it"
+        missing = SWITCH_FIELDS[bullet] - fields
+        assert not missing, f"{bullet!r} maps to fields AdminState lost: {sorted(missing)}"
+
+
+def test_every_operator_switchable_state_field_is_documented() -> None:
+    """And the other direction, derived from the document rather than asserted.
+
+    A new operator-switchable field cannot ship without a bullet, **and a bullet
+    cannot be deleted while its field remains** — the half the first version of
+    this test missed, because it compared `AdminState` against `SWITCH_FIELDS`,
+    which the test itself authors. Removing "one target domain" from the runbook
+    changed nothing and everything still passed.
+    """
+    from emailcheck.application.admin import AdminState
+
+    implemented = set(AdminState.__dataclass_fields__)
+    documented = documented_switch_fields()
+
+    undocumented = implemented - documented
+    assert not undocumented, f"implemented but absent from the runbook: {sorted(undocumented)}"
+    assert not documented - implemented
+
+
+def test_the_runbook_promises_no_switch_the_admin_surface_lacks() -> None:
+    """The exact regression: the two claims the re-audit found.
+
+    Named rather than derived, because these two were listed for months and the
+    generic check above would have accepted them had somebody added a plausible
+    mapping entry instead of removing the bullet.
+    """
+    from emailcheck.application.admin import AdminControl
+
+    section = Path("docs/operations.md").read_text().split("## 2. Kill switches", 1)[1]
+    bullets = " ".join(kill_switch_bullets()).lower()
+    methods = {name for name in vars(AdminControl) if not name.startswith("_")}
+
+    assert "automatic retr" not in bullets
+    assert "raw evidence" not in bullets
+    assert "run_deletion" not in methods
+    # And the section still explains what those two actually are, so removing
+    # the promise did not remove the operator's answer.
+    assert "MAX_RETRIES" in section and "RetentionSettings" in section

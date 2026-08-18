@@ -11,7 +11,16 @@ Six operations, and no seventh:
 | `block_exchanger` / `unblock_exchanger` | block domain/MX | one target MX |
 | `disable_sender` / `enable_sender` | disable sender identity | one sender identity |
 | `audit_events` | inspect safe audit events | — |
-| `run_deletion` | trigger deletion | raw evidence retention |
+| `record_deletion` | audit a retention sweep | — |
+
+`record_deletion` is the odd one: it is called **by**
+`application/retention.py` after a sweep, not by an operator, and it exists so
+a scheduled deletion appears in the same audit trail as a switch. It is not a
+retention control — what is retained is `RetentionSettings`, read at
+composition — and there is no method named `run_deletion`; `RUN_DELETION` is
+the audit *event kind* that `record_deletion` emits. An earlier version of this
+table listed it as a "raw evidence retention" switch, which
+`docs/operations.md` section 2 now corrects.
 
 **This module holds no transport and publishes no route.** It is called by an
 operator tool; binding it to an HTTP path would put an interface that can
