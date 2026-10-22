@@ -3,6 +3,8 @@
 作業日: 2026-10-22（利用者のAsia/Tokyo基準）。
 対象: marc2825/EmailAddressChecker。開始時のmainは `eea2981`、origin/mainと同じ。
 他のローカルブランチ・タグ・未コミット変更はありませんでした。
+リモート追跡情報もorigin/mainのみでした。GitHub側の最新heads/tagsを読み取る
+`git ls-remote` は認証不足で失敗したため、未取得のリモート参照の有無は未検証です。
 
 ## 到達点
 
@@ -46,7 +48,7 @@ Windowsを含むCIと公開設定の確認前に、公開作業そのものの�
 
 ## 2. 既存実装の再利用
 
-AddressVerificationService、BatchLimits、住所パーサーと正規化/HMAC識別、
+AddressVerificationService、BatchLimits、メールアドレスパーサーと正規化/HMAC識別、
 AdmissionControl、AbuseGuard、RateLimitSettings、QuotaSettings、分類器、
 PublicResultの公開フィールド制限、DNSのTTL/宛先ポリシーを再利用しました。
 既存Active BatchServiceは承認済みJobServiceを前提とするため直接CLIには接続せず、
@@ -110,6 +112,7 @@ Python要件、URL、作者、extras、ライセンスファイル、package dat
 - `python -m build`: sdistおよびそのsdistからのwheel生成成功。
 - `python -m twine check dist/*`: 両成果物成功。
 - wheel/sdist各々をチェックアウト外の新規仮想環境にインストール成功。
+- 最終wheelをuv toolとpipxでも一時領域にインストールし、CLIの0.1.0起動を確認。
 - 通常依存と `phase6,service` extrasの両構成で `pip check`、CLI/module起動、
   importlib.metadataとのバージョン一致、データセット読込、受動構文チェック、
   オフライン展開のスモークテスト成功。
@@ -149,5 +152,6 @@ PyPI/TestPyPIアップロードは実行していません。
 ## 7. Git状態
 
 作業ブランチは `release/0.1.0-preparation`。開始時の変更はゼロでした。
-今回の実装のみをローカルコミットにまとめ、pushせずに保持します。
+実装コミットは `9fa17c4`（Add bounded passive CLI and prepare 0.1.0 distribution）。
+今回の実装のみをローカルコミットにまとめ、pushせずに保持しています。
 最終コミットIDとworking tree状態は作業完了メッセージで報告します。
