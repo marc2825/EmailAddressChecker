@@ -1,6 +1,6 @@
 # ADR 0011: One verification, one recipient, and a limiter that can say no
 
-- Status: Accepted
+- Status: Accepted; domain-only pacing superseded by ADR 0020
 - Date: 2026-08-09
 - Phase: 4E
 
@@ -245,3 +245,10 @@ evidence, because ADR 0010 settled that Phase 2 already reported it as
 - Adding an `AttemptOutcome` member requires deciding whether it stops the loop:
   `_STOPS` is a table and a member absent from it continues, which is the
   permissive answer, so a test asserts every member is accounted for.
+
+## 0.1.0 amendment
+
+ADR 0020 adds independent MX concurrency and token buckets shared across recipient
+domains/accounts, inside one acquisition deadline. Domain settings apply to both.
+Spent state cannot be evicted to replenish a bucket. Temporary replies defer later
+operations; they never replay the touched recipient.

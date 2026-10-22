@@ -195,3 +195,18 @@ Implement and test:
 - deletion failure alerting.
 
 Obtain legal review before commercial or cross-border production use.
+
+## Local passive CLI artifacts (0.1.0)
+
+Local result files omit addresses unless `--include-address` is selected. Row
+numbers refer to the original input; no local job database/checkpoint is created.
+Inputs, generated candidate files and explicitly written outputs are owned and
+retained by the user, outside the service retention scheduler. Deduplication keeps
+only ephemeral keyed digests. Output temporary files are private and cleaned on
+ordinary failure/cancellation; forced process termination can leave a temporary
+file beside the destination. Standard output and shell history have their usual
+local retention. Service account deletion and retention policies remain unchanged.
+The SQLite batch adapter now explicitly enables `secure_delete` on each connection
+so deleted plaintext cells are overwritten independently of SQLite build defaults.
+This does not erase backups, snapshots or already-existing journal/WAL copies and
+does not upgrade logical deletion into a forensic-erasure guarantee.

@@ -1,0 +1,29 @@
+# CLI budget configuration. No credentials or Active authorization settings.
+[batch]
+max_rows = 10000
+max_input_bytes = 4194304
+max_in_flight = 4
+max_in_flight_per_domain = 2
+max_in_flight_per_mx = 4
+
+[rate_limit]
+global_concurrency = 2
+domain_concurrency = 1
+domain_capacity = 1
+domain_refill_seconds = 30.0
+wait_budget_seconds = 10.0
+
+[quota]
+window_seconds = 3600
+per_target = 2
+per_target_domain = 60
+per_target_mx = 60
+daily_total = 2000
+
+# Passive checks spend caller budgets, not SMTP destination budgets.
+[passive_quota]
+window_seconds = 3600
+per_api_key = 10000
+per_account = 10000
+per_target = 5
+daily_total = 20000

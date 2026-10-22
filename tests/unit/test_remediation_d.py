@@ -391,7 +391,6 @@ def test_batch_is_still_reachable_from_no_request_surface() -> None:
 
     for surface in (
         "src/emailcheck/apps/api.py",
-        "src/emailcheck/apps/cli.py",
         "src/emailcheck/apps/schema.py",
         "src/emailcheck/composition.py",
     ):

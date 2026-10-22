@@ -551,21 +551,10 @@ async def test_another_account_cannot_load_an_artifact_from_the_real_store(
 
 
 @asyncio_test
-async def test_the_phase_four_limiter_imposes_no_bound_across_a_shared_exchanger() -> None:
-    """Why MX fairness had to be built rather than inherited. A measurement.
+async def test_the_limiter_bounds_different_domains_on_a_shared_exchanger() -> None:
+    """ADR 0020 adds MX protection; scheduler fairness remains separate."""
+    from emailcheck.domain.rate_limit import RateLimitTimeout
 
-    `docs/architecture.md` records that `InProcessRateLimiter` partitions its
-    state by the recipient **domain** alone: the MX host is carried, validated,
-    and then not used to divide any budget. So two domains behind one provider
-    hold two independent concurrency slots and two independent token buckets,
-    and the limiter is satisfied while the provider takes both.
-
-    That is the difference the prompt's *fair scheduling by target domain and
-    MX* turns on: **a rate bound is not a fairness property**. A per-domain
-    concurrency of one bounds each domain and bounds nothing about the
-    destination they share, which is what leaves the ordering to the scheduler
-    above — and why `FairRotation` groups by exchanger.
-    """
     clock = FakeMonotonicClock()
     limiter = InProcessRateLimiter(
         clock=clock,
@@ -573,16 +562,12 @@ async def test_the_phase_four_limiter_imposes_no_bound_across_a_shared_exchanger
         settings=RateLimitSettings(global_concurrency=8, domain_concurrency=1),
     )
     shared = "mx.shared.test"
-
     async with limiter.acquire(account="acct", domain="a.test", mx_host=shared):
+        with pytest.raises(RateLimitTimeout):
+            async with limiter.acquire(account="acct", domain="b.test", mx_host=shared):
+                raise AssertionError("shared MX capacity bypassed")
         assert limiter.active_leases == 1
-        # Same destination, different domain: admitted immediately.
-        async with limiter.acquire(account="acct", domain="b.test", mx_host=shared):
-            assert limiter.active_leases == 2
-            async with limiter.acquire(account="acct", domain="c.test", mx_host=shared):
-                # Three concurrent leases on one exchanger, and every per-domain
-                # bound is satisfied. The limiter has no opinion about the MX.
-                assert limiter.active_leases == 3
+    assert limiter.active_leases == 0
 
 
 def store_ids(store: SQLiteBatchStore) -> set[str]:

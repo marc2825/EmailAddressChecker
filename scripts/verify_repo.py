@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMANDS = [
     [sys.executable, "-m", "pytest"],
     [sys.executable, "-m", "ruff", "check", "."],
+    [sys.executable, "-m", "ruff", "format", "--check", "."],
     [sys.executable, "-m", "mypy", "src"],
     [sys.executable, "scripts/check_forbidden_smtp.py"],
     [sys.executable, "-m", "emailcheck", "--version"],

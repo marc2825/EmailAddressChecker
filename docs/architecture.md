@@ -368,11 +368,11 @@ refill is clamped after the addition so no amount of idling widens a burst, and
 `MonotonicClock` and waiting from `Sleeper`, so pacing is measurable in a test
 without waiting for it.
 
-**The budget Phase 4 enforces is per recipient domain, and only that.**
-`RateLimiter.acquire` takes an account, the recipient's domain, and the MX host;
-`rate_limit_key` canonicalizes and validates all three, and the limiter then
-partitions its state by the **domain alone**. The account and the MX host are
-carried and checked but do not divide any budget today.
+**Pacing is per recipient domain and per MX host, shared across accounts.**
+ADR 0020 adds the MX bucket and concurrency bound. `RateLimiter.acquire` validates
+all key components and acquires global, domain and MX budgets within one wait
+deadline. The domain settings apply equally to the MX. Per-account volume is
+separately enforced by the authenticated AbuseGuard.
 
 Saying so precisely matters. `docs/requirements.md` section 15 requires
 per-account budgets for the service-active profile, and Phase 4 does **not**
@@ -869,11 +869,10 @@ below the layer that decides what to schedule and after the decision has been
 made.
 
 That seam exists because **a rate bound is not a fairness property**. The
-Phase 4 limiter partitions by recipient domain alone; the MX host is carried and
-validated and divides no budget. So twenty domains behind one provider hold
-twenty independent concurrency slots and twenty independent buckets, every
-per-domain rule satisfied, while that provider takes every worker. A test
-measures exactly that, so the claim is not a reading of the code.
+Phase 4 originally limited recipient domains only. ADR 0020 additionally
+limits MX hosts across domains. FairRotation still controls ordering and fairness;
+rate bounds alone do not provide fair scheduling. The scheduling key describes
+the first eligible exchanger, while pacing applies to every actual attempt.
 
 **Resumability is persistence on both sides, not memory.**
 `ports/batch_store.py` keeps row state, the child `JobId`, and a deterministic
@@ -1200,3 +1199,12 @@ for an import of `application/` rather than checking the one module that was
 wrong. **This is not a claim that the whole graph is a perfect DAG**: it is the
 one rule that is asserted, and other layering exceptions elsewhere are not
 covered by it.
+
+## Local passive CLI and distribution (0.1.0)
+
+ADR 0020 adds offline expansion and a separate streaming passive CLI orchestrator.
+The Active `BatchService` described above remains uncomposed; its authorization,
+job persistence, API isolation and retention requirements are unchanged.
+`apps/commands.py` builds one local-passive stack and uses `passive_rows` to reuse
+its verifier, admission, quota guard, public projection and bounded DNS cache.
+The generator has no network dependency. See [ADR 0020](adr/0020-local-batch-and-release.md).

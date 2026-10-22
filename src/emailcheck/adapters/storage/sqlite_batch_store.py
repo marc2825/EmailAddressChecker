@@ -103,6 +103,7 @@ CREATE INDEX IF NOT EXISTS batches_owner ON batches (account, expires_at);
 #: holds account-owned rows carries. Shared with the job and verdict stores
 #: rather than reimplemented: one fencing model, one place it can be wrong.
 _SCHEMA: Final = _TABLES + FENCE_SCHEMA
+_SECURE_DELETE: Final = "PRAGMA secure_delete = ON"
 
 #: **The atomic scheduling claim.** Conditional on the row still being
 #: schedulable, so two replicas racing for one row produce exactly one winner —
@@ -349,6 +350,8 @@ class SQLiteBatchStore:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, isolation_level="DEFERRED")
         with closing(connection), connection:
+            # The default varies by SQLite build. Plaintext removal must not.
+            connection.execute(_SECURE_DELETE)
             yield connection
 
     def _fence(self, account: str, generation: int) -> int:

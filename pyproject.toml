@@ -3,12 +3,27 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "emailcheck"
-version = "0.0.0"
+name = "email-address-checker"
+dynamic = ["version"]
 description = "Conservative evidence-based email deliverability checker"
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{ name = "Project maintainers" }]
+authors = [{ name = "marc2825" }]
+maintainers = [{ name = "marc2825" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["email", "deliverability", "dns", "validation", "cli"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Communications :: Email",
+]
 # ADR 0005: the standard library is not sufficient for domain encoding.
 # ADR 0006: resolving MX is core service behavior, not an optional extra.
 dependencies = [
@@ -17,10 +32,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+release = ["build>=1.2,<2", "twine>=6,<8", "pip-audit>=2.9,<3"]
 dev = [
   "mypy>=1.15,<2",
-  "pytest>=8.3,<9",
-  "pytest-asyncio>=0.25,<1",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.3,<2",
   "pytest-cov>=6,<7",
   "ruff>=0.11,<1",
 ]
@@ -40,6 +56,18 @@ service = [
 
 [project.scripts]
 emailcheck = "emailcheck.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/marc2825/EmailAddressChecker"
+Repository = "https://github.com/marc2825/EmailAddressChecker"
+Issues = "https://github.com/marc2825/EmailAddressChecker/issues"
+Changelog = "https://github.com/marc2825/EmailAddressChecker/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/emailcheck/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/scripts", "/docs", "/config", "/README.md", "/CHANGELOG.md", "/LICENSE", "/SECURITY.md", "/CONTRIBUTING.md", "/STATUS.md", "/Makefile"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/emailcheck"]

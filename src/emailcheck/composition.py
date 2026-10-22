@@ -59,6 +59,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from emailcheck.adapters.auth.api_keys import StaticApiKeyAuthenticator, build_authenticator
+from emailcheck.adapters.dns.cached_resolver import CachedDNSResolver
 from emailcheck.adapters.dns.dnspython_resolver import DNSPythonResolver
 from emailcheck.adapters.execution.memory_executor import ExecutorSettings, InMemoryJobExecutor
 from emailcheck.adapters.observability.logging_sink import LoggingOperatorSink
@@ -152,6 +153,8 @@ class Deployment:
     jobs: JobSettings = field(default_factory=JobSettings)
     #: Phase 7's layered budgets. `prompts/07-hardening.md`.
     quotas: QuotaSettings = field(default_factory=QuotaSettings)
+    passive_quotas: QuotaSettings | None = None
+    worker_processes: int = 1
     #: How long finished records live. Deliberately separate from the verdict
     #: TTLs ADR 0015 fixed: one is a freshness rule, the other a privacy one.
     retention: RetentionSettings = field(default_factory=RetentionSettings)
@@ -211,6 +214,8 @@ class Deployment:
 
     def __post_init__(self) -> None:
         check_correlation_key(self.correlation_key)
+        if type(self.worker_processes) is not int or self.worker_processes != 1:
+            raise ValueError("in-process budgets require exactly one worker process")
         if self.active_probing and self.sender_identity is None:
             # `adapters/smtp/sender_identity.py` refuses to invent an EHLO name,
             # so a deployment that would probe without one must fail at start
@@ -456,7 +461,22 @@ def build_verification_stack(
         correlation_key=deployment.correlation_key,
     )
 
-    routes = MailRouteService(resolver=DNSPythonResolver(), clock=clock)
+    passive_guard = guard
+    if deployment.passive_quotas is not None:
+        passive_guard = AbuseGuard(
+            quota=InProcessQuotaStore(),
+            clock=clock,
+            metrics=metrics,
+            operator=sink,
+            correlation_key=deployment.correlation_key,
+            settings=deployment.passive_quotas,
+            state=deployment.admin_state,
+            common_names=deployment.common_names,
+        )
+    routes = MailRouteService(
+        resolver=CachedDNSResolver(DNSPythonResolver(), clock),
+        clock=clock,
+    )
     passive = PassiveClassifier(datasets=deployment.passive_datasets, clock=clock)
     syntax = SyntaxEvidenceProducer(clock=clock)
 
@@ -479,6 +499,7 @@ def build_verification_stack(
         store.bind_authority(authority)
 
     verification = AddressVerificationService(
+        passive_guard=passive_guard,
         syntax=syntax,
         routes=routes,
         passive=passive,
@@ -692,6 +713,7 @@ def _build_smtp(
         transport=AsyncioSMTPTransport(),
         identity_provider=ConfiguredSenderIdentityProvider(identity=identity),
         rate_limiter=limiter,
+        on_temporary_reply=limiter.defer,
         clock=monotonic,
     )
     return SMTPVerificationService(probe=probe, clock=clock)

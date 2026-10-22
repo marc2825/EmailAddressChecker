@@ -50,6 +50,7 @@ attempts; a `probe` call here is exactly one dialogue.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from emailcheck.application.smtp_connect import (
@@ -113,6 +114,7 @@ class SMTPProbeService:
     rate_limiter: RateLimiter
     clock: MonotonicClock
     settings: DialogueSettings = field(default_factory=DialogueSettings)
+    on_temporary_reply: Callable[[str, str], None] | None = None
 
     async def probe(
         self,
@@ -156,7 +158,11 @@ class SMTPProbeService:
                     elapsed_milliseconds=self._elapsed(deadline),
                 )
 
-            return await self._speak(opened, target, deadline)
+            report = await self._speak(opened, target, deadline)
+            code = report.observation.basic_code
+            if code is not None and 400 <= code < 500 and self.on_temporary_reply is not None:
+                self.on_temporary_reply(target.domain.ascii_form, candidate.host.value)
+            return report
 
     async def _reach(
         self,

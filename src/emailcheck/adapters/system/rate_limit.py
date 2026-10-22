@@ -22,14 +22,11 @@ That leaves the wait itself needing a bound of its own, and
 `RateLimitSettings.wait_budget_seconds` is it. Exceeding it raises
 `RateLimitTimeout`, which is not an SMTP outcome and never becomes one.
 
-**The budget partitions on the recipient domain, and nothing else.** `acquire`
+**Budgets partition independently on recipient domain and MX host.** `acquire`
 takes an account, a domain, and an MX host; all three are canonicalized and
-validated, and `_enter` then claims state by the **domain alone**. The account
-and the MX host divide no budget today — per-account isolation needs an
-authenticated principal, which is Phase 6, and partitioning on a caller-supplied
-string would be isolation in appearance only. `plans/phase-04-smtp.md` carries
-that as a stop condition, and the documents say what is implemented rather than
-what `acquire` happens to accept.
+validated, and `_enter` claims separate domain and MX state. Both budgets
+are shared across accounts; one provider cannot gain extra capacity merely by
+hosting more recipient domains. Account-specific volume is AbuseGuard's concern.
 
 **No branch anywhere reads a host name.** Every key component is an opaque
 canonical string. A limiter that gave one provider a different quota would be a
@@ -72,6 +69,7 @@ class _DomainState:
     active: int = 0
     waiters: int = 0
     touched_at: float = 0.0
+    blocked_until: float = 0.0
 
     @property
     def is_idle(self) -> bool:
@@ -92,6 +90,7 @@ class InProcessRateLimiter:
     sleeper: Sleeper
     settings: RateLimitSettings = field(default_factory=RateLimitSettings)
     _domains: OrderedDict[str, _DomainState] = field(default_factory=OrderedDict)
+    _mx_domains: OrderedDict[str, _DomainState] = field(default_factory=OrderedDict)
     _active: int = 0
     #: Replaced rather than cleared on every release, so a waiter that has
     #: already taken a reference cannot miss the signal it is waiting for.
@@ -120,57 +119,72 @@ class InProcessRateLimiter:
 
     # --- acquiring ----------------------------------------------------------
 
-    async def _enter(self, key: RateLimitKey) -> _DomainState:
-        """Acquire all three budgets, or leave nothing held.
-
-        The deadline is computed once, from the monotonic clock, and every wait
-        below shares it: the budget bounds the whole acquisition rather than
-        each step, so three steps cannot cost three budgets.
-        """
+    async def _enter(self, key: RateLimitKey) -> tuple[_DomainState, _DomainState]:
         deadline = self.clock.monotonic() + self.settings.wait_budget_seconds
-        state = self._claim(key.domain)
+        domain = self._claim(key.domain)
+        try:
+            mx = self._claim(key.mx_host, mx=True)
+        except BaseException:
+            domain.waiters -= 1
+            raise
+        states = (domain, mx)
+        held: list[_DomainState] = []
         holds_global = False
-        holds_domain = False
         try:
             await self._wait_until(
                 lambda: self._active < self.settings.global_concurrency, deadline, "the service"
             )
             self._active += 1
             holds_global = True
+            for state in states:
 
-            await self._wait_until(
-                lambda: state.active < self.settings.domain_concurrency, deadline, "the domain"
-            )
-            state.active += 1
-            holds_domain = True
+                def available(state: _DomainState = state) -> bool:
+                    return state.active < self.settings.domain_concurrency
 
-            await self._wait_for_token(state, deadline)
+                await self._wait_until(
+                    available,
+                    deadline,
+                    "the domain" if state is domain else "the exchanger",
+                )
+                state.active += 1
+                held.append(state)
+                await self._wait_for_token(state, deadline)
         except BaseException:
-            # A refusal, a cancellation, and a bug all unwind the same way. Not
-            # `except Exception`: a cancelled caller that kept a concurrency
-            # slot would remove capacity permanently, and `CancelledError` does
-            # not derive from `Exception`.
-            if holds_domain:
+            for state in held:
                 state.active -= 1
             if holds_global:
                 self._active -= 1
             self._signal()
             raise
         finally:
-            state.waiters -= 1
-            state.touched_at = self.clock.monotonic()
-        return state
+            for state in states:
+                state.waiters -= 1
+                state.touched_at = self.clock.monotonic()
+        return states
 
-    def _exit(self, state: _DomainState) -> None:
-        """Release both concurrency slots. The token is spent, not returned."""
-        state.active -= 1
+    def _exit(self, states: tuple[_DomainState, _DomainState]) -> None:
+        for state in states:
+            state.active -= 1
+            state.touched_at = self.clock.monotonic()
+            if state.active < 0:
+                raise RateLimitError("a destination slot was released more than once")
         self._active -= 1
-        state.touched_at = self.clock.monotonic()
-        if state.active < 0 or self._active < 0:
-            # Only reachable by releasing twice, which `_Lease` prevents. A
-            # negative count is a permanent capacity leak in the other
-            # direction, so it fails loudly rather than being clamped.
-            raise RateLimitError("a rate-limit slot was released more times than it was taken")
+        if self._active < 0:
+            raise RateLimitError("a rate-limit slot was released more than once")
+        self._signal()
+
+    def defer(self, domain: str, mx_host: str) -> None:
+        """Back off future operations for at least 60s after a temporary reply.
+
+        This schedules no retry and never permits another recipient touch.
+        Both keys are canonicalized and no mailbox is retained.
+        """
+        key = rate_limit_key(account="pacing", domain=domain, mx_host=mx_host)
+        now = self.clock.monotonic()
+        for name, is_mx in ((key.domain, False), (key.mx_host, True)):
+            state = self._claim(name, mx=is_mx)
+            state.waiters -= 1
+            state.blocked_until = max(state.blocked_until, now + 60.0)
         self._signal()
 
     async def _wait_until(self, permitted: Callable[[], bool], deadline: float, scope: str) -> None:
@@ -191,10 +205,10 @@ class InProcessRateLimiter:
         while True:
             now = self.clock.monotonic()
             state.bucket = state.bucket.refilled(now)
-            if state.bucket.has_token:
+            if state.bucket.has_token and now >= state.blocked_until:
                 state.bucket = state.bucket.take()
                 return
-            delay = state.bucket.seconds_until_token()
+            delay = max(state.bucket.seconds_until_token(), state.blocked_until - now)
             if now + delay > deadline:
                 # Refusing before sleeping matters: waiting out a budget that
                 # cannot possibly be met holds a global concurrency slot for
@@ -231,7 +245,7 @@ class InProcessRateLimiter:
 
     # --- per-domain state, and its bound ------------------------------------
 
-    def _claim(self, domain: str) -> _DomainState:
+    def _claim(self, domain: str, *, mx: bool = False) -> _DomainState:
         """The state for one domain, registering interest in it immediately.
 
         Registering before waiting is what makes eviction safe: from here until
@@ -243,18 +257,24 @@ class InProcessRateLimiter:
         entry, and the new entry is protected by the interest registered above.
         """
         now = self.clock.monotonic()
-        state = self._domains.get(domain)
+        table = self._mx_domains if mx else self._domains
+        state = table.get(domain)
         if state is None:
             state = _DomainState(bucket=new_bucket(self.settings, now), touched_at=now)
-            self._domains[domain] = state
+            table[domain] = state
         else:
-            self._domains.move_to_end(domain)
+            table.move_to_end(domain)
         state.waiters += 1
         state.touched_at = now
-        self._evict(now)
+        self._evict(now, table)
+        if len(table) > self.settings.max_tracked_domains:
+            state.waiters -= 1
+            if state.is_idle and state.bucket.refilled(now).tokens == state.bucket.capacity:
+                table.pop(domain, None)
+            raise RateLimitTimeout("destination state capacity")
         return state
 
-    def _evict(self, now: float) -> None:
+    def _evict(self, now: float, table: OrderedDict[str, _DomainState] | None = None) -> None:
         """Keep the per-domain table bounded, and never drop one in use.
 
         Two rules, and the order matters. Anything idle for longer than the TTL
@@ -283,36 +303,37 @@ class InProcessRateLimiter:
         a caller registers interest in it, so a TTL shorter than a session is a
         legal configuration that changes nothing about a held entry.
 
-        The bound is `max_tracked_domains` plus whatever is in flight. In-flight
-        entries are bounded by the concurrency of the *calling* code rather than
-        by this table — `_claim` runs before global admission, so a waiter holds
-        an entry before it holds a slot — and bounding that is Phase 6 admission
-        control, recorded as a stop condition in `plans/phase-04-smtp.md`. The
-        attack this table closes is the other one: a caller supplying an
-        unbounded number of *different* domains over time, which would otherwise
-        grow it forever.
-
-        Evicting an **idle** domain forgets its bucket, which returns it to full.
-        That is deliberate and safe: an entry idle beyond the TTL has had far
-        longer than `capacity * refill_seconds` to refill anyway, so nothing is
-        given away by forgetting it.
+        Each table is capped at max_tracked_domains. A full table refuses new
+        destinations if it cannot safely reclaim an idle, fully refilled entry.
+        Spent tokens and active cooldowns survive both TTL and LRU pressure.
         """
+        if table is None:
+            table = self._domains
         expired = [
             domain
-            for domain, state in self._domains.items()
-            if state.is_idle and now - state.touched_at > self.settings.idle_ttl_seconds
+            for domain, state in table.items()
+            if state.is_idle
+            and now >= state.blocked_until
+            and state.bucket.refilled(now).tokens == state.bucket.capacity
+            and now - state.touched_at > self.settings.idle_ttl_seconds
         ]
         for domain in expired:
-            del self._domains[domain]
+            del table[domain]
 
-        if len(self._domains) <= self.settings.max_tracked_domains:
+        if len(table) <= self.settings.max_tracked_domains:
             return
-        over = len(self._domains) - self.settings.max_tracked_domains
+        over = len(table) - self.settings.max_tracked_domains
         # `OrderedDict` keeps insertion and `move_to_end` order, so iterating
         # forward is least-recently-used first.
-        removable = [domain for domain, state in self._domains.items() if state.is_idle]
+        removable = [
+            domain
+            for domain, state in table.items()
+            if state.is_idle
+            and now >= state.blocked_until
+            and state.bucket.refilled(now).tokens == state.bucket.capacity
+        ]
         for domain in removable[:over]:
-            del self._domains[domain]
+            del table[domain]
 
 
 @dataclass(slots=True)
@@ -327,7 +348,7 @@ class _Lease:
 
     limiter: InProcessRateLimiter
     key: RateLimitKey
-    _state: _DomainState | None = None
+    _state: tuple[_DomainState, _DomainState] | None = None
     _entered: bool = False
 
     async def __aenter__(self) -> None:

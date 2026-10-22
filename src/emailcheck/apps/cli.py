@@ -88,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Estimate whether one address is currently deliverable, without "
             "transmitting any message content. A local check performs no SMTP."
         ),
+        epilog="Commands: check ADDRESS..., batch FILE, expand PATTERN, config show.",
     )
     parser.add_argument("address", nargs="?", help="the address to check; omitted prints this help")
     parser.add_argument("--version", action="store_true", help="print the package version")
@@ -105,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the aggregation ruleset, dataset versions, and HMAC canonicalization",
     )
     parser.add_argument("--json", action="store_true", help="print the public result as JSON")
+    parser.add_argument("--config", type=Path, help="TOML budgets for a local check")
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -129,6 +131,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    actual = list(sys.argv[1:] if argv is None else argv)
+    if actual and actual[0] in {"check", "batch", "expand", "config"}:
+        from emailcheck.apps.commands import run
+
+        return run(actual)
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.version:
@@ -142,6 +149,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return EXIT_OK
     if arguments.remote is not None:
+        if arguments.config is not None:
+            print(
+                "emailcheck: --config is local; remote budgets belong to the server",
+                file=sys.stderr,
+            )
+            return EXIT_INVALID_INPUT
         prepared = _prepare_remote(arguments)
         if isinstance(prepared, int):
             return prepared
@@ -233,7 +246,14 @@ def _print_version_report(arguments: argparse.Namespace) -> int:
 
 
 async def _run_local(arguments: argparse.Namespace) -> int:
-    stack = build_verification_stack(_local_deployment())
+    from emailcheck.settings import load_settings
+
+    try:
+        deployment = load_settings(arguments.config).apply(_local_deployment())
+    except ValueError:
+        print("emailcheck: invalid configuration", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    stack = build_verification_stack(deployment)
     principal = stack.authenticator.authenticate(_LOCAL_KEY)
     if principal is None:  # pragma: no cover - the key is built beside the account
         print("emailcheck: the local profile is misconfigured", file=sys.stderr)

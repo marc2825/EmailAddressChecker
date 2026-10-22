@@ -403,7 +403,7 @@ def test_the_documented_budget_is_per_recipient_domain(document: Path) -> None:
         assert overclaim not in flat, f"{document.name} claims a three-part budget key"
 
 
-def test_the_limiter_partitions_on_the_domain_alone() -> None:
+def test_the_limiter_partitions_on_domain_and_mx() -> None:
     """The documentation above is checked against the code, not only itself."""
     import ast
     import inspect
@@ -419,14 +419,8 @@ def test_the_limiter_partitions_on_the_domain_alone() -> None:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "_claim"
     ]
-    assert len(claims) == 1, "the limiter claims state somewhere unexpected"
-    (claim,) = claims
-    (argument,) = claim.args
-    assert isinstance(argument, ast.Attribute)
-    assert argument.attr == "domain", (
-        "the limiter partitions its state by something other than the domain; "
-        "the documentation says the domain alone"
-    )
+    assert len(claims) == 2
+    assert {claim.args[0].attr for claim in claims} == {"domain", "mx_host"}
 
 
 # --- the documented worst case includes the rate-limit waits ----------------

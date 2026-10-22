@@ -47,3 +47,14 @@ a clean dashboard.
 - [docs/readiness-checklist.md](docs/readiness-checklist.md) — the gates.
 - [docs/operations.md](docs/operations.md) — operator controls and runbooks.
 - [SECURITY.md](SECURITY.md) — reporting and responsible use.
+
+## 0.1.0 distribution preparation
+
+Offline expansion and a separate local passive batch CLI are implemented.
+The Active BatchService remains gated and absent from public CLI/API surfaces.
+TOML budgets, bounded DNS reuse, MX pacing and temporary-response backoff are
+included. Packaging uses `email-address-checker`, retaining `emailcheck` imports
+and commands. See [release instructions](docs/releasing.md) and the local
+[release report](docs/release-report.md) for validation evidence and remaining work.
+No PyPI/TestPyPI upload, push, GitHub Release or Active operation approval has
+been performed by this implementation work.

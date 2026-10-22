@@ -41,7 +41,22 @@ class InMemoryDNSCache[T]:
     """
 
     clock: Clock
+    max_entries: int = 4096
     _entries: dict[DNSCacheKey, CacheEntry[T]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if type(self.max_entries) is not int or not 1 <= self.max_entries <= 100_000:
+            raise ValueError("DNS cache size must be 1..100000")
+
+    def remaining_ttl(self, key: DNSCacheKey) -> TTL | None:
+        entry = self._entries.get(self._checked(key))
+        if entry is None or not entry.is_fresh(self.clock.now()):
+            return None
+        return TTL(
+            authoritative_seconds=entry.ttl.authoritative_seconds,
+            applied_seconds=max(0, int((entry.expires_at - self.clock.now()).total_seconds())),
+            positive=entry.ttl.positive,
+        )
 
     @staticmethod
     def _checked(key: DNSCacheKey) -> DNSCacheKey:
@@ -69,6 +84,8 @@ class InMemoryDNSCache[T]:
             self._entries.pop(key, None)
             return
         now = self.clock.now()
+        if key not in self._entries and len(self._entries) >= self.max_entries:
+            self._entries.pop(next(iter(self._entries)))
         self._entries[key] = CacheEntry(
             value=value,
             ttl=ttl,

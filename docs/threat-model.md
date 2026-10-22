@@ -140,12 +140,9 @@ Controls:
   cannot construct it. `acquire` is given an account, the recipient's domain, and
   the MX host — never the local part — and `rate_limit_key` refuses an `@` in any
   component rather than trusting the caller, so no component can be a mailbox.
-  **The budget Phase 4 enforces partitions on the domain alone**: the account and
-  the MX host are validated and carried but divide nothing yet. Per-account
-  isolation waits for an authenticated principal in Phase 6, because a
-  caller-supplied account string used as a partition is bypassed by sending a
-  different string — and refusing an `@` is a shape check, not a provenance
-  guarantee;
+  **The pacing budgets partition separately on domain and MX** (ADR 0020),
+  across accounts. Account-specific volume requires the authenticated principal
+  used by AbuseGuard; a caller-supplied account string grants no extra capacity;
 - **bound how many endpoints one request may reach.** A `MailRoute`'s length is
   whatever a DNS answer says, so `plan_attempts` caps the plan and de-duplicates
   it on `(MX host, address, port)` before anything connects. Without the cap, one

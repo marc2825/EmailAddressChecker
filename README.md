@@ -1,128 +1,265 @@
 # EmailAddressChecker
 
-A conservative email deliverability verifier.
+Conservative, evidence-based email deliverability estimates for Python 3.12+.
+**An estimate is not proof that a mailbox exists.** Local checks use syntax,
+DNS/MX and versioned classification data; they never connect to SMTP servers.
+Candidate expansion works completely offline.
 
-**It estimates deliverability. It does not prove that a mailbox exists.**
+Distribution: `email-address-checker`; Python import and command: `emailcheck`.
+Version 0.1.0 is prepared for a first release; **it has not been uploaded to PyPI**.
+See [日本語ガイド](docs/usage-ja.md) and [release instructions](docs/releasing.md).
 
-That distinction is the point of the project. An SMTP server accepting a
-recipient tells you the server accepted a recipient — not that a person reads
-mail there, not that a later message will arrive. Many tools quietly round that
-up. This one refuses to, and the refusal is enforced by tests rather than by
-good intentions.
+## Install
 
-## What it does
+After publication:
 
-- **Syntax validation** — RFC-shaped parsing with IDNA/Unicode handling, without
-  silently broadening what it accepts.
-- **DNS and MX analysis** — MX resolution with TTL policy, address lookup, and
-  explicit Null MX (`.`) handling.
-- **Passive classification** — disposable, free-mail, role-account, and provider
-  patterns from versioned local datasets, with content-derived cache identity so
-  a dataset edit cannot serve a stale verdict.
-- **Restricted SMTP evidence** — an optional active check that stops at the
-  `RCPT` stage and never transmits message content.
-- **Conservative aggregation** — structured evidence folded into one published
-  status, with ambiguity resolving downward.
-- **Risk flags** — reported separately from deliverability, never mixed into it.
-- **CLI** — `emailcheck`, which performs no SMTP for a local check.
+```bash
+python -m pip install email-address-checker
+uv tool install email-address-checker
+pipx install email-address-checker
+```
 
-Two subsystems exist in the codebase but are **not** ordinary public features.
-The accept-all experiment is optional, disabled by default, and gated behind
-operator authorization, a separate budget, and a separate cache. The batch
-subsystem is deliberately not composed into the shipped stack and is reachable
-from no request surface.
+Until then, install a locally built wheel (no checkout needed at runtime):
 
-## Verdicts
+```bash
+python -m pip install dist/email_address_checker-0.1.0-py3-none-any.whl
+uv tool install ./dist/email_address_checker-0.1.0-py3-none-any.whl
+pipx install ./dist/email_address_checker-0.1.0-py3-none-any.whl
+```
 
-Four published statuses, and no fifth:
+For development: `python -m pip install -e '.[dev,release]'` in a virtual
+environment. Optional extras `phase6` (HTTP/CLI framework integrations) and
+`service` (future service adapters) retain their existing names. Installing
+extras does not start or authorize a service. Windows and Linux are CI targets;
+Python 3.12, 3.13 and 3.14 have CI jobs. See the release report for tests actually run.
+
+## Checks and output
+
+```bash
+emailcheck user@example.com --json             # original interface retained
+emailcheck check user@example.com
+emailcheck check a@example.com b@example.org --output results.json
+emailcheck batch input.csv --output result.csv
+emailcheck batch addresses.txt --format txt --output results.json
+emailcheck batch input.csv --mode passive --progress --duplicates skip
+python -m emailcheck --version
+```
+
+CSV is UTF-8 (optional BOM), with one unique `email` header; additional uniquely
+named columns are ignored. TXT has one address per line. No trimming or comment
+syntax is applied to addresses. Blank TXT lines are checked as empty inputs.
+Malformed CSV rows with the wrong column count are `rejected` while other rows
+continue. Unrecoverable CSV quoting/encoding errors or file/row limit violations
+abort the command. A preflight pass checks the entire input before DNS starts.
+
+`check` and `batch` stream a JSON array by default. `--output-format csv` selects
+CSV; a `.csv` output filename also selects it. Both formats preserve input order.
+The legacy single-address JSON shape is unchanged; new commands add operational
+metadata around the same public verdict fields. For example:
+
+```bash
+emailcheck check bad --output-format json
+emailcheck check bad --output-format csv
+```
+
+The JSON result includes these fields (abbreviated):
+
+```json
+[{"row":1,"state":"completed","status":"invalid","confidence":"high",
+  "primary_reason":"invalid_syntax","reasons":["invalid_syntax"],
+  "risk_flags":[],"checks":{"syntax":{"result":"invalid_syntax"}},
+  "smtp_executed":false,"dns_cache_used":false,"verdict_cache_used":false}]
+```
+
+CSV carries the same columns; lists/maps are JSON inside quoted CSV cells.
+Results also include `ruleset` and `dataset_versions`. `confidence` is categorical,
+not a calibrated probability. No SMTP transcript or raw evidence detail is exposed.
 
 | Status | Meaning |
 |---|---|
-| `likely_deliverable` | Evidence supports delivery being likely. Not proof of a mailbox. |
-| `invalid` | Authoritative evidence that the address cannot receive mail. |
-| `temporary_unknown` | A transient condition prevented a conclusion. Ask again later. |
-| `unknown` | Evidence was absent or ambiguous. |
+| `likely_deliverable` | Evidence supports likely delivery, not mailbox existence. |
+| `invalid` | Authoritative negative evidence, including invalid syntax. |
+| `temporary_unknown` | A transient condition prevents a conclusion. |
+| `unknown` | Evidence is absent, ambiguous or syntax is unsupported. |
 
-Risk flags — disposable, role account, accept-all suspected, domain
-configuration anomaly, and others — are carried **separately** from status. A
-flag never upgrades or downgrades the verdict on its own.
+A DNS/MX result for Gmail says nothing about whether a particular Gmail mailbox
+exists. A bare SMTP `250` is also not existence proof. Risk flags remain separate
+from deliverability. See [status model](docs/status-model.md).
 
-Two consequences worth stating plainly:
+Operational `state` is separate: `completed`, `duplicate`, `rejected`, `refused`,
+or `failed`. A refused/failed row has **no fabricated status**. Processing errors
+carry fixed categories, never the exception text. Exit codes: 0 completed
+(including negative verdicts), 2 input/configuration/output error, 3 row processing
+refusals/failures, 130 interruption. Legacy remote exit codes remain unchanged.
 
-- **A bare `250` is not mailbox-existence proof.** Many servers accept every
-  recipient.
-- **An ambiguous permanent failure is not automatically `invalid`.** A bare
-  `550` becomes `unknown`; only an authoritative enhanced status code such as
-  `5.1.1` supports `invalid`.
+### Duplicates, limits and cancellation
 
-See [docs/status-model.md](docs/status-model.md) for the full mapping.
+- `--duplicates keep` (default) checks every row and spends its ordinary quota.
+  `--duplicates skip` emits a `duplicate` row with `duplicate_of` referencing the
+  first row. It does not copy an earlier verdict or charge for skipped rows.
+  Dedup uses the existing normalized address identity, preserving local-part case.
+- Default limits: 10,000 rows, 4 MiB input and 8 in-flight rows. Hard ceilings:
+  50,000 rows, 8 MiB and 64 in-flight rows. Results are buffered only for one
+  bounded window. Digests for deduplication are bounded by the row limit.
+- Ctrl-C cancels and joins outstanding local tasks. Files are written to a private
+  temporary file in the destination directory, flushed and replaced only on
+  success. Existing outputs survive errors/cancellation. A forced process kill
+  may leave a private `.emailcheck-*` temporary file: remove it after review.
+- Standard output is a stream and may be partial on interruption. Prefer
+  `--output` for an atomic artifact. `--progress` writes counts only to stderr.
+- `--start-row N` starts a **new passive run** from that logical input row (CSV
+  header excluded), retaining original row numbers and earlier duplicate identity.
+  It does not append/merge outputs or restore prior DNS results. Local runs have
+  no durable checkpoint. The separately gated Active BatchService retains its
+  existing persistent resume/cancel/deletion behavior.
 
-## Safety model
-
-- **Active probing is not authorized by default.** It must be explicitly
-  configured *and* explicitly authorized, and publishing this source authorizes
-  nothing.
-- **TLS is required** for active SMTP under the current policy.
-- **At most one recipient touch per ordinary verification operation** — in
-  total, across MX fallback, temporary replies, lost replies, partial writes,
-  retries, and restarts.
-- **No recipient-stage replay.** A retry is available only to an attempt that
-  provably did not reach the recipient.
-- **No `DATA`, no `AUTH`, no `VRFY`, no `EXPN`**, and no message content of any
-  kind. A repository check enforces this against the source.
-- **Unsafe destinations are rejected** — private and reserved ranges, with the
-  selected IP and the actual peer both validated.
-- **Operator controls** — a global kill switch, account and key suspension, and
-  domain and exchanger blocks, each audited.
-- **Per-deployment readiness** is required before any external beta.
-
-## Installation
-
-Python 3.12 or newer. There is no published package or container image; install
-from a checkout:
+## Offline wildcard generation
 
 ```bash
-git clone https://github.com/marc2825/EmailAddressChecker.git
-cd EmailAddressChecker
-python -m venv .venv && source .venv/bin/activate
-python -m pip install -e .
+emailcheck expand 'm**rc@gmail.com' --charset lower --dry-run
+# {"candidate_count_upper_bound": 676, "max_candidates": 10000}
+emailcheck expand 'm**rc@gmail.com' --chars abc --output candidates.csv
+emailcheck expand 'm**rc@example.com' --slot '["a","b"]' --slot '["0","1"]'
+emailcheck expand 'm*rc@example.com' --candidate a --candidate ab --candidate abc
+emailcheck expand 'm*rc@example.com' --candidates-file tokens.txt
+emailcheck expand 'm**rc@example.com' --slot-file first.txt --slot-file second.txt
+emailcheck batch candidates.csv --mode passive --output results.csv
 ```
 
-## Quick start
+Each unescaped `*` in the local part independently chooses one token. Output is
+in Cartesian-product order, with the rightmost slot changing fastest. Presets:
+`lower` = a–z, `upper` = A–Z, `digits` = 0–9, `alnum` = a–z, A–Z, then 0–9.
+`--chars` splits a string into individual characters; repeated `--candidate`
+options supply whole strings. `--slot` is one JSON array per star. Global choices
+and position-specific choices cannot be mixed.
 
-A local check is passive. It performs **no SMTP** and contacts no mail server:
+UTF-8 token files contain one literal token per line; blank lines represent an
+empty token and an empty file is rejected. A final newline adds no extra token.
+No comments or escapes are interpreted in files. `--candidate ''` or a JSON
+`""` explicitly removes a star. Each token is at most 64 characters; a pool has
+at most 10,000 input entries and 1 MiB of UTF-8 content. Patterns are at most
+254 characters. Domain wildcards, control characters, `@` and backslashes in
+tokens are rejected. In patterns `\*` means a literal star; only `\*` and `\\`
+escapes are recognized. The existing parser then validates generated addresses.
+Unicode domains use existing IDNA rules; Unicode local parts (SMTPUTF8) remain
+unsupported and are refused for expansion. Normal checks report them as `unknown`.
+
+Duplicates in a pool are removed in first-seen order. Concatenation collisions
+are suppressed during generation. The dry-run number is therefore an **upper
+bound on unique output**, computed without expanding the product. The cap applies
+to the product before collision suppression. Default cap is the configured
+`batch.max_rows` (10,000); `--max-candidates` may lower it, never exceed it.
+Invalid later candidates abort generation, preserving an existing output file.
+Dry-run checks structure and a representative candidate; full syntax validation
+happens lazily during generation. An address without stars produces one candidate.
+
+CSV has an `email` header and can feed `batch` directly. Formula-like addresses
+are rejected for generated CSV; use `--output-format txt` if those are intentional.
+There is no generate-and-SMTP command, remote batch switch or automatic account
+enumeration. The generator iterator can feed the passive library interface.
+
+## Configuration and rate control
 
 ```bash
-emailcheck user@example.com
-emailcheck user@example.com --json
+emailcheck config show --config config/budgets.toml
+emailcheck check user@example.com --config config/budgets.toml
+emailcheck batch input.csv --config config/budgets.toml --output results.csv
 ```
 
-Other read-only commands:
+See [config/budgets.toml](config/budgets.toml) for a complete working example.
+Only `[batch]`, `[rate_limit]`, `[quota]`, and `[passive_quota]` are accepted.
+Unknown fields, wrong types, booleans as counts, nonfinite values and unsafe
+bounds are errors. No setting changes TLS, credentials, destinations or readiness.
+Default settings preserve the existing limits. `[passive_quota]` uses a separate
+store from Active `[quota]`; local batch and single checks share the same service
+and quota within a process. Default per-key allowance is 1,000/hour, so a larger
+batch can produce refused rows unless the passive budget is explicitly configured.
+The `batch.max_in_flight_per_domain` and `batch.max_in_flight_per_mx` fields retain
+the Active scheduler's schema; local passive work uses only the global window
+bound and coalesces DNS requests. Passive checks do not consume SMTP pacing tokens
+or destination quotas. `config/local-passive.toml` is an older deployment example,
+not the CLI budget schema; use `config/budgets.toml` with `--config`.
 
-```bash
-emailcheck --check-deployment    # advisory gate report; contacts nothing
-emailcheck --report-versions     # aggregation ruleset and dataset versions
+`[rate_limit]` governs SMTP global concurrency and domain **and MX** concurrency
+and token buckets. Domain settings apply equally to each MX; multiple domains
+on one exchanger share that budget across accounts. Temporary SMTP replies
+back off later operations to the domain and MX for at least 60 seconds. This
+never retries a touched recipient. Safe existing pre-recipient retries still
+consume ordinary budgets. Quota exhaustion is an operational refusal.
+
+These stores are **in-process**, not distributed. Each CLI invocation starts
+fresh local budgets. Deployments require `worker_processes=1`; independent
+replicas/processes are unsupported for globally enforced Active budgets. A shared
+atomic quota/pacing store and durable worker coordination are deferred; SQLite
+job identity alone is not a distributed rate limiter. See [ADR 0020](docs/adr/0020-local-batch-and-release.md).
+
+## Python library
+
+Offline generation:
+
+```python
+from emailcheck.application.expansion import plan_expansion
+
+for candidate in plan_expansion("m**rc@example.com", candidates="ab"):
+    print(candidate)
 ```
 
-> **Active probing is a separate decision.** Enabling it means connecting to
-> third-party mail exchangers from your address. Before doing so you must
-> complete [docs/readiness-checklist.md](docs/readiness-checklist.md) — static
-> IP, outbound port 25, PTR and forward DNS, SPF, monitored sender and abuse
-> mailboxes, reviewed hosting terms, a tested kill switch, tested rate limits,
-> blocked private-network egress, tested retention deletion, and a named
-> incident owner — and probe only addresses you own or are explicitly
-> authorized to test.
+Passive checking (DNS may be contacted, SMTP cannot be):
 
-## Configuration
+```python
+import asyncio
+import secrets
+from emailcheck.application.local_batch import InputRow, passive_rows
+from emailcheck.classification.repository import load_shipped_datasets
+from emailcheck.composition import Deployment, build_verification_stack
+from emailcheck.settings import load_settings
 
-See [`.env.example`](.env.example) for the shape. It ships with the
-`local-passive` profile, active probes disabled, and placeholder values only.
 
-Never commit real configuration. The correlation/HMAC key is rejected if empty,
-and a deployment with a persistent store must configure the account-state
-authority or it will refuse to start.
+async def main():
+    key = secrets.token_urlsafe(32)
+    deployment = Deployment(
+        api_keys={"local": key},
+        correlation_key=secrets.token_bytes(32),
+        passive_datasets=load_shipped_datasets(),
+    )
+    stack = build_verification_stack(load_settings().apply(deployment))
+    principal = stack.authenticator.authenticate(key)
+    assert principal is not None
+    try:
+        rows = (InputRow(i, value) for i, value in enumerate(["user@example.com"], 1))
+        async for result in passive_rows(rows, service=stack.verification, principal=principal):
+            print(result)
+    finally:
+        await stack.aclose()
 
-## Development
+
+asyncio.run(main())
+```
+
+## Safety, privacy and limitations
+
+- Local output omits addresses; `--include-address` is an explicit local-only
+  choice. Spreadsheet formula cells are escaped in result CSV. Protect inputs,
+  candidates and outputs as personal data. Shell positional addresses may remain
+  in shell history; use files for sensitive input. Progress contains only counts.
+- No local job database or retained input is created. Outputs are user-owned
+  files with user-managed retention. Existing service account isolation, deletion
+  fences and retention remain unchanged. DNS cache keys never contain local parts;
+  positive/negative TTLs are preserved and cache size is bounded.
+- Three classification datasets (disposable, free-mail, provider) remain empty
+  pending verified redistributable sources. The authored role list is included.
+  Absence is not a negative classification. `emailcheck --report-versions` reports
+  the actual shipped snapshot. See [dataset policy](docs/data-sources.md).
+- Active SMTP is a separate operator deployment: only owned/explicitly authorized
+  targets, reviewed readiness, configured identity, TLS, destination allowlists
+  where required, authentication, audit, kill switch and budgets. The legacy
+  single-address `--remote URL --remote-key-file PATH [--wait]` interface remains.
+  No Active bulk surface is added. See [readiness](docs/readiness-checklist.md).
+- At most one `RCPT TO` per ordinary operation across retries/restarts; no message
+  body, `DATA`, `AUTH`, `VRFY` or `EXPN`. Private/reserved destinations and mismatched
+  peers are rejected. A passing suite or a release is not Active operation approval.
+
+## Development and license
 
 ```bash
 python -m pytest
@@ -130,42 +267,13 @@ python -m ruff check .
 python -m ruff format --check .
 python -m mypy src
 python scripts/check_forbidden_smtp.py
-make check
+python -m build
+python -m twine check dist/*
+python scripts/check_artifacts.py
+python scripts/smoke_distribution.py
 ```
 
-The default test path and CI are **offline**: no external DNS, SMTP, or HTTP.
-Tests needing a server bind to loopback; the rest use fakes, scripted
-transports, and fake clocks.
-
-## Architecture
-
-```
-apps → application → ports/domain ← adapters
-                          ↑
-                    composition.py
-```
-
-- [docs/architecture.md](docs/architecture.md) — layering, persistence, fencing.
-- [docs/threat-model.md](docs/threat-model.md) — what this defends against.
-- [docs/status-model.md](docs/status-model.md) — evidence to verdict.
-
-## Responsible operation
-
-- [SECURITY.md](SECURITY.md) — reporting and responsible use.
-- [docs/operations.md](docs/operations.md) — operator controls and runbooks.
-- [docs/readiness-checklist.md](docs/readiness-checklist.md) — deployment gates.
-
-Publication, implementation readiness, and deployment authorization are three
-different things. This repository being public means only the first.
-
-## Project status
-
-See [STATUS.md](STATUS.md).
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
+Tests use fakes and explicitly guarded loopback fixtures; no third-party DNS or
+SMTP connections. See [CONTRIBUTING.md](CONTRIBUTING.md),
+[architecture](docs/architecture.md), [security](SECURITY.md), and [STATUS.md](STATUS.md).
+Apache-2.0, see [LICENSE](LICENSE).

@@ -255,6 +255,7 @@ class AddressVerificationService:
     #: the local-passive profile — and every call site checks, so an absent
     #: guard is visibly absent rather than a silently permissive one.
     guard: AbuseGuard | None = None
+    passive_guard: AbuseGuard | None = None
     #: Which sender identity this deployment probes from, as the budget and the
     #: kill switch name it. Operator configuration, never a request field.
     sender_identity: str = "none"
@@ -373,14 +374,19 @@ class AddressVerificationService:
 
         assert isinstance(parsed, AddressAccepted)
         target = parsed.address
-        if self.guard is not None:
+        guard = self.guard if active or self.passive_guard is None else self.passive_guard
+        if guard is not None and self.guard is not None and guard is not self.guard:
+            # AdminControl replaces the immutable state value. Read its current
+            # reference on every passive request, rather than retaining a snapshot.
+            guard.state = self.guard.state
+        if guard is not None:
             # After parsing, so the target layer is keyed by a normalized
             # address, and **before** DNS, so a refused caller costs no lookup.
             # A rejected address never reaches here, which is why a syntax error
             # is not chargeable: there is no target to charge it against, and
             # charging one caller's budget for another's typo would be a way to
             # spend somebody else's allowance.
-            await self.guard.authorize_submission(
+            await guard.authorize_submission(
                 principal=principal, target=target, source=source, active=active
             )
         route = await self.routes.resolve(target)

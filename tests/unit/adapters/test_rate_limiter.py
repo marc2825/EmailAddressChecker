@@ -472,8 +472,11 @@ async def test_an_unbounded_stream_of_domains_produces_bounded_state() -> None:
     limits, _, _ = limiter(max_tracked_domains=16)
 
     for index in range(500):
-        async with await acquire(limits, domain=f"host-{index}.example"):
-            pass
+        try:
+            async with await acquire(limits, domain=f"host-{index}.example"):
+                pass
+        except RateLimitTimeout:
+            pass  # A full table refuses rather than resetting a spent bucket.
 
     assert limits.tracked_domains <= 16
 
@@ -572,7 +575,10 @@ async def test_a_held_entry_survives_lru_pressure_that_would_have_evicted_it() -
     spent = original.bucket.tokens  # type: ignore[attr-defined]
 
     for index in range(20):
-        async with await acquire(limits, domain=f"flood-{index}.example"):
+        try:
+            async with await acquire(limits, domain=f"flood-{index}.example"):
+                pass
+        except RateLimitTimeout:
             pass
 
     survivor = tracked_state(limits, "held.example")
@@ -677,7 +683,10 @@ async def test_eviction_under_pressure_never_leaves_a_negative_count() -> None:
 
     clock.advance(500.0)
     for index in range(30):
-        async with await acquire(limits, domain=f"flood-{index}.example"):
+        try:
+            async with await acquire(limits, domain=f"flood-{index}.example"):
+                pass
+        except RateLimitTimeout:
             pass
 
     assert limits.tracked_domains <= 4
@@ -713,3 +722,44 @@ async def test_a_complete_address_never_reaches_the_limiter() -> None:
 
     with pytest.raises(RateLimitError):
         limits.acquire(account="acct-1", domain="person@example.com", mx_host="mx.example.com")
+
+
+async def test_shared_mx_pacing_and_temporary_backoff() -> None:
+    limits, clock, _ = limiter(domain_capacity=1, domain_refill_seconds=30, wait_budget_seconds=10)
+    async with limits.acquire(account="a", domain="a.example", mx_host="mx.provider.example"):
+        pass
+    with pytest.raises(RateLimitTimeout):
+        async with limits.acquire(account="b", domain="b.example", mx_host="MX.PROVIDER.EXAMPLE."):
+            pass
+    assert limits.active_leases == 0
+    clock.advance(30)
+    limits.defer("a.example", "mx.provider.example")
+    with pytest.raises(RateLimitTimeout):
+        async with limits.acquire(account="b", domain="c.example", mx_host="mx.provider.example"):
+            pass
+    clock.advance(60)
+    async with limits.acquire(account="b", domain="c.example", mx_host="mx.provider.example"):
+        pass
+    assert limits.active_leases == 0
+
+
+async def test_idle_ttl_and_capacity_never_reset_spent_tokens() -> None:
+    limits, clock, _ = limiter(
+        global_concurrency=1,
+        max_tracked_domains=1,
+        domain_capacity=1,
+        domain_refill_seconds=60,
+        idle_ttl_seconds=1,
+        wait_budget_seconds=1,
+    )
+    async with await acquire(limits):
+        pass
+    clock.advance(2)
+    with pytest.raises(RateLimitTimeout):
+        async with await acquire(limits, domain="other.example"):
+            pass
+    with pytest.raises(RateLimitTimeout):
+        async with await acquire(limits):
+            pass
+    assert limits.tracked_domains == 1
+    assert limits.active_leases == 0

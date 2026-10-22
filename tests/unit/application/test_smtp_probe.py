@@ -571,3 +571,20 @@ async def test_no_second_candidate_is_tried_by_this_gate() -> None:
     assert "candidate" in signature.parameters
     assert "candidates" not in signature.parameters
     assert "route" not in signature.parameters
+
+
+async def test_temporary_reply_defers_future_operations_without_replaying() -> None:
+    from dataclasses import replace
+
+    from fake_smtp_server import RCPT_TEMPORARY
+
+    transport = transport_for(plain_session_peer(peer_endpoint(), rcpt=RCPT_TEMPORARY))
+    probe, _ = service(transport)
+    deferred = []
+    probe = replace(probe, on_temporary_reply=lambda domain, mx: deferred.append((domain, mx)))
+    report = await probe.probe(candidate(PUBLIC_V4), PUBLIC_V4, address(), account="acct-1")
+    assert isinstance(report, SessionReport)
+    assert report.observation.basic_code == 450
+    assert len(deferred) == 1
+    assert report.commands_issued.count(SMTPCommand.RCPT_TO) == 1
+    assert transport.all_closed

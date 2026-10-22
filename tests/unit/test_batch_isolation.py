@@ -260,13 +260,18 @@ def test_no_request_surface_names_the_batch_feature() -> None:
     """
     for surface in (
         "src/emailcheck/apps/api.py",
-        "src/emailcheck/apps/cli.py",
         "src/emailcheck/apps/schema.py",
         "src/emailcheck/composition.py",
     ):
         code = code_without_docstrings(surface).lower()
         for name in ("batch", "bulk", "csv", "download"):
             assert name not in code, (surface, name)
+
+    # ADR 0020 permits local passive orchestration, never the active job service.
+    for surface in ("src/emailcheck/apps/cli.py", "src/emailcheck/apps/commands.py"):
+        imported = imported_names(surface)
+        assert "emailcheck.application.batch" not in imported
+        assert "BatchService" not in code_without_docstrings(surface)
 
 
 def test_no_batch_module_introduces_an_http_surface() -> None:
