@@ -1,3 +1,7 @@
+# REFERENCE ONLY — no code reads this file, and passing it to `--config` fails.
+# It documents the intended shape of a deployment profile. The CLI budget
+# configuration is config/budgets.toml; see config/README.md.
+
 profile = "local-passive"
 active_probes_enabled = false
 

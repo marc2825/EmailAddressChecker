@@ -9,7 +9,7 @@
 emailcheck check a@example.com b@example.org --output results.json
 emailcheck batch input.csv --output results.csv --progress
 emailcheck batch addresses.txt --format txt --duplicates skip
-emailcheck expand 'm**rc@gmail.com' --chars abc --dry-run
+emailcheck expand 'm**rc@example.com' --chars abc --dry-run
 emailcheck expand 'm**rc@example.com' --slot '["a","b"]' --slot '["0","1"]'
 emailcheck expand 'm*rc@example.com' --candidate a --candidate ab --output candidates.csv
 emailcheck batch candidates.csv --mode passive --output results.csv

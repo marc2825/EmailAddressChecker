@@ -62,7 +62,7 @@ PublicResultの公開フィールド制限、DNSのTTL/宛先ポリシーを再�
 ## 3. 候補生成と実行例
 
 ```bash
-emailcheck expand 'm**rc@gmail.com' --charset lower --dry-run
+emailcheck expand 'm**rc@example.com' --charset lower --dry-run
 # candidate_count_upper_bound = 676
 emailcheck expand 'm**rc@example.com' --slot '["a","b"]' --slot '["0","1"]'
 emailcheck expand 'm*rc@example.com' --candidate a --candidate ab --candidate abc

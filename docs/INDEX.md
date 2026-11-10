@@ -9,10 +9,14 @@ The following files define behavior. In conflicts, the order below wins:
 3. `docs/threat-model.md`
 4. `docs/smtp-state-machine.md`
 5. accepted ADRs
-6. Phase prompt
-7. implementation comments
+6. implementation comments
 
 `CONTRIBUTING.md` carries the engineering and safety invariants a change must preserve.
+
+Some ADRs and docstrings cite internal implementation material (`prompts/`,
+`plans/`, `AGENTS.md`, `IMPLEMENTATION_STATUS.md`) that is not part of the
+public repository. Those citations are provenance only and are never normative;
+see "A note on historical citations" in `CONTRIBUTING.md`.
 
 ## Documents
 
@@ -25,6 +29,12 @@ The following files define behavior. In conflicts, the order below wins:
 - `test-strategy.md`: deterministic fixtures and acceptance metrics.
 - `operations.md`: sender identity, deployment gates, kill switches, and runbooks.
 - `data-sources.md`: dataset license and update requirements.
+- `readiness-checklist.md`: per-deployment gates before any active probing.
+- `runbooks/`: operator incident procedures.
+- `beta-report-template.md`: template for recording a limited beta.
+- `releasing.md`: package build and release procedure.
+- `release-report.md`: record of the 0.1.0 release preparation (Japanese).
+- `usage-ja.md`: CLI usage guide (Japanese).
 - `adr/`: durable architecture decisions.
 
 ## Informative references

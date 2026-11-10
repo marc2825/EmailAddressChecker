@@ -46,7 +46,16 @@ def test_nothing_of_the_tag_or_the_dots_survives() -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["", "not-an-address", "@example.com", "alice@", "a@b@c.com", None, 7, "alice@ example.com"],
+    [
+        "",
+        "not-an-address",
+        "@example.com",
+        "alice@",
+        "a@b@example.com",
+        None,
+        7,
+        "alice@ example.com",
+    ],
     ids=["empty", "no-at", "no-local", "no-domain", "two-at", "none", "number", "space"],
 )
 def test_text_that_is_not_an_address_is_never_echoed(value: object) -> None:
@@ -74,7 +83,7 @@ def test_an_ordinary_domain_survives(value: str) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["", "a@b.com", "with space", "with\nnewline", "x" * 300, None],
+    ["", "a@example.com", "with space", "with\nnewline", "x" * 300, None],
     ids=["empty", "address", "space", "newline", "long", "none"],
 )
 def test_a_domain_that_is_unsafe_to_log_is_not(value: object) -> None:

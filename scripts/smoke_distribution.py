@@ -62,7 +62,7 @@ def smoke(dist: Path, extras: str = "") -> None:
             result = run([python, "-m", "emailcheck", "check", "bad", "also-bad"], root)
             assert "invalid_syntax" in result
             generated = run(
-                [python, "-m", "emailcheck", "expand", "m**rc@gmail.com", "--dry-run"], root
+                [python, "-m", "emailcheck", "expand", "m**rc@example.com", "--dry-run"], root
             )
             assert "676" in generated
             print(

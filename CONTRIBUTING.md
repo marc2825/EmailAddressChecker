@@ -125,12 +125,23 @@ own.
 
 ## A note on historical citations
 
-Some docstrings and ADRs cite `prompts/NN-*.md`. Those were the internal
-phase-by-phase implementation briefs this project was built from; they are not
-part of the public repository. The citation records *why* a decision was made
-and is safe to read as provenance — the durable contract it refers to always
-lives in `docs/`, and that is the version to trust. New code should cite the
-`docs/` document rather than a prompt.
+Docstrings, tests, and ADRs cite internal development material that is not part
+of the public repository:
+
+- `prompts/NN-*.md` — the phase-by-phase implementation briefs the project was
+  built from. "Phase N" in a comment or test name refers to one of them.
+- `plans/*.md` — the execution plans written for those phases.
+- `AGENTS.md` — the internal engineering rules. Every rule it held that a change
+  must preserve is restated in [Safety invariants](#safety-invariants) and
+  [Coding standards](#coding-standards) above, so "`AGENTS.md` says" can be read
+  as "the invariants in this file say".
+- `IMPLEMENTATION_STATUS.md` — the internal progress log. Its public successor is
+  [STATUS.md](STATUS.md) together with [CHANGELOG.md](CHANGELOG.md).
+
+A citation records *why* a decision was made and is safe to read as provenance —
+the durable contract it refers to always lives in `docs/` or in this file, and
+that is the version to trust. New code should cite the public document rather
+than any of the above.
 
 ## Documentation
 

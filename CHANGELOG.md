@@ -15,3 +15,8 @@
 - Validate Python 3.12–3.14; correct the test CA's strict X.509 extensions and
   explicitly enable SQLite batch secure deletion across builds. Upgrade development
   pytest to a version fixing its known temporary-directory vulnerability.
+- Remove the unused `phase6` and `service` optional extras and the PostgreSQL/Redis
+  `docker-compose.yml`; nothing imported them (ADR 0013 update). Mark the
+  deployment-profile files under `config/` as reference only.
+- Prepare documentation for outside contributors: a pull request template without
+  internal process steps, and a note on citations of internal development material.

@@ -28,9 +28,8 @@ pipx install ./dist/email_address_checker-0.1.0-py3-none-any.whl
 ```
 
 For development: `python -m pip install -e '.[dev,release]'` in a virtual
-environment. Optional extras `phase6` (HTTP/CLI framework integrations) and
-`service` (future service adapters) retain their existing names. Installing
-extras does not start or authorize a service. Windows and Linux are CI targets;
+environment. The only runtime dependencies are `dnspython` and `idna`; there
+are no optional runtime extras. Windows and Linux are CI targets;
 Python 3.12, 3.13 and 3.14 have CI jobs. See the release report for tests actually run.
 
 ## Checks and output
@@ -116,9 +115,9 @@ refusals/failures, 130 interruption. Legacy remote exit codes remain unchanged.
 ## Offline wildcard generation
 
 ```bash
-emailcheck expand 'm**rc@gmail.com' --charset lower --dry-run
+emailcheck expand 'm**rc@example.com' --charset lower --dry-run
 # {"candidate_count_upper_bound": 676, "max_candidates": 10000}
-emailcheck expand 'm**rc@gmail.com' --chars abc --output candidates.csv
+emailcheck expand 'm**rc@example.com' --chars abc --output candidates.csv
 emailcheck expand 'm**rc@example.com' --slot '["a","b"]' --slot '["0","1"]'
 emailcheck expand 'm*rc@example.com' --candidate a --candidate ab --candidate abc
 emailcheck expand 'm*rc@example.com' --candidates-file tokens.txt

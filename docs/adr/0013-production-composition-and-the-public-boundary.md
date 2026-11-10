@@ -208,6 +208,13 @@ putting it in the `WHERE` clause does not.
   recorded as a stop condition on that work;
 - Redis and PostgreSQL adapters, in the uninstalled `service` extra.
 
+**Update (0.1.0 public release).** The `phase6` and `service` extras, and the
+PostgreSQL/Redis `docker-compose.yml` that accompanied them, were removed before
+publication: no module imported any of their packages, so they only widened the
+dependency and audit surface. The deferrals above stand. Whoever implements the
+ASGI binding or a Redis/PostgreSQL adapter adds the dependency it actually
+imports, with an ADR, at that time.
+
 **Not deferred.** An earlier revision of this ADR recorded the asynchronous job
 subsystem and the result cache as deferred, on the authority of a conversational
 instruction forbidding work that outlives a request. That instruction was not a

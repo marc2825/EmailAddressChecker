@@ -46,7 +46,7 @@ repository visibility, execute Actions or upload to either index.
 ## Local commands
 
 ```bash
-python -m pip install -e '.[dev,phase6,service,release]'
+python -m pip install -e '.[dev,release]'
 python -m pytest
 python -m ruff check .
 python -m ruff format --check .
@@ -56,7 +56,6 @@ python -m build
 python -m twine check dist/*
 python scripts/check_artifacts.py --extract /tmp/emailcheck-artifacts
 python scripts/smoke_distribution.py
-python scripts/smoke_distribution.py --extras phase6,service
 python -m pip_audit --skip-editable
 gitleaks git --log-opts=--all --redact
 gitleaks dir /tmp/emailcheck-artifacts --config .gitleaks.toml --redact

@@ -23,11 +23,11 @@ from emailcheck.settings import load_settings
 
 
 def test_676_deterministic_candidates() -> None:
-    plan = plan_expansion("m**rc@gmail.com", candidates=string.ascii_lowercase)
+    plan = plan_expansion("m**rc@example.com", candidates=string.ascii_lowercase)
     assert plan.count == 676
     values = list(plan)
-    assert values[:3] == ["maarc@gmail.com", "mabrc@gmail.com", "macrc@gmail.com"]
-    assert values[-1] == "mzzrc@gmail.com"
+    assert values[:3] == ["maarc@example.com", "mabrc@example.com", "macrc@example.com"]
+    assert values[-1] == "mzzrc@example.com"
     assert list(plan) == values
 
 
@@ -149,7 +149,7 @@ def test_generation_to_batch_and_privacy(
 ) -> None:
     source = tmp_path / "candidates.csv"
     output = tmp_path / "results.json"
-    assert cli.main(["expand", "m**rc@gmail.com", "--chars", "ab", "--output", str(source)]) == 0
+    assert cli.main(["expand", "m**rc@example.com", "--chars", "ab", "--output", str(source)]) == 0
     assert cli.main(["batch", str(source), "--output", str(output), "--progress"]) == 0
     results = json.loads(output.read_text())
     assert [r["row"] for r in results] == [1, 2, 3, 4]
@@ -157,7 +157,7 @@ def test_generation_to_batch_and_privacy(
     assert all("email" not in r for r in results)
     assert len(fake_dns) == 1
     assert sum(r["dns_cache_used"] for r in results) == 3
-    assert "gmail.com" not in output.read_text()
+    assert "example.com" not in output.read_text()
     assert "completed=4" in capsys.readouterr().err
 
 
@@ -303,7 +303,7 @@ def test_no_active_surface(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         cli.main(["batch", "whatever", "--mode", "active"])
     with pytest.raises(SystemExit):
-        cli.main(["expand", "a*@gmail.com", "--remote", "https://example.com"])
+        cli.main(["expand", "a*@example.com", "--remote", "https://example.com"])
 
 
 @pytest.mark.asyncio
