@@ -1,22 +1,22 @@
 # Changelog
 
-## 0.1.0 — unreleased
+This file records user-visible changes. Implementation details and design rationale belong in the [architecture decisions](docs/adr/); historical release checks are recorded in the [release report](docs/release-report.md).
 
-- Add offline, bounded local-part wildcard generation with configurable tokens.
-- Add ordered passive CSV/TXT and multiple-address checks, JSON/CSV results,
-  explicit deduplication, progress, cancellation and atomic local output.
-- Add strict TOML budget settings and effective configuration reporting.
-- Reuse bounded TTL DNS caching with task-local hit reporting; separate optional
-  passive budgets from Active budgets and enforce shared MX pacing/backoff.
-- Prepare Hatchling wheel/sdist metadata, install smoke tests and approval-gated
-  OIDC release workflows. Import and CLI remain `emailcheck`.
-- Preserve Active authorization, one-recipient-touch, TLS, destination, privacy
-  and job recovery invariants. No package upload or Active operation authorized.
-- Validate Python 3.12–3.14; correct the test CA's strict X.509 extensions and
-  explicitly enable SQLite batch secure deletion across builds. Upgrade development
-  pytest to a version fixing its known temporary-directory vulnerability.
-- Remove the unused `phase6` and `service` optional extras and the PostgreSQL/Redis
-  `docker-compose.yml`; nothing imported them (ADR 0013 update). Mark the
-  deployment-profile files under `config/` as reference only.
-- Prepare documentation for outside contributors: a pull request template without
-  internal process steps, and a note on citations of internal development material.
+## [0.1.0] — Unreleased
+
+Initial release candidate for Python 3.12+.
+
+### Added
+
+- Conservative email checks using syntax and DNS/MX evidence, with a separate, explicitly authorized active SMTP capability.
+- Passive CSV/TXT batch processing with ordered JSON/CSV results, duplicate handling, progress reporting, bounded work, and atomic file output.
+- Offline wildcard expansion with configurable candidate sets and generation limits.
+- Validated TOML budget configuration and version/dataset reporting.
+- Python package distribution (`email-address-checker`) while retaining the `emailcheck` CLI and import name.
+
+### Notes
+
+- A mail route or SMTP acceptance does not prove that a mailbox exists.
+- Disposable-domain, free-mail, and provider datasets are currently empty; the role-account list is included.
+- Active batch processing remains internal and is not exposed through the public CLI/API. Active SMTP requires a separately authorized deployment.
+- Packaging and publishing workflows are prepared; **version 0.1.0 has not been published to PyPI**.

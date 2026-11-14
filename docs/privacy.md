@@ -1,212 +1,103 @@
 # Privacy and data handling
 
+EmailAddressChecker processes potentially identifying email addresses and information about their domains. It aims to minimize retention and prevent network observations from leaking into logs, error responses, or unrelated accounts.
+
+This page describes the software's data-handling boundaries. It is **not** a claim of regulatory compliance or secure physical erasure. For the abuse model and operator responsibilities, see the [threat model](threat-model.md), [security policy](../SECURITY.md), and [operations guide](operations.md).
+
 ## 1. Data categories
 
-- submitted address;
-- normalized domain;
-- target HMAC;
-- account and API-key identifiers;
-- DNS evidence;
-- SMTP structured evidence;
-- bounded raw diagnostic;
-- timestamps and latency;
-- abuse features.
+| Data | Purpose | Handling |
+| --- | --- | --- |
+| Submitted address | Syntax and delivery assessment | Processed for the request; not written to routine logs |
+| Normalized domain and MX | DNS routing and destination controls | May appear in bounded domain/MX metrics and caches |
+| Target HMAC | Internal correlation and deduplication | Keyed digest, not a plain hash of an address |
+| Account and API-key identities | Authentication, ownership, quotas | Scoped to the authenticated principal |
+| DNS and structured SMTP evidence | Conservative verdict | Normalized and bounded; raw protocol text is not public output |
+| Jobs, results, timestamps, audit metadata | Asynchronous operations and safety controls | Subject to applicable store and retention policy |
+| Local CLI files | User-requested inputs and results | Owned and retained by the user, outside service retention |
+
+Addresses and domain names may be personal data. HMAC identifiers, redaction, and aggregation reduce exposure but should not be presented as anonymization.
 
 ## 2. Data minimization
 
-Default behavior:
-
-- process the plaintext address only for the active job;
-- redact in ordinary logs;
-- use HMAC for correlation;
-- aggregate metrics by domain/MX and reason;
-- do not keep raw protocol text unless debugging retention is explicitly enabled.
+- Local checks use DNS and **never contact SMTP**. Offline candidate expansion contacts neither DNS nor SMTP.
+- Public results expose approved statuses, reason codes, and safe summaries, not raw SMTP transcripts or untrusted server messages.
+- Ordinary logs and metrics do not contain complete email addresses, raw credentials, or network-library exception text.
+- Raw diagnostic replies are **not retained by the current stack**. Bounded, sanitized diagnostic information is not a substitute for anonymization.
+- Local output omits addresses unless the user explicitly selects `--include-address`. CSV result cells escape spreadsheet formula prefixes.
+- CLI addresses passed as shell arguments may remain in shell history or process listings; use files for sensitive inputs.
 
 ## 3. Retention defaults
 
-- plaintext request: 24 hours;
-- encrypted raw SMTP diagnostic: 24 hours. **Nothing is retained today**, so
-  there is nothing to encrypt: Phase 4 keeps a bounded sanitized diagnostic and
-  no raw reply, and section 2's default is not to keep raw protocol text unless
-  debugging retention is explicitly enabled. Implementing the encryption needs a
-  cryptographic dependency, its own ADR, and a Phase permitted to install one;
-  ADR 0016 records it as a Phase 8 stop condition. The privacy-preserving half
-  of this line holds by absence, which is the stronger form;
-- result history: disabled by default or 30 days when explicitly enabled;
-- HMAC and aggregate audit data: policy-defined, with deletion support;
-- account and billing records: separate policy.
+Service-side retention and local files are distinct. The documented service policies include:
+
+| Data | Policy / boundary |
+| --- | --- |
+| Retained plaintext request or completed job input | 24-hour expiry cutoff under the relevant service policy; actual removal depends on a retention sweep |
+| Raw SMTP replies | Not retained in the shipped stack; no encrypted raw-reply archive is implemented |
+| Result history | Disabled by default, or limited to 30 days when explicitly enabled |
+| Cached verdicts | Expire according to evidence/cache-specific TTLs |
+| HMAC, aggregate audit data | Policy-defined, with deletion support |
+| In-memory audit events | Bounded by the audit ring's capacity |
+
+These are separate data classes: a DNS cache TTL is **not** a job-retention deadline, and neither is an audit-retention promise. Account and billing data, if managed outside this project, require their own policies.
+
+`RetentionScheduler` runs bounded sweeps at the configured interval; operators can invoke the same operation with `VerificationStack.run_retention`. Retention timestamps are expiry cutoffs, **not an exact wall-clock deletion guarantee**: actual scheduled deletion can occur up to a scheduling interval later, and failures or a stopped process can delay it further. Failures are reported and auditable; unfinished sweeps continue on subsequent runs.
 
 ## 4. Redaction
 
-Examples:
-
-```text
-alice@example.com → a***@example.com
-a@example.com     → *@example.com
-```
-
-Do not rely on redaction as anonymization. Domain and local-part patterns can
-remain identifying.
+Routine presentation may mask a local part (for example, `alice@example.com` as `a***@example.com`), but the remaining domain or even an initial character can still identify a person. Redaction is a defense against accidental exposure, **not anonymization**; it does not justify unbounded retention or public disclosure.
 
 ## 5. HMAC
 
-Use a secret key distinct from encryption keys.
+Correlation uses HMAC-SHA-256 with a dedicated secret key, distinct from any encryption key over a versioned, normalized target representation. `security/identifiers.py` defines the construction and its canonicalization version. The version is included in the authenticated input, not merely stored beside the digest.
 
-```text
-HMAC-SHA-256(key, canonical_input_version || normalized_target)
-```
-
-Store the canonicalization version. A plain unsalted hash is not sufficient
-because addresses are guessable.
-
-`security/identifiers.py` implements this. The version is part of the HMAC
-**input** rather than a column beside it, so two canonicalizations cannot
-collide onto one digest. Adding it changed every digest this project produces,
-once, and `adapters/storage/sqlite_store.py` moved its schema version in the
-same change even though no column did: a store whose rows have all become
-unreachable looks like a cache that never hits, which is a worse failure than
-one that refuses to open. ADR 0016.
+A plain hash of an email address is insufficient because possible addresses are easy to guess. HMAC output is still account-related operational data and remains subject to the appropriate retention and deletion policy.
 
 ## 6. Access
 
-- raw evidence administrator-only;
-- account users see their safe normalized results;
-- support access is logged;
-- secret material is never returned;
-- API errors do not contain raw remote replies.
+Authentication establishes the account that owns a job or stored result. Results and job state are scoped to that owner; request parameters do not grant access to another account's data. Secret material and raw diagnostic replies are not returned through the public result contract. Administrative access to any sensitive diagnostic material must be restricted and logged.
+
+The current application does not expose a public administrative account-deletion route. Account deletion is an operator-level service operation.
 
 ## 7. Deletion
 
-**Scheduled since Remediation B.** `RetentionScheduler` runs the sweep on
-`RetentionSettings.interval_seconds` for every profile that owns persistent
-service state, and `VerificationStack.run_retention` is the operator trigger for
-the same operation. The effective deletion time is therefore the retention
-cutoff **plus at most one scheduling interval**; the windows below are cutoffs,
-not wall-clock guarantees.
+`VerificationStack.delete_account_data(account)` invokes `AccountDeletionService`. Records are deleted by **owning account**, not by email target: two accounts checking the same address own separate results.
 
-**Account-requested deletion is implemented.**
-`VerificationStack.delete_account_data(account)` runs
-`AccountDeletionService`. Deletion is **by owner**, never by target: two
-accounts checking one mailbox own two records.
+The deletion protocol protects against in-flight writes, including those from other service instances:
 
-**What the shipped stack erases**, because capability and composition are not
-the same thing:
+1. Advance the account's durable generation in `AccountStateStore` **before** removing records.
+2. Raise each persistent store's local account-generation fence.
+3. Delete that account's owned records in each store.
+4. Report every store that could not be processed. A partial failure is not reported as complete; the operation may be retried.
 
-| Store | Implemented | Composed today |
-|---|---|---|
-| verdict store — every dataset fingerprint and ruleset | yes | yes |
-| job store — jobs, idempotency bindings, result projections, retry and admission state | yes | yes |
-| `JobService` registry, in this process | yes | yes |
-| batch store — batches, rows, retained plaintext, artifacts | yes | **no** |
+A write to a persistent account-owned store must validate the generation **within the same store transaction as that write**. Checking `accounts.db` and then writing to another SQLite database without a local transactional fence would permit a deleted record to be recreated during the gap.
 
-The batch row is the one to read carefully. `AccountDeletionService` accepts a
-`BatchStore`, raises its account fence before deleting from it, and deletes what
-it holds — and Remediation D put that store under the same durable generation
-model as the job and verdict stores, so a composed batch subsystem is inside the
-deletion guarantee rather than beside it. Phase 10 is still **not composed**:
-`VerificationStack` holds no batch store, so the shipped stack erases no batch
-data because it has none. A deployment that wires the batch subsystem must pass
-its `BatchStore` to the same deletion service, and it must bind that store to
-the same account-state authority as the others.
+Each persistent store is bound to one account-state authority; incompatible authorities and unsupported old schemas are refused. A configured persistent verdict or job store requires a configured `account_state_path`. In-memory suspension and tombstones help local cleanup but do not replace durable cross-process fencing.
 
-It does not wait for the retention scheduler. Retention is a window; this is an
-operator action, and it takes effect when it is invoked.
+### Stores covered
 
-**No cross-store transaction exists and none is claimed.** Three SQLite files
-and one registry cannot commit together, so each store is attempted
-independently and `AccountDeletionReport.failed_stores` names any that held on.
-`complete` is `False` in that case: an operator told "deleted" while one store
-still has data is worse off than one told which store to retry. Re-running the
-operation is safe and is the documented recovery.
+| Store | Deletion support | In the shipped stack |
+| --- | --- | --- |
+| Verdict cache/store | Implemented | Composed |
+| Job store, idempotency and result projections | Implemented | Composed |
+| In-process job registry | Implemented | Composed |
+| Internal active batch store and artifacts | Implemented | **Not composed** |
 
-**Work already running, including on another replica.** The authority is a
-**durable account generation** in `AccountStateStore`, shared by every process:
-work records the generation it was admitted under, deletion advances it before
-a single row is removed, and every persistent write for that account is refused
-unless its generation is still current.
+The internal active batch subsystem is not exposed through the public CLI/API. If an operator composes it in a separate deployment, the batch store must use the **same** account-state authority and participate in the same deletion service.
 
-That ordering is the point. Deleting first and raising the barrier afterwards
-leaves a window for a late write to land between the two steps — and a barrier
-held only in the deleting process's memory closes nothing at all across
-replicas, which is how a second `JobService` came to recreate an account after
-the operator had been told the deletion was complete.
+**Limits of the guarantee:** deletion is not atomic across multiple SQLite stores and an in-memory registry; partial failures are reported for recovery. Logical deletion does not erase preexisting backups, snapshots, or historical WAL/journal copies. The batch SQLite adapter enables `secure_delete` for its connections, but this is not a forensic-erasure guarantee. Operators must manage storage-level and backup retention separately.
 
-**And the generation alone is a check, not a fence.** Reading it from
-`accounts.db` and then writing `jobs.db` is two transactions, and a replica
-paused between them recreated a job row, a cached verdict, and an idempotency
-binding after this operation reported success. So the deletion also writes the
-new generation **into each store it is about to empty**, and every
-account-owned write is conditional on that value inside the same transaction as
-the write. The two contend for one database's write lock, so a stale write
-either lands before the fence and is deleted, or waits and is refused. A store
-whose fence cannot be raised is not emptied at all — the report names it, and
-the operator retries.
+## Local passive CLI artifacts
 
-Two configuration rules follow, and both fail at start-up rather than during a
-deletion:
+The local `check`, `batch`, and `expand` commands do not create a persistent job database or a durable resume checkpoint. Users control retention and access for input files, generated candidate files, stdout, shell history, and explicitly saved results.
 
-- a deployment that configures `store_path` or `job_store_path` must configure
-  `account_state_path`; a persistent service with no authority permitted every
-  write, including the ones that put a deleted account back;
-- each persistent store is bound to the `accounts.db` it was first opened under
-  and refuses another, because two replicas sharing one store while trusting
-  different authorities is a deletion neither can see.
+When `--output` is used, results are written to a private temporary file in the destination directory and replace the destination only after successful completion. Normal errors and cancellation clean up the temporary file; a forced process termination may leave `.emailcheck-*` files for the user to review and remove. Standard output may be partial if interrupted.
 
-The account suspension and `JobService`'s in-process tombstone remain and are
-**local cleanup and latency, not the cross-replica authority**: each lives in
-one process's memory. A deployment with no configured `account_state_path` no
-longer starts at all.
+Local deduplication uses ephemeral keyed digests. `--start-row` starts a new passive run; it does not recover stored addresses or previous DNS results.
 
-A generation rather than a permanent tombstone, because this is
-account-*requested* deletion: a later legitimate request reads the new
-generation and works normally, with no operator step to remember. The
-suspension this operation also sets is the operator's own switch and is
-separately reversible.
+## Operator responsibilities
 
-**Operator-only.** There is no route. `docs/architecture.md` carries "no public
-administrative interface" as a stop condition, and no request field names an
-account other than the authenticated one.
+Restrict access to files and backups, configure retention for each deployment, test deletion and recovery, and monitor failures. Do not enable active SMTP without documented authorization, sender identity, destination controls, rate limits, TLS, and incident procedures. Obtain appropriate legal and privacy review before production use, particularly when processing other people's addresses or data across jurisdictions.
 
-**Logical deletion, not physical erasure.** A sweep deletes rows and sets
-retained plaintext to `NULL`. It does not overwrite SQLite free pages, rewrite
-the write-ahead log, or reach a backup taken before it ran. Anyone who needs
-those guarantees needs storage-level or backup-level erasure, which this project
-does not perform and does not claim.
-
-`application/retention.py` implements this, and keeps **three retentions
-separate**: a cached verdict expires on its own `expires_at` (ADR 0015, from
-`docs/requirements.md` section 13), a finished job record lives
-`job_retention_seconds` — this document's 24 hours — and an audit event lives
-as long as the ring holds it. Section 13's TTLs price *evidence classes*, so
-using one as a job or log retention would apply a deliverability-freshness rule
-to a privacy question.
-
-A sweep is bounded per run and reports whether more remain, so a backlog is
-cleared over several runs rather than in one statement holding a write lock. A
-failure is counted and audited rather than propagated: a sweep that raised into
-a scheduler would stop the schedule.
-
-Implement and test:
-
-- scheduled expiry;
-- account-requested deletion;
-- API-key revocation;
-- deletion of plaintext separate from aggregate metrics;
-- deletion failure alerting.
-
-Obtain legal review before commercial or cross-border production use.
-
-## Local passive CLI artifacts (0.1.0)
-
-Local result files omit addresses unless `--include-address` is selected. Row
-numbers refer to the original input; no local job database/checkpoint is created.
-Inputs, generated candidate files and explicitly written outputs are owned and
-retained by the user, outside the service retention scheduler. Deduplication keeps
-only ephemeral keyed digests. Output temporary files are private and cleaned on
-ordinary failure/cancellation; forced process termination can leave a temporary
-file beside the destination. Standard output and shell history have their usual
-local retention. Service account deletion and retention policies remain unchanged.
-The SQLite batch adapter now explicitly enables `secure_delete` on each connection
-so deleted plaintext cells are overwritten independently of SQLite build defaults.
-This does not erase backups, snapshots or already-existing journal/WAL copies and
-does not upgrade logical deletion into a forensic-erasure guarantee.
+See the [readiness checklist](readiness-checklist.md) and [privacy deletion runbook](runbooks/privacy-deletion.md).
