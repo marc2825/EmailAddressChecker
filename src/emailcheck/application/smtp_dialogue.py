@@ -1,4 +1,4 @@
-"""The dialogue: banner, EHLO, optional STARTTLS, MAIL FROM, one RCPT TO, out.
+"""The dialogue: banner, EHLO, required STARTTLS, MAIL FROM, one RCPT TO, out.
 
 This is the first code in the project that speaks SMTP. Everything it is allowed
 to say already existed before it did — the closed enum, the six encoders, the
@@ -110,8 +110,8 @@ class DialogueSettings:
     tls_handshake_seconds: float = DEFAULT_TLS_HANDSHAKE_SECONDS
 
     def __post_init__(self) -> None:
-        if not isinstance(self.tls_policy, TLSPolicy):
-            raise SMTPContractError("a TLS policy must be a TLSPolicy member")
+        if self.tls_policy is not TLSPolicy.REQUIRED:
+            raise SMTPContractError("active SMTP requires TLSPolicy.REQUIRED")
         if not isinstance(self.budget, SessionBudget):
             raise SMTPContractError("a session budget must be a validated SessionBudget")
         seconds = self.tls_handshake_seconds
@@ -247,10 +247,8 @@ class _Run:
     async def _negotiate_tls(self) -> None:
         """Upgrade when the server offers it, and decide when it does not."""
         if not self.capabilities.supports_starttls:
-            if self.settings.tls_policy is TLSPolicy.REQUIRED:
-                self.stage = DialogueStage.STARTTLS
-                self._fail_tls(TLSFailureReason.NOT_OFFERED)
-            return
+            self.stage = DialogueStage.STARTTLS
+            self._fail_tls(TLSFailureReason.NOT_OFFERED)
 
         self.stage = DialogueStage.STARTTLS
         permitted = self._permit(SMTPCommand.STARTTLS)

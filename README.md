@@ -84,6 +84,12 @@ Disposable-domain, free-mail, and provider-classification datasets are currently
 
 Use active probing only on systems and addresses you own or are expressly authorized to test. See [SECURITY.md](SECURITY.md) and the [deployment checklist](docs/readiness-checklist.md).
 
+The legacy `--remote` client requires HTTPS. For local development, HTTP accepts
+only exact `127.0.0.1` or `[::1]` addresses; `localhost` is not an exception.
+Redirects and environment proxies are disabled. Active SMTP requires verified
+TLS in both the production composition and library dialogue; the previous
+`OPPORTUNISTIC` policy is removed. See [migration details](docs/adr/0021-required-encryption-at-network-boundaries.md).
+
 ## Development and documentation
 
 ```bash

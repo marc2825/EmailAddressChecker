@@ -59,3 +59,14 @@ verification operation; never replays at the recipient stage; requires TLS for
 active SMTP; and rejects unsafe destinations. See
 [docs/threat-model.md](docs/threat-model.md) and
 [docs/architecture.md](docs/architecture.md).
+
+Remote CLI connections require HTTPS. The only HTTP exception is a URL using
+exactly `127.0.0.1` or `[::1]` for local development. Hostname resolution does not
+grant an exception. All redirects are refused and environment proxies are
+disabled, so deployments must supply an explicit HTTPS validator URL.
+
+Required SMTP TLS also applies to internal library dialogues. Missing STARTTLS
+or certificate/hostname/handshake failures stop before `MAIL FROM` and `RCPT TO`;
+they are not evidence of an invalid address. The former opportunistic setting
+has been removed; migrate to `TLSPolicy.REQUIRED`. See
+[ADR 0021](docs/adr/0021-required-encryption-at-network-boundaries.md).

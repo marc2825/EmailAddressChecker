@@ -80,11 +80,13 @@ from fake_smtp_server import (
 
 pytestmark = pytest.mark.asyncio
 
-PLAIN = DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC)
+TLS_SETTINGS = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 REQUIRE_TLS = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 
 
-def dialogue(settings: DialogueSettings = PLAIN, clock: object | None = None) -> SMTPDialogue:
+def dialogue(
+    settings: DialogueSettings = TLS_SETTINGS, clock: object | None = None
+) -> SMTPDialogue:
     return SMTPDialogue(
         identity_provider=identity_provider(),
         clock=clock or FakeMonotonicClock(),  # type: ignore[arg-type]
@@ -92,31 +94,35 @@ def dialogue(settings: DialogueSettings = PLAIN, clock: object | None = None) ->
     )
 
 
-async def run(peer: ScriptedSMTPPeer, settings: DialogueSettings = PLAIN, clock: object = None):  # type: ignore[no-untyped-def]
+async def run(
+    peer: ScriptedSMTPPeer, settings: DialogueSettings = TLS_SETTINGS, clock: object = None
+):  # type: ignore[no-untyped-def]
     return await dialogue(settings, clock).run(peer, session(), address())  # type: ignore[arg-type]
 
 
-# --- the plain path --------------------------------------------------------
+# --- the default TLS path --------------------------------------------------
 
 
-async def test_a_plain_session_reaches_the_recipient_stage() -> None:
-    peer = plain_session_peer(peer_endpoint())
+async def test_a_verified_tls_session_reaches_the_recipient_stage() -> None:
+    peer = tls_session_peer(peer_endpoint())
     report = await run(peer)
 
     assert report.observation.outcome is RecipientStageOutcome.ACCEPTED
     assert report.observation.basic_code == 250
     assert report.stage_reached is DialogueStage.CLEANUP
-    assert report.tls.negotiated is False
+    assert report.tls.negotiated is True
     assert report.cleanup is CleanupStatus.COMPLETED
     assert report.observation.no_message_data_sent is True
 
 
-async def test_the_plain_transcript_is_exactly_five_commands() -> None:
+async def test_the_default_transcript_includes_verified_tls() -> None:
     """`docs/smtp-state-machine.md` section 7: the sequence is asserted, not reviewed."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     report = await run(peer)
 
     assert peer.transcript == [
+        SMTPCommand.EHLO,
+        SMTPCommand.STARTTLS,
         SMTPCommand.EHLO,
         SMTPCommand.MAIL_FROM,
         SMTPCommand.RCPT_TO,
@@ -127,7 +133,7 @@ async def test_the_plain_transcript_is_exactly_five_commands() -> None:
 
 
 async def test_a_multiline_banner_is_one_greeting() -> None:
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.banner = BANNER_MULTILINE
     report = await run(peer)
     assert report.observation.outcome is RecipientStageOutcome.ACCEPTED
@@ -208,12 +214,9 @@ async def test_a_server_without_starttls_is_never_an_invalid_mailbox() -> None:
     assert report.observation.outcome is not RecipientStageOutcome.REJECTED
 
 
-async def test_an_opportunistic_probe_continues_in_plaintext() -> None:
-    peer = plain_session_peer(peer_endpoint())
-    report = await run(peer, DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC))
-
-    assert report.observation.outcome is RecipientStageOutcome.ACCEPTED
-    assert report.tls.negotiated is False
+async def test_an_opportunistic_policy_cannot_be_configured() -> None:
+    with pytest.raises(SMTPContractError):
+        DialogueSettings(tls_policy="opportunistic")  # type: ignore[arg-type]
 
 
 async def test_the_default_policy_requires_tls() -> None:
@@ -221,9 +224,9 @@ async def test_the_default_policy_requires_tls() -> None:
     assert DialogueSettings().tls_policy is TLSPolicy.REQUIRED
 
 
-@pytest.mark.parametrize("policy", [TLSPolicy.REQUIRED, TLSPolicy.OPPORTUNISTIC])
+@pytest.mark.parametrize("policy", list(TLSPolicy))
 async def test_a_failed_handshake_never_falls_back_to_plaintext(policy: TLSPolicy) -> None:
-    """Opportunistic is about availability, never about failure."""
+    """Every supported policy stops before the sender on handshake failure."""
     peer = tls_session_peer(
         peer_endpoint(), tls_outcome=TLSFailed(failure=TransportFailure.TLS_HANDSHAKE_FAILED)
     )
@@ -307,7 +310,7 @@ async def test_a_post_tls_ehlo_failure_ends_the_probe() -> None:
 async def test_an_unusable_banner_stops_the_dialogue(
     banner: Response, expected_outcome: RecipientStageOutcome, label: str
 ) -> None:
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.banner = banner
     report = await run(peer)
 
@@ -343,7 +346,7 @@ async def test_an_unusable_banner_stops_the_dialogue(
 async def test_an_ehlo_failure_stops_before_mail_from(
     response: Response, expected: RecipientStageOutcome, label: str
 ) -> None:
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.responses[SMTPCommand.EHLO] = response
     report = await run(peer)
 
@@ -359,7 +362,7 @@ async def test_there_is_no_helo_fallback() -> None:
     A fallback would be a seventh command, and there is no encoder, no enum
     member, and no state that permits one.
     """
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.responses[SMTPCommand.EHLO] = EHLO_PERMANENT
     await run(peer)
 
@@ -379,7 +382,7 @@ async def test_a_mail_from_failure_produces_no_recipient_observation(
     response: Response, label: str
 ) -> None:
     """`docs/requirements.md` section 9: a sender rejection is not the target's."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.responses[SMTPCommand.MAIL_FROM] = response
     report = await run(peer)
 
@@ -410,7 +413,7 @@ async def test_a_mail_from_failure_produces_no_recipient_observation(
 async def test_every_recipient_reply_becomes_an_observation(
     response: Response, expected: RecipientStageOutcome, code: int
 ) -> None:
-    peer = plain_session_peer(peer_endpoint(), rcpt=response)
+    peer = tls_session_peer(peer_endpoint(), rcpt=response)
     report = await run(peer)
 
     assert report.observation.outcome is expected
@@ -420,8 +423,8 @@ async def test_every_recipient_reply_becomes_an_observation(
 
 async def test_no_reply_code_becomes_a_status() -> None:
     """The invariant this Phase exists under, asserted rather than assumed."""
-    accepted = await run(plain_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED))
-    rejected = await run(plain_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER))
+    accepted = await run(tls_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED))
+    rejected = await run(tls_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER))
 
     for report in (accepted, rejected):
         rendered = repr(report) + repr(report.summary)
@@ -435,8 +438,8 @@ async def test_a_bare_550_and_an_explicit_5_1_1_are_recorded_the_same_way_here()
     What differs is the enhanced code, which is carried so 4D can use it. What
     must not differ is any conclusion drawn here.
     """
-    bare = await run(plain_session_peer(peer_endpoint(), rcpt=RCPT_BARE_PERMANENT))
-    explicit = await run(plain_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER))
+    bare = await run(tls_session_peer(peer_endpoint(), rcpt=RCPT_BARE_PERMANENT))
+    explicit = await run(tls_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER))
 
     assert bare.observation.outcome is explicit.observation.outcome
     assert bare.observation.enhanced_code is None
@@ -453,8 +456,8 @@ async def test_a_252_keeps_everything_phase_4d_needs_to_refuse_it() -> None:
     reason it is dangerous is that `outcome` and `is_about_the_target` alone
     cannot. Both halves are pinned here.
     """
-    unverifiable = await run(plain_session_peer(peer_endpoint(), rcpt=RCPT_UNVERIFIABLE))
-    accepted = await run(plain_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED))
+    unverifiable = await run(tls_session_peer(peer_endpoint(), rcpt=RCPT_UNVERIFIABLE))
+    accepted = await run(tls_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED))
 
     assert unverifiable.observation.basic_code == 252
     assert unverifiable.observation.enhanced_code == "2.1.5"
@@ -474,7 +477,7 @@ async def test_a_252_keeps_everything_phase_4d_needs_to_refuse_it() -> None:
 
 
 async def test_a_malformed_recipient_reply_is_a_protocol_error() -> None:
-    peer = plain_session_peer(peer_endpoint(), rcpt=RCPT_MALFORMED)
+    peer = tls_session_peer(peer_endpoint(), rcpt=RCPT_MALFORMED)
     report = await run(peer)
 
     assert report.observation.outcome is RecipientStageOutcome.PROTOCOL_ERROR
@@ -483,7 +486,7 @@ async def test_a_malformed_recipient_reply_is_a_protocol_error() -> None:
 
 
 async def test_exactly_one_recipient_is_ever_offered() -> None:
-    peer = plain_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER)
+    peer = tls_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER)
     report = await run(peer)
 
     assert peer.recipient_commands == 1
@@ -494,7 +497,7 @@ async def test_exactly_one_recipient_is_ever_offered() -> None:
 async def test_the_submitted_address_is_probed_unchanged() -> None:
     """No plus-tag removal, no case normalisation, no alternate spelling."""
     submitted = address("Mixed.Case+tag@recipient.test.example")
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     await dialogue().run(peer, session(), submitted)
 
     assert "RCPT TO:<Mixed.Case+tag@recipient.test.example>" in peer.wire_text()
@@ -505,7 +508,7 @@ async def test_the_submitted_address_is_probed_unchanged() -> None:
 
 async def test_a_reply_that_echoes_the_recipient_does_not_keep_it() -> None:
     """`docs/requirements.md` section 16: no complete address in what is kept."""
-    peer = plain_session_peer(peer_endpoint(), rcpt=RCPT_ECHOES_THE_ADDRESS)
+    peer = tls_session_peer(peer_endpoint(), rcpt=RCPT_ECHOES_THE_ADDRESS)
     report = await run(peer)
 
     rendered = repr(report) + repr(report.summary) + str(report.observation.reply)
@@ -514,7 +517,7 @@ async def test_a_reply_that_echoes_the_recipient_does_not_keep_it() -> None:
 
 
 async def test_no_raw_reply_or_raw_command_survives_into_the_report() -> None:
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     report = await run(peer)
 
     rendered = repr(report) + repr(report.summary)
@@ -536,7 +539,7 @@ async def test_no_raw_reply_or_raw_command_survives_into_the_report() -> None:
 
 
 async def test_a_cleanup_failure_does_not_change_the_observation() -> None:
-    peer = plain_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED)
+    peer = tls_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED)
     peer.responses[SMTPCommand.RSET] = failure(TransportFailure.CONNECTION_RESET)
     report = await run(peer)
 
@@ -546,7 +549,7 @@ async def test_a_cleanup_failure_does_not_change_the_observation() -> None:
 
 
 async def test_a_rejected_quit_is_recorded_and_nothing_else() -> None:
-    peer = plain_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER)
+    peer = tls_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER)
     peer.responses[SMTPCommand.QUIT] = reply("554 5.0.0 no")
     report = await run(peer)
 
@@ -556,7 +559,7 @@ async def test_a_rejected_quit_is_recorded_and_nothing_else() -> None:
 
 async def test_cleanup_is_not_attempted_after_a_terminal_failure() -> None:
     """No command may be written once the connection has failed."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.responses[SMTPCommand.MAIL_FROM] = failure(TransportFailure.CONNECTION_RESET)
     report = await run(peer)
 
@@ -566,7 +569,7 @@ async def test_cleanup_is_not_attempted_after_a_terminal_failure() -> None:
 
 
 async def test_rset_does_not_buy_a_second_recipient() -> None:
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     await run(peer)
     assert peer.recipient_commands == 1
     assert peer.transcript.index(SMTPCommand.RSET) > peer.transcript.index(SMTPCommand.RCPT_TO)
@@ -580,9 +583,9 @@ async def test_a_deadline_that_is_already_spent_writes_nothing() -> None:
     # step, so the budget is spent before anything could be written.
     clock = AdvancingClock(step=10.0)
     settings = DialogueSettings(
-        tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=5.0)
+        tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=5.0)
     )
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     report = await SMTPDialogue(
         identity_provider=identity_provider(), clock=clock, settings=settings
     ).run(peer, session(), address())
@@ -601,9 +604,9 @@ async def test_the_deadline_stops_a_session_part_way_through() -> None:
     """
     clock = AdvancingClock(step=2.0)
     settings = DialogueSettings(
-        tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=5.0)
+        tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=5.0)
     )
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     report = await SMTPDialogue(
         identity_provider=identity_provider(), clock=clock, settings=settings
     ).run(peer, session(), address())
@@ -613,7 +616,9 @@ async def test_the_deadline_stops_a_session_part_way_through() -> None:
     assert peer.recipient_commands <= 1
 
 
-async def test_a_budget_spent_at_the_cleanup_boundary_says_so() -> None:
+async def test_a_budget_spent_at_the_cleanup_boundary_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`SKIPPED_DEADLINE` and `deadline_exhausted` describe one fact.
 
     The 4C review found them disagreeing: the budget ran out, the cleanup was
@@ -621,11 +626,20 @@ async def test_a_budget_spent_at_the_cleanup_boundary_says_so() -> None:
     deadline was fine. The clock here is tuned so the budget survives every step
     up to the recipient reply and is gone by the time cleanup is considered.
     """
-    clock = AdvancingClock(step=1.0)
+    clock = FakeMonotonicClock()
     settings = DialogueSettings(
-        tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=10.0)
+        tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=5.0)
     )
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
+    original_read = ScriptedSMTPPeer.read_line
+
+    async def expire_after_recipient(self: ScriptedSMTPPeer):  # type: ignore[no-untyped-def]
+        result = await original_read(self)
+        if self.transcript and self.transcript[-1] is SMTPCommand.RCPT_TO:
+            clock.advance(settings.budget.total_seconds)
+        return result
+
+    monkeypatch.setattr(ScriptedSMTPPeer, "read_line", expire_after_recipient)
     report = await SMTPDialogue(
         identity_provider=identity_provider(), clock=clock, settings=settings
     ).run(peer, session(), address())
@@ -635,7 +649,13 @@ async def test_a_budget_spent_at_the_cleanup_boundary_says_so() -> None:
     # The answer was already in hand, so the cleanup being skipped changes it not
     # at all.
     assert report.observation.outcome is RecipientStageOutcome.ACCEPTED
-    assert peer.transcript == [SMTPCommand.EHLO, SMTPCommand.MAIL_FROM, SMTPCommand.RCPT_TO]
+    assert peer.transcript == [
+        SMTPCommand.EHLO,
+        SMTPCommand.STARTTLS,
+        SMTPCommand.EHLO,
+        SMTPCommand.MAIL_FROM,
+        SMTPCommand.RCPT_TO,
+    ]
 
 
 async def test_an_externally_started_deadline_is_the_one_that_applies() -> None:
@@ -648,11 +668,11 @@ async def test_an_externally_started_deadline_is_the_one_that_applies() -> None:
 
     clock = FakeMonotonicClock()
     settings = DialogueSettings(
-        tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=5.0)
+        tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=5.0)
     )
     # Started five seconds ago: nothing is left, and no fresh budget appears.
     spent = start_deadline(settings.budget, clock.monotonic() - 5.0)
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
 
     report = await SMTPDialogue(
         identity_provider=identity_provider(), clock=clock, settings=settings
@@ -745,7 +765,7 @@ async def test_a_session_handed_over_in_the_wrong_state_writes_nothing() -> None
     from dialogue_fixtures import confirmed_peer
     from emailcheck.domain.smtp_session import SMTPSession
 
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     # `MAIL_FROM_ACCEPTED` permits `RCPT TO`, `RSET`, and `QUIT` — not `EHLO`,
     # which is the first thing the dialogue tries to issue.
     misplaced = SMTPSession(peer=confirmed_peer(), state=SMTPState.MAIL_FROM_ACCEPTED)
@@ -827,7 +847,7 @@ async def test_a_connection_failure_at_any_stage_is_never_about_the_target(
 
 async def test_an_oversized_recipient_reply_is_not_a_rejection() -> None:
     """A read cap firing says nothing about the mailbox."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.responses[SMTPCommand.RCPT_TO] = failure(TransportFailure.LINE_TOO_LONG)
     report = await run(peer)
 
@@ -837,7 +857,7 @@ async def test_an_oversized_recipient_reply_is_not_a_rejection() -> None:
 
 
 async def test_a_reply_with_too_many_lines_is_a_protocol_error() -> None:
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     peer.responses[SMTPCommand.RCPT_TO] = TOO_MANY_LINES
     report = await run(peer)
 
@@ -847,7 +867,7 @@ async def test_a_reply_with_too_many_lines_is_a_protocol_error() -> None:
 
 async def test_the_scripted_peer_refuses_anything_but_a_wire_command() -> None:
     """The double is not more permissive than the connection it stands in for."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     for value in (b"EHLO x\r\n", "EHLO x\r\n", None):
         with pytest.raises(SMTPContractError):
             await peer.write_command(value)  # type: ignore[arg-type]
@@ -870,8 +890,10 @@ async def test_the_scripted_server_answers_only_what_it_was_asked() -> None:
             SMTPCommand.STARTTLS: STARTTLS_READY,
         },
     )
-    await run(peer)
+    report = await run(peer)
     assert SMTPCommand.STARTTLS not in peer.transcript
+    assert peer.transcript == [SMTPCommand.EHLO]
+    assert report.observation.outcome is RecipientStageOutcome.TLS_ERROR
 
 
 # --- the sender is the operator's, and the target is only ever the recipient -
@@ -884,7 +906,7 @@ async def test_the_envelope_sender_is_the_configured_one() -> None:
     test in this file: nothing else looks at what the command actually carried.
     This does.
     """
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     await run(peer)
     text = peer.wire_text()
 
@@ -895,7 +917,7 @@ async def test_the_envelope_sender_is_the_configured_one() -> None:
 
 async def test_the_target_appears_once_and_only_as_the_recipient() -> None:
     """It is the thing being asked about, not the thing this project claims to be."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     await run(peer)
     text = peer.wire_text()
 
@@ -905,7 +927,7 @@ async def test_the_target_appears_once_and_only_as_the_recipient() -> None:
 
 async def test_the_ehlo_name_is_the_configured_one() -> None:
     """Never the recipient's domain, and never the MX host being connected to."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     await run(peer)
     text = peer.wire_text()
 
@@ -918,7 +940,7 @@ async def test_a_different_target_does_not_change_the_sender() -> None:
     """The sender is a function of configuration alone."""
     senders = []
     for text in ("a@one.test.example", "b@two.test.example", "c@three.test.example"):
-        peer = plain_session_peer(peer_endpoint())
+        peer = tls_session_peer(peer_endpoint())
         await dialogue().run(peer, session(), address(text))
         senders.append(
             [line for line in peer.wire_text().split("\r\n") if line.startswith("MAIL FROM")]
@@ -958,7 +980,7 @@ async def test_the_dialogue_is_the_same_whoever_hosts_the_domain(domain: str) ->
     """
     transcripts = []
     for target_domain in (domain, "some-small-host.test.example"):
-        peer = plain_session_peer(peer_endpoint())
+        peer = tls_session_peer(peer_endpoint())
         report = await dialogue().run(peer, session(), address(f"person@{target_domain}"))
         transcripts.append((peer.transcript, report.observation.outcome, report.tls.negotiated))
 
@@ -1023,7 +1045,7 @@ def _provider_names_in_the_smtp_tree() -> list[str]:
 
 async def test_the_dialogue_reads_the_targets_domain_only_for_the_recipient() -> None:
     """The one place the target may influence the wire is `RCPT TO`."""
-    peer = plain_session_peer(peer_endpoint())
+    peer = tls_session_peer(peer_endpoint())
     await dialogue().run(peer, session(), address("person@some-provider.test.example"))
     text = peer.wire_text()
 

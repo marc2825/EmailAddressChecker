@@ -13,7 +13,7 @@ DISCONNECTED
   → CONNECTING
   → BANNER_RECEIVED
   → EHLO_COMPLETED
-  → TLS_NEGOTIATED          optional
+  → TLS_NEGOTIATED          required by the dialogue
   → EHLO_COMPLETED_AFTER_TLS
   → MAIL_FROM_ACCEPTED
   → RCPT_RESULT_RECEIVED
@@ -101,20 +101,19 @@ alone. See ADR 0009.
 
 ## 4. STARTTLS
 
-STARTTLS is optional in the first SMTP sub-Phase.
-
-When enabled:
+STARTTLS is required in every shipped dialogue, including library use. Earlier
+sub-Phases exercised plaintext state transitions; those transitions do not
+authorize plaintext probing. ADR 0021 removes the opportunistic policy.
 
 - parse the EHLO capability safely. `domain/smtp_capabilities.py` reads keyword
   names on exact token boundaries, case-insensitively, ignores an unknown
   extension, and **never branches on one**: an `X-` keyword is a better
   fingerprint than an MX name, and `docs/architecture.md` keeps provider identity
   as metadata that decides nothing;
-- apply the configured TLS policy. `TLSPolicy.REQUIRED` is the default: a server
+- apply `TLSPolicy.REQUIRED`, the only supported policy: a server
   that advertises no `STARTTLS` ends the probe as `TLS_ERROR`, which is a
-  non-target outcome. `TLSPolicy.OPPORTUNISTIC` continues in plaintext when the
-  extension is absent, and **neither policy tolerates a failed handshake** — that
-  is not a fallback, and there is no transition back to plaintext;
+  non-target outcome. No sender or recipient command follows a missing upgrade
+  or failed handshake, and there is no plaintext fallback;
 - send STARTTLS only once, which the session refuses by count;
 - verify the certificate and the host name, always. The name comes from the
   `ConfirmedPeer`, so it is the MX host the destination chain validated and never

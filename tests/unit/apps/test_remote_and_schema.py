@@ -1,7 +1,7 @@
 """`--remote`, the endpoint policy behind it, and the published schema.
 
 `docs/requirements.md` section 12 requires a remote active mode;
-`prompts/06-api-cli.md` requires that the CLI handle pending, completed, and
+`docs/architecture.md` requires that the CLI handle pending, completed, and
 failed, and that the schema state the limitations explicitly.
 
 **No test here opens a socket.** The transport is a port and every test uses a
@@ -71,7 +71,7 @@ def sleeper() -> AdvancingSleeper:
     "url",
     [
         "https://validator.example",
-        "http://localhost:8080",
+        "http://127.0.0.1:8080",
         "https://validator.example/api/",
         "https://validator.example:8443/prefix",
     ],
@@ -324,7 +324,7 @@ async def test_the_json_form_is_the_published_job_object(
 
 
 def test_the_schema_states_that_nothing_is_guaranteed() -> None:
-    """`prompts/06-api-cli.md`'s acceptance criterion, as a test.
+    """`docs/architecture.md`'s acceptance criterion, as a test.
 
     "API examples state explicitly that no existence or delivery guarantee is
     made." A CLI caveat is not that: a caller reading only the schema must be
@@ -353,7 +353,7 @@ def test_the_schema_documents_every_published_value_by_iterating_the_enum() -> N
 
 
 def test_the_schema_carries_an_example_for_every_job_state() -> None:
-    """`prompts/06-api-cli.md` requires the CLI to handle pending, completed,
+    """`docs/architecture.md` requires the CLI to handle pending, completed,
     and failed; a schema that documented only the happy one would leave a
     client guessing at the others."""
     endpoints = api_schema()["endpoints"]

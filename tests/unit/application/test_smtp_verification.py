@@ -54,7 +54,6 @@ from fake_smtp_server import (
     RCPT_TEMPORARY,
     RCPT_UNVERIFIABLE,
     RoutedSMTPTransport,
-    plain_session_peer,
     reply,
     tls_failure,
     tls_session_peer,
@@ -65,7 +64,7 @@ pytestmark = pytest.mark.asyncio
 FIRST = "93.184.216.34"
 SECOND = "93.184.216.35"
 THIRD = "93.184.216.36"
-PLAIN = DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC)
+TLS_SETTINGS = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 
 #: Every scenario carries an outer bound, so a loop that waits when it should
 #: stop fails rather than hangs.
@@ -95,7 +94,7 @@ def peer_for(
     mail_from: object | None = None,
 ):  # type: ignore[no-untyped-def]
     """A plain server at one address, with one step optionally rewritten."""
-    peer = plain_session_peer(endpoint(address_value), rcpt=rcpt)  # type: ignore[arg-type]
+    peer = tls_session_peer(endpoint(address_value), rcpt=rcpt)  # type: ignore[arg-type]
     if banner is not None:
         peer.banner = banner  # type: ignore[assignment]
     if mail_from is not None:
@@ -115,7 +114,7 @@ def service(
         identity_provider=identity_provider(),
         rate_limiter=limiter,  # type: ignore[arg-type]
         clock=FakeMonotonicClock(),
-        settings=PLAIN,
+        settings=TLS_SETTINGS,
     )
     return (
         SMTPVerificationService(
@@ -268,7 +267,7 @@ async def test_a_recipient_command_lost_before_its_reply_still_stops() -> None:
     """
     from emailcheck.domain.smtp_destination import PeerEndpoint
 
-    silent = plain_session_peer(PeerEndpoint(address=FIRST, port=25))
+    silent = tls_session_peer(PeerEndpoint(address=FIRST, port=25))
     silent.responses.pop(SMTPCommand.RCPT_TO)
     silent.exhausted = TransportFailure.CONNECTION_RESET
     transport = RoutedSMTPTransport(peers={FIRST: silent, SECOND: peer_for(SECOND)})
@@ -290,7 +289,7 @@ async def test_a_recipient_command_that_fails_to_write_still_stops() -> None:
     """
     from emailcheck.domain.smtp_destination import PeerEndpoint
 
-    failing = plain_session_peer(PeerEndpoint(address=FIRST, port=25))
+    failing = tls_session_peer(PeerEndpoint(address=FIRST, port=25))
     failing.write_failure_on = SMTPCommand.RCPT_TO
     transport = RoutedSMTPTransport(peers={FIRST: failing, SECOND: peer_for(SECOND)})
 
@@ -330,7 +329,7 @@ async def test_an_internal_failure_never_falls_through_to_another_exchanger() ->
     """A bug of ours must not be hidden behind a second server's answer."""
     from emailcheck.domain.smtp_destination import PeerEndpoint
 
-    broken = plain_session_peer(PeerEndpoint(address=FIRST, port=25))
+    broken = tls_session_peer(PeerEndpoint(address=FIRST, port=25))
     broken.responses[SMTPCommand.MAIL_FROM] = "not a response"  # type: ignore[assignment]
     transport = RoutedSMTPTransport(peers={FIRST: broken, SECOND: peer_for(SECOND)})
 
@@ -611,7 +610,7 @@ async def test_no_report_surface_carries_the_recipient() -> None:
     """Every attempt, every record, and the whole report as one string."""
     from emailcheck.domain.smtp_destination import PeerEndpoint
 
-    echoing = plain_session_peer(
+    echoing = tls_session_peer(
         PeerEndpoint(address=FIRST, port=25),
         rcpt=reply("550 5.1.1 <probe.target@recipient.test.example> unknown"),
     )

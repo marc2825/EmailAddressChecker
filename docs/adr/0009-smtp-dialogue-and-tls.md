@@ -4,6 +4,11 @@
 - Date: 2026-08-08
 - Phase: 4C
 
+**Security update (2026-11-15):** [ADR 0021](0021-required-encryption-at-network-boundaries.md)
+supersedes the former availability of `OPPORTUNISTIC`. Required TLS is now the
+only supported policy, including internal dialogue use. The downgrade argument
+below explains the historical trade-off; it grants no plaintext configuration.
+
 ## Context
 
 Gate 4B deliberately published no way to write a byte. `SMTPConnection` had
@@ -102,9 +107,9 @@ rather than about the address.
 
 `TLSPolicy.REQUIRED` is the default. A server that advertises no `STARTTLS` ends
 the probe as `TLS_ERROR`, which is in `NON_TARGET_OUTCOMES`, so it can never
-contribute to a target-specific verdict. `TLSPolicy.OPPORTUNISTIC` exists for a
-deployment that decides otherwise, and it is opportunistic about *availability
-only*: a handshake that is attempted and fails is fatal under both policies.
+contribute to a target-specific verdict. Historically `TLSPolicy.OPPORTUNISTIC`
+allowed plaintext when STARTTLS was absent. ADR 0021 removes that option.
+A handshake that is attempted and fails is always fatal.
 There is no plaintext fallback here and no transition to one in the state
 machine — `docs/smtp-state-machine.md` has `FAILED` permit only `QUIT`.
 
@@ -137,8 +142,8 @@ observer and against nobody else, and an active attacker is the threat model
 The cost is real and is stated in the consequences below: a server that
 genuinely offers no STARTTLS yields `unknown`. That is measurable — the report
 carries `starttls_advertised` and `tls_reason` — and
-`IMPLEMENTATION_STATUS.md` records a dated obligation to measure it before the
-Phase 8 limited beta rather than to guess at it now.
+the public beta report template requests representative operational evidence.
+No such measurement is claimed by this ADR or by passing tests.
 
 ## Decision: verification cannot be turned off, and the seam only widens trust
 
@@ -169,7 +174,7 @@ it would let a caller choose who signs the certificate this project trusts —
 which is `CERT_NONE` with extra steps. So the provenance rule is the same one
 `SenderIdentityProvider` has: request, user, and API input may never supply a CA
 file, a PEM body, a trust anchor, or any verification override. There is no such
-field today and `plans/phase-04-smtp.md` records it as a stop condition for
+field today and this ADR records it as a stop condition for
 Phase 6; an inspection test already fails if a `TLSTrust` is constructed
 anywhere in `src/` outside the module that defines the system-trust default, or
 if any production module reads the environment.
@@ -307,11 +312,10 @@ MX host — never the local part, so a budget key cannot carry one.
 - Requiring TLS by default means a server without STARTTLS returns `unknown`.
   That is the conservative answer and it is visible in the report as
   `tls_reason = not_offered`. **How often it happens is not guessed at here.**
-  `IMPLEMENTATION_STATUS.md` and `plans/phase-04-smtp.md` carry a dated
-  obligation: measure the `not_offered` rate under representative operation
-  before the Phase 8 limited beta, then decide explicitly whether `REQUIRED`
-  remains the product default. Changing the default without that measurement is
-  not one of the options.
+  Measure the `not_offered` rate under authorized representative operation
+  before a limited beta. Measurements describe compatibility; ADR 0021 requires
+  TLS regardless of that rate. Changing the default without a security review
+  is not one of the options.
 - The TLS test fixtures are committed certificates. Generating one needs
   `cryptography`, which this project does not depend on, or the `openssl` binary,
   which a CI image need not have. `tests/fixtures/tls/README.md` records what

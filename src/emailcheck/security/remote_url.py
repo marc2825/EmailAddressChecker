@@ -13,12 +13,17 @@ value. It is still screened, for two reasons that survive that difference:
 The policy is an **allowlist of two schemes** rather than a deny list of the
 dangerous ones, on the precedent the request schema in `apps/api.py` set: a
 scheme nobody thought of is refused too.
+
+HTTPS is required. HTTP is reserved for exactly 127.0.0.1 and ::1 literals;
+hostnames and DNS resolution never grant a plaintext exception (ADR 0021).
 """
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from typing import Final
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 #: Long enough for any real deployment, short enough that it cannot be a payload.
 MAX_URL_LENGTH: Final = 2048
@@ -43,20 +48,49 @@ def normalize_base_url(url: str) -> str:
         raise RemoteUrlError("a remote endpoint must be text")
     if len(url) > MAX_URL_LENGTH:
         raise RemoteUrlError(f"a remote endpoint must be at most {MAX_URL_LENGTH} characters")
-    if any(character in url for character in ("\r", "\n", "\0", " ", "\t")):
+    if any(ord(character) <= 32 or ord(character) >= 127 for character in url):
         # A control character in a URL is a request-splitting attempt or a
         # copy-paste accident. Neither should reach a client library.
-        raise RemoteUrlError("a remote endpoint carries a control character")
+        raise RemoteUrlError("a remote endpoint must use ASCII text without whitespace or controls")
 
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        raise RemoteUrlError("a remote endpoint has an invalid authority") from None
     if parts.scheme not in PERMITTED_SCHEMES:
         raise RemoteUrlError("a remote endpoint must be http or https")
-    if not parts.hostname:
+    if not host:
         raise RemoteUrlError("a remote endpoint must name a host")
     if parts.username is not None or parts.password is not None:
         raise RemoteUrlError("a remote endpoint must not carry credentials")
-    if parts.query or parts.fragment:
+    if "?" in url or "#" in url:
         raise RemoteUrlError("a remote endpoint must not carry a query or a fragment")
+    if "\\" in url or "%" in parts.netloc or parts.netloc.endswith(":") or port == 0:
+        raise RemoteUrlError("a remote endpoint has an invalid authority")
+    authority = f"[{host}]" if ":" in host else host
+    if port is not None:
+        authority += f":{port}"
+    if parts.netloc.lower() != authority or host.endswith(".."):
+        raise RemoteUrlError("a remote endpoint has an invalid authority")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        labels = host.rstrip(".").split(".")
+        if (
+            len(host) > 253
+            or all(character in "0123456789." for character in host)
+            or any(
+                not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels
+            )
+        ):
+            raise RemoteUrlError("a remote endpoint has an invalid host") from None
+    if parts.scheme == "http" and host not in {"127.0.0.1", "::1"}:
+        raise RemoteUrlError("a remote endpoint requires HTTPS except for 127.0.0.1 or ::1")
+    decoded_path = unquote(parts.path)
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded_path):
+        raise RemoteUrlError("a remote endpoint carries a control character")
 
     return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
 
@@ -72,6 +106,6 @@ def join_api_path(base_url: str, path: str) -> str:
     """
     if not path.startswith("/"):
         raise RemoteUrlError("an API path must be absolute")
-    if "//" in path or ".." in path:
+    if "//" in path or ".." in path or not re.fullmatch(r"/[A-Za-z0-9_/-]+", path):
         raise RemoteUrlError("an API path must not be protocol-relative or traverse")
     return f"{normalize_base_url(base_url)}{path}"
