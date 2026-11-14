@@ -1,7 +1,7 @@
 """What an asynchronous active check *is*, as vocabulary.
 
 `docs/requirements.md` section 11 makes `POST /v1/checks` create a job;
-`prompts/06-api-cli.md` fixes the six states, the idempotency key, the bounded
+`docs/architecture.md` fixes the six states, the idempotency key, the bounded
 retry, and cancellation. ADR 0014 records the decisions. This module holds the
 values and the state table, and nothing else: no scheduling, no I/O, no
 deliverability rule, and no dependency on anything above the domain.
@@ -58,7 +58,7 @@ class JobTransitionError(JobError):
 
 
 class JobState(StrEnum):
-    """The six states `prompts/06-api-cli.md` publishes."""
+    """The six states `docs/architecture.md` publishes."""
 
     PENDING = "pending"
     RUNNING = "running"

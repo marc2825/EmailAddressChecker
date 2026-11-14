@@ -1,4 +1,4 @@
-"""Each layered budget, enforced. `prompts/07-hardening.md`'s first test.
+"""Each layered budget, enforced. `docs/threat-model.md`'s first test.
 
 The guard is exercised against the **real** `InProcessQuotaStore` wherever the
 question is arithmetic, and against `CountingQuotaStore` wherever the question is
@@ -273,7 +273,7 @@ async def test_a_budget_resets_at_the_window_boundary() -> None:
 
 
 async def test_the_daily_total_uses_a_day_whatever_the_window_is() -> None:
-    """`prompts/07-hardening.md` calls it a daily total, so it is a day by
+    """`docs/threat-model.md` calls it a daily total, so it is a day by
     definition rather than by configuration — advancing past the *configured*
     window must not refill it."""
     clock = SteppableClock()
@@ -299,7 +299,7 @@ async def test_the_daily_total_uses_a_day_whatever_the_window_is() -> None:
 
 
 async def test_a_quota_store_failure_refuses_an_active_check() -> None:
-    """`prompts/07-hardening.md`: rate storage failure fails closed for active."""
+    """`docs/threat-model.md`: rate storage failure fails closed for active."""
     store = CountingQuotaStore(unavailable=True)
     guard = build(store)
     with pytest.raises(AbuseRefused) as refusal:

@@ -6,6 +6,12 @@ EmailAddressCheckerは、メールアドレスの構文やDNS/MXレコードを�
 
 通常のローカル検査ではSMTPサーバーに接続しません。SMTPによる検査は、別途設定・許可された運用環境向けの機能です。
 
+`--remote` はHTTPS必須です。開発用HTTPは `127.0.0.1` と `[::1]` の
+IPリテラルだけを許可し、`localhost`・リダイレクト・環境プロキシは使用しません。
+Active SMTPはライブラリ経由でも証明書・ホスト名検証付きTLS必須です。
+従来の `OPPORTUNISTIC` は削除しました。移行方法は
+[ADR 0021](docs/adr/0021-required-encryption-at-network-boundaries.md)を参照してください。
+
 ## 主な機能
 
 - **受動検査：** SMTP接続を行わず、構文とDNS/MXレコードを確認

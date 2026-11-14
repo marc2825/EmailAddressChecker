@@ -81,7 +81,7 @@ section 7 lists the separation as a requirement.
   during a deletion incident is data outside every retention this document
   describes.
 - Do not write a complete address into the incident log, the ticket, or your
-  own notes while handling a deletion request. `AGENTS.md` forbids logging one
+  own notes while handling a deletion request. `CONTRIBUTING.md` forbids logging one
   in normal application logs, and a deletion ticket is the worst possible place
   to create the first exception.
 - Do not delete audit events to make a deletion look complete. The audit trail

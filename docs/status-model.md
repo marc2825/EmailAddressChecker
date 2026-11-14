@@ -316,10 +316,8 @@ stored encrypted for a short retention period.
 
 ## 7. SMTP observation to evidence, for Phase 4D
 
-Gate 4C produces a `SessionReport` and stops. This section fixes what Phase 4D
-may turn one into, and it is written **before** that code exists: a mapping
-authored alongside its implementation is a mapping shaped by whatever the
-implementation happened to make easy.
+Gate 4C produces a `SessionReport` and stops. This contract was specified before
+Phase 4D; `application/smtp_evidence.py` now implements the mapping below.
 
 Nothing here is a status. A reason code records what was observed; section 4
 decides the status, with the syntax, DNS, and passive evidence in front of it.
@@ -374,7 +372,8 @@ section 4 resolves all of them to `unknown` or `temporary_unknown`.
 
 ### The TLS-required default has a measurement obligation
 
-`TLSPolicy.REQUIRED` is the default, and a destination that advertises no
+`TLSPolicy.REQUIRED` is the default and the only supported policy (ADR 0021),
+and a destination that advertises no
 STARTTLS therefore becomes `smtp_tls_failure` — `tls.reason` `not_offered` —
 rather than a plaintext session. That default is a judgement about how much of
 the real mail population still refuses TLS, and this project has **not measured
@@ -499,7 +498,7 @@ and only `basic_code` can.
 > ```
 >
 > classifies a refusal to verify as an acceptance, and section 4's precedence
-> then promotes it to `likely_deliverable`. `plans/phase-04-smtp.md` records this
+> then promotes it to `likely_deliverable`. `docs/adr/0009-smtp-dialogue-and-tls.md` records this
 > as a stop condition, and `tests/unit/application/test_smtp_dialogue.py` pins
 > that the two are indistinguishable without the code, so the danger is visible
 > rather than remembered.

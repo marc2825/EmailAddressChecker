@@ -4,7 +4,7 @@ Two implementations of `ports/metrics.py`, because a deployment needs one and a
 test needs the other to be measurable.
 
 `InMemoryMetrics` keeps counters and observation summaries in a dictionary. It
-is the development sink and the one tests assert on — `prompts/07-hardening.md`
+is the development sink and the one tests assert on — `docs/threat-model.md`
 requires that full addresses are absent from captured metrics, and that is a
 scan over something real rather than a claim.
 
@@ -36,7 +36,7 @@ class Observation:
     """A summary of one measured series. Never the individual values.
 
     Keeping every sample would make memory a function of traffic; a count, a
-    total, and the extremes answer what `prompts/07-hardening.md` asks of
+    total, and the extremes answer what `docs/threat-model.md` asks of
     latency without that.
     """
 

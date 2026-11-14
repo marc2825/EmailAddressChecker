@@ -57,7 +57,7 @@ Establish, in this order:
 
 - **Do not rotate the IP, the PTR, the EHLO name, or the envelope sender to get
   around a block.** This is the single most tempting action in this document and
-  it is forbidden without exception: `AGENTS.md` prohibits rotating IPs or
+  it is forbidden without exception: `CONTRIBUTING.md` prohibits rotating IPs or
   identities to bypass remote limits, and doing it converts a reputation problem
   into evasion. If the identity is blocked, it stays blocked until the receiving
   operator lifts it or you retire the deployment openly.

@@ -3,7 +3,7 @@
 Phase 4 carried an `account` string into the rate limiter and deliberately let
 it divide no budget, because a caller-supplied account is per-account isolation
 in appearance only: bypassed by sending a different string.
-`plans/phase-04-smtp.md` records that as a Phase 6 stop condition, and this type
+`docs/adr/0009-smtp-dialogue-and-tls.md` records that as a Phase 6 stop condition, and this type
 is the thing that closes it.
 
 **A `Principal` is not a request field, and the type cannot say so.** Nothing
@@ -46,7 +46,7 @@ class Principal:
     account_id: str
     #: Which of this account's credentials was presented, as an opaque handle.
     #:
-    #: `prompts/07-hardening.md` lists "API key" and "account" as **separate**
+    #: `docs/threat-model.md` lists "API key" and "account" as **separate**
     #: budget layers, and they are only separate if one account may hold several
     #: keys: a leaked key has to be containable without suspending the account
     #: that owns it. Phase 6 had one key per account, so the two layers were the
@@ -100,7 +100,7 @@ class Principal:
     def suspension_subjects(self) -> tuple[str, ...]:
         """The identities an operator can suspend this caller by.
 
-        Both, when both exist: `prompts/07-hardening.md`'s admin interface can
+        Both, when both exist: `docs/threat-model.md`'s admin interface can
         suspend a key *or* an account, and a request presenting a suspended key
         must be refused even when its account is fine — and the other way round.
         Returned as a tuple so the caller checks every one rather than choosing.

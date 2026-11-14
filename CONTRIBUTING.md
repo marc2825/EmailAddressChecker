@@ -50,7 +50,11 @@ The code follows the dependency structure described in [architecture.md](docs/ar
 
 Add tests for behavior changes, particularly in SMTP retries, DNS or destination validation, authorization, caching, persistence and deletion. Update the relevant documentation when behavior changes; use an [architecture decision record](docs/adr/) for durable design decisions.
 
-Some older comments and ADRs refer to private development notes. These are historical references, not instructions for contributors. The public documents and current implementation define the reviewable behavior.
+Use Python 3.12+, full public-function annotations and immutable domain values.
+Keep time in UTC and serialize explicit offsets. Do not expose network exception
+text through public errors, silently broaden email syntax, or add production
+dependencies without an ADR. Tests use fake clocks and deterministic randomness;
+do not weaken timing assertions to mask a failure.
 
 ## Pull requests
 

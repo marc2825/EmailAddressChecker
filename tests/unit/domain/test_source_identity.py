@@ -1,6 +1,6 @@
 """Where a request came from, and everywhere it may not come from.
 
-`prompts/07-hardening.md` lists source IP among the layered budgets. ADR 0016
+`docs/threat-model.md` lists source IP among the layered budgets. ADR 0016
 records why no header is trusted: without a trusted-proxy list, a spoofable
 value in a budget key turns a per-source limit into a per-*claimed*-source
 limit that an attacker resets by changing a string.

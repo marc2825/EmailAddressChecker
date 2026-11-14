@@ -1,6 +1,6 @@
 """Running jobs in this process, with every dimension bounded.
 
-`prompts/06-api-cli.md` asks for a "memory executor for tests". This is that,
+`docs/architecture.md` asks for a "memory executor for tests". This is that,
 and ADR 0014 records what it may and may not be used for: it is **not** the
 service-active isolated worker, and `composition.py` refuses that combination
 rather than letting a development fake become the production default by

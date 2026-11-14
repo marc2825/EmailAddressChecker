@@ -1,6 +1,6 @@
 """Adversarial values, driven end to end, scanned on every surface.
 
-`prompts/07-hardening.md`: full addresses absent from captured logs and metrics,
+`docs/threat-model.md`: full addresses absent from captured logs and metrics,
 and indicators that do not leak guessed addresses in admin summaries.
 `docs/requirements.md` section 16: ordinary logs never contain a full address.
 
@@ -201,7 +201,7 @@ async def test_no_surface_carries_the_submitted_address(
 
 @pytest.mark.asyncio
 async def test_an_indicator_summary_names_a_count_and_never_a_guessed_address() -> None:
-    """`prompts/07-hardening.md`: indicators must not leak guessed addresses in
+    """`docs/threat-model.md`: indicators must not leak guessed addresses in
     admin summaries. The caller here is enumerating, so every indicator that can
     fire does."""
     from tests.phase7_fixtures import PRINCIPAL, RecordingOperator, quota_settings, target

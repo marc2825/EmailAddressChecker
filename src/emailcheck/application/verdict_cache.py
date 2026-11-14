@@ -1,6 +1,6 @@
 """The result cache: what may be reused, keyed by what produced it.
 
-`prompts/06-api-cli.md` requires a cache lookup before an enqueue;
+`docs/architecture.md` requires a cache lookup before an enqueue;
 `docs/architecture.md` section 6 fixes the rule that repeated requests inside
 the cache window return the existing result. ADR 0015 decides the two things
 those documents leave open: how long an aggregated `Verdict` lives, and what the

@@ -87,7 +87,7 @@ never select a verdict, and no code path allows it to.
 
 ## Decision: no dataset ships without verifiable provenance
 
-`prompts/03-passive-classification.md` requires that when no redistributable
+`docs/data-sources.md` requires that when no redistributable
 dataset with verified provenance has been selected, the loader and format ship
 with illustrative `.example` data and production data stays empty, and that no
 licence is invented.
@@ -109,8 +109,8 @@ That is a data gap, not a code gap.
 It is also a gap with a deadline. By the Phase 8 limited beta each empty dataset
 is either populated from a reviewed source or documented as unavailable
 functionality; a beta that answers "not disposable" for every address without
-saying so is neither. `IMPLEMENTATION_STATUS.md` and `src/emailcheck/data/passive/README.md`
-carry the same deadline.
+saying so is neither. `STATUS.md` and `src/emailcheck/data/passive/README.md`
+record their current availability.
 
 ## Decision (Phase 8): the three datasets are declared unavailable
 

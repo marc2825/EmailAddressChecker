@@ -456,7 +456,7 @@ class RecordingExecutor:
     """A `JobExecutor` that records instead of running, and runs on demand.
 
     Keeping "was this enqueued" and "did it run" separate is what makes
-    `prompts/06-api-cli.md`'s "cache hit skips enqueue" measurable: the count is
+    `docs/architecture.md`'s "cache hit skips enqueue" measurable: the count is
     zero, rather than the work being cheap.
     """
 

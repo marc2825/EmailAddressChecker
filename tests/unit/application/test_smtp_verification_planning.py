@@ -69,7 +69,7 @@ def test_the_plan_is_deterministic() -> None:
 
     A randomized scan would make one verification's behaviour unreproducible,
     and choosing a different endpoint to get a different answer is the rotation
-    shape `AGENTS.md` forbids outright.
+    shape `CONTRIBUTING.md` forbids outright.
     """
     mail_route = two_host_route()
     first = plan_attempts(mail_route)

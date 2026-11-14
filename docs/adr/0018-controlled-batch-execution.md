@@ -6,7 +6,7 @@
 
 ## Context
 
-`prompts/10-batch.md` asks to "process authorized CSV jobs fairly without
+this ADR asks to "process authorized CSV jobs fairly without
 weakening single-check safety", and opens by saying batch is "an operational
 permission, not merely a profile switch". `docs/requirements.md` section 15 says
 the same of the `bulk` profile.
@@ -38,7 +38,7 @@ not get a larger registry for being a batch.
 
 ## Decision: fairness is two rotations — exchangers, then domains
 
-`prompts/10-batch.md`: *fair scheduling by target domain and MX*, and *one
+this ADR: *fair scheduling by target domain and MX*, and *one
 domain cannot monopolize workers*. Those are two bounds, and an implementation
 that keeps only the first satisfies the prompt by half.
 
@@ -87,7 +87,7 @@ impossible: the seam would have to be inside `application/smtp_verification.py`,
 which runs *after* the scheduling decision and below the layer that makes it.
 Reaching it from a batch would mean either a second routing path or a scheduler
 that re-orders work mid-verification, and both are larger changes than
-`prompts/10-batch.md` asks for.
+this ADR asks for.
 
 The alternative was for `BatchService` to call a resolver, and it was rejected:
 that is a second routing path with none of Phase 2's ordering, caching, or
@@ -148,7 +148,7 @@ word, and a test now refuses any row state that reuses a status's word.
 ## Decision: batch is enabled *and* approved, or it does not run
 
 `BatchSettings.enabled` is `False` and `BatchApproval.accounts` is empty, and
-both must be true. `prompts/10-batch.md`'s preconditions are *account
+both must be true. this ADR's preconditions are *account
 review/approval* and *domain ownership or documented lawful purpose*, neither of
 which a program can establish and both of which a person records.
 
@@ -187,7 +187,7 @@ occupy.
 
 ## Decision: resumability is persistence, and the crash boundary is idempotency
 
-`prompts/10-batch.md`'s scheduler asks for *resumable job state* and its tests
+this ADR's scheduler asks for *resumable job state* and its tests
 ask for *restart/resume*. An in-process registry answers neither, because the
 process is what a restart destroys. `ports/batch_store.py` holds row state, the
 target digest, the child `JobId`, and a deterministic per-row idempotency
@@ -379,7 +379,7 @@ one would make submitting batches a way to erase somebody else's.
 ## Decision: composition stays deferred, as it did for Phase 9
 
 No `Deployment` field, no `composition.py` wiring, and no API or CLI surface —
-`prompts/10-batch.md` requires none, and an inspection test refuses the words
+this ADR requires none, and an inspection test refuses the words
 `batch`, `bulk`, and `csv` in every request-facing module. Wiring a subsystem
 nobody may yet run only creates a path.
 

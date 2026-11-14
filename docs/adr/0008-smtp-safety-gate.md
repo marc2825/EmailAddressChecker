@@ -97,7 +97,7 @@ command. The scanner flags the exact identifier and ignores every compound, so
 The same applies to thirteen other words, and `data`, `auth`, and `turn` are
 common enough as local names that a 4B author would hit them. The complete list,
 and every syntactic position it covers, is in
-`src/emailcheck/adapters/smtp/AGENTS.md`, so the constraint is found before the
+`docs/smtp-state-machine.md`, so the constraint is found before the
 code is written rather than after the gate rejects it.
 
 ## Decision: fourteen commands, and a coverage self-check
@@ -223,7 +223,7 @@ against the syntax, DNS, and passive evidence.
 An inspection test keeps `Status`, `Verdict`, `Confidence`, `likely_deliverable`,
 and `temporary_unknown` out of every `domain/smtp*` module, and keeps `socket`,
 `ssl`, `asyncio`, and `smtplib` out of them too, so the stop condition in
-`plans/phase-04-smtp.md` is enforced rather than remembered.
+`docs/adr/0009-smtp-dialogue-and-tls.md` is enforced rather than remembered.
 
 ## Consequences
 

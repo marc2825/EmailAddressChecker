@@ -1,6 +1,6 @@
 """A bounded loopback connection workload, over the local fixture only.
 
-`prompts/08-limited-beta.md` work item 8: *add load testing against only the
+`docs/beta-report-template.md`: *add load testing against only the
 scripted local server*. The emphasis is on **only**, so this file is written to
 make the restriction checkable rather than promised — every socket it opens
 reaches `tests/integration/loopback_server.py`, and each test asserts that from
@@ -14,7 +14,7 @@ no destination policy is in the path, because the loopback fixture cannot reach
 the production chain — `evaluate_destination` denies `127.0.0.1` and
 `ApprovedDestination` re-runs that check, which is the policy working.
 
-**So this file measures none of `prompts/08-limited-beta.md`'s beta metrics.**
+**So this file measures none of `docs/beta-report-template.md`'s beta metrics.**
 An independent review found an earlier version claiming to pin *connections per
 job*: it counted the connection pairs the test itself had created, which no
 production change could ever alter. What is measured here is narrower and true:

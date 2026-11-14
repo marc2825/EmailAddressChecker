@@ -88,6 +88,9 @@ Datasets are loaded from versioned local resources, never downloaded on startup.
 
 Input order and repeated observations must not alter the result. Public output uses an explicit field allowlist; raw diagnostics and protocol transcripts are not exposed. See [status model](status-model.md).
 
+`Verdict` enforces that its primary reason leads the ordered reason-code list;
+a mismatched primary reason cannot be constructed.
+
 ## 3. Package layout
 
 The codebase follows the boundaries introduced in section 1: `domain/` contains validated value types, `ports/` defines external interfaces, `adapters/` implements I/O, `application/` coordinates decisions, and `apps/` exposes the CLI and request handlers. The `classification/` and `security/` packages own their respective policies. `composition.py` wires concrete implementations together. Interfaces for clocks, sleep, and randomness support deterministic testing.
@@ -135,6 +138,10 @@ Destination pacing is shared across accounts within a worker. Keys must not cont
 
 The shipped limiter and quota stores are **process-scoped**. Deployments use one worker process; independent processes or replicas are not covered by a global pacing/quota guarantee. Adding distributed execution requires a shared atomic limiter, admission coordination, and consistent kill switches. See [operations](operations.md) and [ADR 0020](adr/0020-local-batch-and-release.md).
 
+Limiter memory is bounded by the idle-entry cap plus entries held by in-flight
+callers; admission control must bound those callers. The limiter TTL applies to
+idle entries only and is not required to exceed the longest SMTP session.
+
 ### Jobs, caching, and persistence
 
 Active checks use asynchronous jobs: an API request is admitted and receives job state without blocking an API worker for an SMTP dialogue. Idempotency binds a caller, normalized target, and submitted key; retry behavior is constrained by recipient-contact history. A cache hit must not enqueue a new probe.
@@ -153,6 +160,16 @@ The passive API must remain usable when active probing is disabled, the active w
 
 An active request binds the authenticated account, idempotency key, and HMAC of the normalized target. A repeated request within the applicable cache/idempotency window returns its existing job or result instead of scheduling another probe; reusing a key with a different target is a conflict. Explicit authorized refresh still requires ordinary admission and quota. The bound is enforced in persistent storage where configured, including concurrent submissions or worker restarts. See [ADR 0014](adr/0014-bounded-asynchronous-active-jobs.md) and [ADR 0019](adr/0019-operation-recipient-budget-and-atomic-job-identity.md).
 
+The submission order in `JobService.submit` is:
+
+```text
+passive check -> idempotency -> cache -> enqueue
+```
+
+The initial passive work supplies the normalized target and current evidence;
+returning an existing job or cached result therefore still costs passive work
+and caller quota. It avoids a new active recipient contact.
+
 ## Privacy and account deletion
 
 Normal logs, metrics, and public results do not expose complete target addresses. HMAC identifiers support correlation without retaining raw identifiers in routine log records. Local result files omit addresses by default; `--include-address` is an explicit opt-in.
@@ -170,6 +187,30 @@ Adding replicas requires more than spawning workers: globally shared, atomic des
 Active probing is **off by default**. Approval is per deployment and requires an authorized target scope, configured sender identity, destination controls, authentication, TLS, tested kill switch and rate limits, appropriate network egress, monitoring, and incident ownership. `emailcheck --check-deployment` is informational; it neither tests external connectivity nor grants approval.
 
 A future web/ASGI binding must establish trustworthy client-IP provenance, enforce request-body size limits while reading input, apply an explicit proxy trust policy, and construct a single `Deployment` at startup. No publicly writable administrative or account-deletion interface is provided by these application handlers.
+
+#### Stop conditions on the ASGI binding
+
+These are requirements for a future transport binding, not claims of a shipped
+HTTP server. All seven must be satisfied before exposing these handlers:
+
+- **trusted client IP provenance.** The reviewed transport binding is the only
+  thing that may construct a `SourceIdentity` from an authenticated connection's
+  network provenance; callers cannot submit their own trusted identity.
+- **proxy header policy.** Trust `X-Forwarded-For` only from an operator-configured
+  list of proxies. Untrusted forwarded headers must not select a source budget.
+- **request body size.** Input needs a bound before it is parsed. The request body
+  limit must be enforced while the body is read, not only after the complete
+  upload has been buffered; this also applies to any future CSV upload.
+- **request logging redaction.** Use `security/redaction.py` rather than a second
+  implementation. Request bodies and authorization headers must not be logged.
+- **one `Deployment` per process, built at startup**, not per request. Startup
+  validation and shared controls must cover every request handled by the process.
+- **no request-local limiter, quota store, or admin state.** Counters and kill
+  switches must be the same objects across requests.
+- **the administrative interface is not mounted on the public application.**
+  Deletion, suspension and kill switches remain operator-only operations.
+
+### Review evidence
 
 Refer to the [readiness checklist](readiness-checklist.md), [operations guide](operations.md), and [runbooks](runbooks/) before any approved active deployment.
 

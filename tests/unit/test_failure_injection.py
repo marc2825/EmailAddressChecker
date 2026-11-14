@@ -1,6 +1,6 @@
 """What happens when the things that watch break.
 
-`prompts/07-hardening.md` tests the enforcement paths; this file tests the
+`docs/threat-model.md` tests the enforcement paths; this file tests the
 paths that are *not* enforcement. `docs/architecture.md` section 5 is the rule:
 a dependency being unavailable must not become an answer about somebody's
 mailbox, and telemetry is the clearest case — a metrics failure that propagated
@@ -226,7 +226,7 @@ async def test_the_null_metrics_sink_records_nothing_and_never_raises() -> None:
 
 @asyncio_test
 async def test_registry_pressure_is_a_service_refusal_and_not_a_verdict() -> None:
-    """`prompts/07-hardening.md` section 13's rule, still true with the guard in
+    """`docs/threat-model.md` section 13's rule, still true with the guard in
     the path: capacity reached is a local refusal."""
     from tests.phase6_fixtures import FakeClock, FakeRandomSource
 

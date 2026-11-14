@@ -1,6 +1,6 @@
 """The administrative interface, its audit trail, and immediacy.
 
-`prompts/07-hardening.md` requires six controls and tests that suspension is
+`docs/threat-model.md` requires six controls and tests that suspension is
 immediate and that indicators do not leak guessed addresses in admin summaries.
 """
 

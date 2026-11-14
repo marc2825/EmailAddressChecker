@@ -500,7 +500,8 @@ class RecordingBatchStore:
 
 @asyncio_test
 async def test_one_sweep_forgets_batch_inputs_and_purges_expired_batches() -> None:
-    """`prompts/10-batch.md` retention, reached through the **central** seam.
+    """`docs/adr/0018-controlled-batch-execution.md` retention, reached through the **central**
+    seam.
 
     Both calls, from one `run()`. An earlier build had the operations on the
     store and nothing calling them, so the documented plaintext schedule did

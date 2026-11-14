@@ -1,6 +1,6 @@
 """The job vocabulary, and the table that keeps its states honest.
 
-`prompts/06-api-cli.md` publishes six states; ADR 0014 closes the transitions
+`docs/architecture.md` publishes six states; ADR 0014 closes the transitions
 between them. These tests assert both as data rather than as behaviour, because
 a state machine is exactly the thing a behavioural test covers only where
 somebody thought to drive it.
@@ -31,7 +31,7 @@ from emailcheck.domain.job import (
 
 
 def test_the_states_are_the_repositorys_six_and_no_others() -> None:
-    """`prompts/06-api-cli.md`: pending/running/retry_scheduled/completed/failed/cancelled.
+    """`docs/architecture.md`: pending/running/retry_scheduled/completed/failed/cancelled.
 
     Written out here on purpose. Not `queued`, not `succeeded`, not
     `in_progress`: renaming a published state to a more familiar word would be

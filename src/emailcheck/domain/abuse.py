@@ -1,6 +1,6 @@
 """Layered budgets: what may be counted, against what, and how much.
 
-`prompts/07-hardening.md` lists nine budget layers. This module holds the
+`docs/threat-model.md` lists nine budget layers. This module holds the
 vocabulary and the arithmetic; `application/abuse.py` decides when to consume
 and `ports/quota.py` says where the counts live. Pure: no clock, no storage, no
 randomness — a window boundary is computed from a timestamp the caller supplies.
@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-#: One day, the window `prompts/07-hardening.md`'s "daily total" is expressed
+#: One day, the window `docs/threat-model.md`'s "daily total" is expressed
 #: in. Every other layer uses the configured window.
 DAY_SECONDS: Final = 24 * 60 * 60
 
@@ -71,7 +71,7 @@ class BudgetKeyError(ValueError):
 
 
 class BudgetLayer(StrEnum):
-    """The layers `prompts/07-hardening.md` names, minus the one that exists.
+    """The layers `docs/threat-model.md` names, minus the one that exists.
 
     "Global concurrency" is `application/admission.py`'s and is deliberately
     absent: a second implementation of a reviewed bound is two bounds that will
@@ -97,7 +97,7 @@ class BudgetLayer(StrEnum):
     #: One recipient domain, for Phase 9's accept-all experiment **only**.
     #:
     #: Separate from `TARGET_DOMAIN` on purpose, and the separation is the
-    #: requirement: `prompts/09-accept-all.md` and `docs/requirements.md`
+    #: requirement: `docs/adr/0017-accept-all-control-experiment.md` and `docs/requirements.md`
     #: section 10 both ask for a *separate* domain budget. An experiment is
     #: additional contact with a domain nobody asked this project to contact —
     #: the caller asked about one mailbox — so it may not be paid for out of the
@@ -191,7 +191,7 @@ class QuotaSettings:
     def window_for(self, layer: BudgetLayer) -> int:
         """How long this layer's window is.
 
-        The daily total is a day by definition — `prompts/07-hardening.md` calls
+        The daily total is a day by definition — `docs/threat-model.md` calls
         it that — and every other layer uses the configured window. Reading it
         from a set rather than from an `if` keeps the exception data.
         """

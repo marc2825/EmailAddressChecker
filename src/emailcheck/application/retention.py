@@ -2,7 +2,7 @@
 
 `docs/privacy.md` section 7 requires scheduled expiry, account-requested
 deletion, and deletion-failure alerting, and requires all three to be *tested*.
-`prompts/07-hardening.md` lists deletion failures among the metrics and
+`docs/threat-model.md` lists deletion failures among the metrics and
 "trigger deletion" among the admin controls.
 
 **Three retentions, and they are not one retention.** Conflating them is the
@@ -25,7 +25,7 @@ rule the Phase 6 registry's eviction follows: a `pending` or `running` job
 removed by a sweep is work that silently stops existing while something is still
 waiting for it.
 
-**Purging is bounded.** `prompts/07-hardening.md` puts this on a schedule, and a
+**Purging is bounded.** `docs/threat-model.md` puts this on a schedule, and a
 sweep that deletes every expired row in one statement holds a write lock for as
 long as the backlog is — so a run removes at most `batch_limit` rows and says
 whether more remain. `docs/operations.md` section 3 alerts on the job failing,
@@ -319,7 +319,7 @@ class RetentionScheduler:
     """The thing that actually runs the sweep. One task, bounded, stoppable.
 
     **`RetentionService` existed and nothing called it.** `docs/privacy.md`
-    section 7 requires *scheduled* expiry, `prompts/07-hardening.md` puts
+    section 7 requires *scheduled* expiry, `docs/threat-model.md` puts
     deletion on a schedule, and `composition.py` constructed the service and
     then started only the executor — so every retention window in the
     documentation was enforced by whoever remembered to call `run()`, which in

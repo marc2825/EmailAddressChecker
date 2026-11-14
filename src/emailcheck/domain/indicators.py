@@ -1,6 +1,6 @@
 """Signs that somebody is enumerating rather than checking.
 
-`prompts/07-hardening.md` asks for **conservative sequence indicators** and says
+`docs/threat-model.md` asks for **conservative sequence indicators** and says
 what they may do: "suspend or require manual review", and "avoid opaque ML".
 This module is the whole of that judgement, and it is pure — a window of recent
 observations in, a set of raised indicators out. No clock, no storage, no model,
@@ -37,7 +37,7 @@ code does. `docs/adr/0008` names that failure; Phase 7's own privacy corpus
 caught the earlier instance of it in this very module.
 
 `docs/requirements.md` section 16 forbids a full address in an ordinary log and
-an abuse feature store is ordinary; `prompts/07-hardening.md` says it from the
+an abuse feature store is ordinary; `docs/threat-model.md` says it from the
 other side, that indicators must not leak guessed addresses in admin summaries.
 Neither is breached by a bare integer.
 
@@ -79,7 +79,7 @@ _DIGITS: Final = frozenset(string.digits)
 
 
 class Indicator(StrEnum):
-    """The five patterns `prompts/07-hardening.md` names, and no others."""
+    """The five patterns `docs/threat-model.md` names, and no others."""
 
     NUMERIC_SEQUENCE = "numeric_sequence"
     DICTIONARY_PATTERN = "dictionary_pattern"

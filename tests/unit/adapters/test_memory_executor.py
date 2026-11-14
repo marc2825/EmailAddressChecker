@@ -1,6 +1,6 @@
 """The in-memory executor: every dimension bounded, and cancellation real.
 
-`prompts/06-api-cli.md` asks for a memory executor for tests. An executor is
+`docs/architecture.md` asks for a memory executor for tests. An executor is
 where unboundedness hides, so these tests are mostly about refusals — and about
 the one behaviour a job system either has or does not: cancelling a *running*
 job must reach the coroutine, not merely mark a flag.

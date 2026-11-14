@@ -7,8 +7,9 @@ a request field, an entry point that reaches past the high-level service into
 `SMTPProbeService`. Every one of those is short, plausible code, and none of
 them fails a behavioural test until the day it is wrong.
 
-So the twelve stop conditions — seven from `plans/phase-04-smtp.md`, five from
-`plans/phase-05-aggregation.md` — are asserted here as properties of the source.
+So the twelve stop conditions — seven from `docs/adr/0009-smtp-dialogue-and-tls.md`, five from
+`docs/adr/0012-evidence-aggregation-and-final-status.md` — are asserted here as properties of the
+source.
 
 **Every scan reads the syntax tree with docstrings excluded.** These modules
 explain at length why they contain no status rule, so a scan over the raw text
@@ -688,7 +689,7 @@ def test_a_principal_is_not_constructed_under_an_alias_either(name: str) -> None
 
 # --- the job subsystem, and the doors it opens ------------------------------
 #
-# `prompts/06-api-cli.md` makes the active endpoint asynchronous, which adds an
+# `docs/architecture.md` makes the active endpoint asynchronous, which adds an
 # entry point that did not exist when the scans above were written: a worker.
 # The rules that applied to `apps/` apply to it, and two more do as well.
 
@@ -707,7 +708,7 @@ def test_the_worker_goes_through_the_high_level_service() -> None:
 
 
 def test_the_active_endpoint_hands_off_rather_than_awaiting_a_verification() -> None:
-    """`prompts/06-api-cli.md`: no synchronous waiting for active SMTP.
+    """`docs/architecture.md`: no synchronous waiting for active SMTP.
 
     Structural rather than behavioural: `_active` reaches the job service and
     never the verification service, so a build that quietly went back to

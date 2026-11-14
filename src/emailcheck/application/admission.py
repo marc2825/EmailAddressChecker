@@ -53,7 +53,7 @@ DEFAULT_MAX_PER_PRINCIPAL: Final = 4
 #: queue globally and `docs/architecture.md` recorded what that left open: one
 #: account filling every waiting slot makes another account's request answer
 #: `AdmissionRefused` while that account holds no capacity at all. Phase 6's
-#: review carried it as F11 and `prompts/07-hardening.md` owns the layered
+#: review carried it as F11 and `docs/threat-model.md` owns the layered
 #: budgets it belongs to.
 #:
 #: This is the smallest thing that closes it. Not a fair queue, not round-robin,

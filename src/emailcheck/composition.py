@@ -43,7 +43,7 @@ different statements and only the second one matters.
 
 **A profile is a refusal, not a label.** `docs/requirements.md` section 15 gives
 service-active an isolated worker and authentication;
-`prompts/06-api-cli.md` asks for a configuration that *refuses* the unsafe
+`docs/architecture.md` asks for a configuration that *refuses* the unsafe
 combinations. So `DeploymentProfile` is checked here: service-active with active
 probing and no API keys does not start, and service-active on the in-process
 executor does not start either — an in-memory job runner is a development tool,
@@ -110,7 +110,7 @@ class DeploymentProfile(StrEnum):
     """The three profiles `docs/requirements.md` section 15 defines.
 
     A field rather than a comment, because section 15's requirements differ per
-    profile and `prompts/06-api-cli.md` asks for a configuration that refuses
+    profile and `docs/architecture.md` asks for a configuration that refuses
     the unsafe combinations rather than one that documents them.
     """
 
@@ -151,7 +151,7 @@ class Deployment:
     verification: VerificationLimits = field(default_factory=VerificationLimits)
     executor: ExecutorSettings = field(default_factory=ExecutorSettings)
     jobs: JobSettings = field(default_factory=JobSettings)
-    #: Phase 7's layered budgets. `prompts/07-hardening.md`.
+    #: Phase 7's layered budgets. `docs/threat-model.md`.
     quotas: QuotaSettings = field(default_factory=QuotaSettings)
     passive_quotas: QuotaSettings | None = None
     worker_processes: int = 1
@@ -163,7 +163,7 @@ class Deployment:
     #: the kill switch already thrown.
     admin_state: AdminState = field(default_factory=AdminState)
     #: Local parts an operator considers dictionary-style, for the sequence
-    #: indicators. Empty unless configured — `prompts/07-hardening.md` says
+    #: indicators. Empty unless configured — `docs/threat-model.md` says
     #: "when configured", and this project licenses no name dataset.
     common_names: frozenset[str] = frozenset()
     #: The exchangers a lab-active deployment may contact. Host names, exactly
@@ -221,7 +221,7 @@ class Deployment:
             # so a deployment that would probe without one must fail at start
             # rather than at the first request.
             raise ValueError("active probing needs a configured sender identity")
-        # `prompts/06-api-cli.md`: configuration refuses service-active with
+        # `docs/architecture.md`: configuration refuses service-active with
         # active probes but no sender identity, rate limiter, or authentication.
         # The limiter is built unconditionally, the sender is refused above, and
         # this is the third.
@@ -392,7 +392,7 @@ class VerificationStack:
     async def run_retention(self) -> DeletionReport:
         """Sweep once, now. **The operator-triggered half.**
 
-        `prompts/07-hardening.md` lists "trigger deletion" among the admin
+        `docs/threat-model.md` lists "trigger deletion" among the admin
         controls and the final system audit asked for both scheduling and an
         explicit trigger. This is the trigger, and it is deliberately an
         application operation on the built stack rather than an HTTP route:

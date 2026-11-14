@@ -85,8 +85,8 @@ from emailcheck.ports.observability import OperatorEvent, OperatorEventKind, Ope
 
 #: The longest a whole verification may take, and the ceiling on that.
 #:
-#: `docs/requirements.md` fixes no number, and `plans/phase-04-smtp.md` measured
-#: the configured worst case of the Phase 4 loop alone at
+#: This is a configured budget, not an operational measurement. The Phase 4
+#: loop alone has a configured worst-case bound of
 #: `max_attempts x (rate-limit wait + session budget)` — 120 seconds at the
 #: Phase 4 defaults. This is deliberately *below* that sum rather than above it:
 #: a total deadline equal to the sum of its parts bounds nothing that was not
@@ -182,7 +182,8 @@ class VerificationOutcome:
     #: so that a caller ordering many verifications can group them by the
     #: destination they will actually reach, without resolving DNS a second time
     #: through a path that has none of Phase 2's caching, ordering, or
-    #: destination policy. `prompts/10-batch.md` asks for *fair scheduling by
+    #: destination policy. `docs/adr/0018-controlled-batch-execution.md` asks for *fair scheduling
+    #: by
     #: target domain and MX*, and this is the only honest way for anything above
     #: `AddressVerificationService` to learn the second half.
     #:

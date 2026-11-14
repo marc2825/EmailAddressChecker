@@ -243,7 +243,7 @@ def plan_attempts(
     the order Phase 2 recorded them. Nothing is sorted again and nothing is
     randomized: a randomized scan would make one verification's behaviour
     unreproducible, and choosing a different endpoint to get a different answer
-    is the identity-rotation shape `AGENTS.md` forbids.
+    is the identity-rotation shape `CONTRIBUTING.md` forbids.
 
     **The result is de-duplicated and capped.** Two candidates can resolve to
     one address, and a route can carry more exchangers than anyone should

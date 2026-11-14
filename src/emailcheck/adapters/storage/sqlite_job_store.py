@@ -226,7 +226,7 @@ class JobStoreConflictError(RuntimeError):
     """A write would have crossed two job identities, so it was refused.
 
     Raised in place of the driver's own integrity error, on the
-    `AGENTS.md` rule that a library exception must not escape an adapter — and
+    `CONTRIBUTING.md` rule that a library exception must not escape an adapter — and
     because the driver's message names the index rather than the invariant.
 
     Two ways to reach it, both bugs rather than conditions. A `save` whose

@@ -332,7 +332,7 @@ def test_every_referenced_adr_exists() -> None:
     """A reference by number is only useful while the number resolves."""
     numbered = {adr.name[:4] for adr in ADR_DIRECTORY.glob("*.md") if adr.name[:4].isdigit()}
     dangling: list[str] = []
-    for document in sorted(ROOT.glob("docs/**/*.md")) + sorted(ROOT.glob("plans/*.md")):
+    for document in sorted(ROOT.glob("docs/**/*.md")):
         for reference in ADR_REFERENCE.findall(text_of(document)):
             if reference not in numbered:
                 dangling.append(f"{document.name} -> ADR {reference}")

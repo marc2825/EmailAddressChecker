@@ -1,6 +1,6 @@
 """Where budget counters live, and what happens when they cannot be reached.
 
-`prompts/07-hardening.md` requires that a **rate storage failure fails closed
+`docs/threat-model.md` requires that a **rate storage failure fails closed
 for active checks**, so this port publishes a failure type rather than letting a
 store's own exception escape. An implementation raises `QuotaStoreUnavailable`;
 `application/abuse.py` turns that into a refusal for an active check and leaves

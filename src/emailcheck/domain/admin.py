@@ -1,6 +1,6 @@
 """The operator's switches, as a value with no I/O in it.
 
-`prompts/07-hardening.md`'s admin controls, `docs/operations.md` section 2's
+`docs/threat-model.md`'s admin controls, `docs/operations.md` section 2's
 kill switches, and `SECURITY.md`'s emergency response all name the same set:
 disable active probing globally, suspend a key or an account, block a domain or
 an MX, and disable a sender identity. This is that state and the decisions it
@@ -11,7 +11,7 @@ implies; `application/admin.py` is how it changes and who may change it.
 else: there is no "allow" list, no exemption, and no override. A control that
 could grant access is one an attacker can aim for.
 
-**Suspension is immediate.** `prompts/07-hardening.md` tests for it by name, so
+**Suspension is immediate.** `docs/threat-model.md` tests for it by name, so
 the state is read on every decision rather than cached anywhere — a snapshot
 taken at request start would leave a suspended key working for the length of
 whatever held the snapshot.

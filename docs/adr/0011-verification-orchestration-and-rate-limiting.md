@@ -92,7 +92,7 @@ Ordering is Phase 2's and is never re-decided: MX preference order, with equal
 preferences in the order the resolver served them, and each candidate's addresses
 in the order Phase 2 recorded. Nothing is sorted again and nothing is randomized.
 A randomized scan would make one verification unreproducible, and choosing a
-different endpoint to get a different answer is the rotation `AGENTS.md` forbids.
+different endpoint to get a different answer is the rotation `CONTRIBUTING.md` forbids.
 
 ## Decision: three budgets, one wait, and a monotonic clock
 
@@ -165,7 +165,7 @@ that is Phase 6. Partitioning on a caller-supplied `account` string now would
 produce something that *looks* like per-account isolation and is defeated by
 sending a different string — which is worse than an absent control, because it
 would be reported as present. The gap is recorded as a Phase 6 stop condition in
-`plans/phase-04-smtp.md` rather than closed with a partition that cannot hold.
+`docs/adr/0009-smtp-dialogue-and-tls.md` rather than closed with a partition that cannot hold.
 
 `rate_limit_key` **refuses an `@` in any component** rather than stripping one.
 `docs/requirements.md` section 16 forbids a complete address in metrics and keys,

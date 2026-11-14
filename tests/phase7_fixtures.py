@@ -2,7 +2,7 @@
 
 Every one is deterministic and opens no socket. The two that matter most are
 counters rather than stubs — `RecordingOperator` and `InMemoryMetrics` are the
-surfaces `prompts/07-hardening.md`'s privacy requirement is *measured* on, so
+surfaces `docs/threat-model.md`'s privacy requirement is *measured* on, so
 they keep what they were given rather than discarding it.
 """
 

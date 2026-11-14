@@ -41,7 +41,7 @@ PHASE_9_MODULES: Final = {
 
 #: Mailbox names a control probe must never be. Not a production blocklist —
 #: the generator is non-dictionary by construction — but the specific words
-#: `prompts/09-accept-all.md` and `docs/threat-model.md` name, so a generator
+#: `docs/adr/0017-accept-all-control-experiment.md` and `docs/threat-model.md` name, so a generator
 #: rewritten around a word list fails here.
 DICTIONARY_NAMES: Final = (
     "admin",
@@ -152,7 +152,7 @@ def test_the_feature_flag_is_disabled_by_default() -> None:
 
 
 def test_no_request_surface_names_the_feature() -> None:
-    """`prompts/09-accept-all.md`: no public caller may enable it.
+    """`docs/adr/0017-accept-all-control-experiment.md`: no public caller may enable it.
 
     The API body already accepts exactly one key, so this is the second barrier:
     nothing in the request-facing modules names the feature at all, which is
@@ -208,7 +208,7 @@ def test_the_experiment_re_derives_no_status_from_a_reply_code() -> None:
     """No `if reply == 250`, anywhere.
 
     The mapping is from Phase 4D's **reason codes**, which is what
-    `prompts/09-accept-all.md`'s "compare structured evidence, not only the
+    `docs/adr/0017-accept-all-control-experiment.md`'s "compare structured evidence, not only the
     basic code" asks for.
     """
     code = code_without_docstrings(PHASE_9_MODULES["application"])

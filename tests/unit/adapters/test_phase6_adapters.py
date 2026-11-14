@@ -264,7 +264,7 @@ async def test_a_verdict_from_a_different_ruleset_is_invisible(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_one_account_never_sees_another_accounts_result(tmp_path: Path) -> None:
-    """`prompts/06-api-cli.md`: cross-account result access is forbidden."""
+    """`docs/architecture.md`: cross-account result access is forbidden."""
     store = SQLiteVerdictStore(path=tmp_path / "verdicts.sqlite3")
     store.initialize()
     record = stored()
@@ -333,7 +333,7 @@ def test_a_stored_verdict_refuses_an_address_in_a_digest_field(field_name: str) 
 
 @pytest.mark.parametrize("field_name", ["created_at", "expires_at"])
 def test_a_stored_verdict_refuses_a_naive_timestamp(field_name: str) -> None:
-    """`AGENTS.md`: UTC internally, serialized with an explicit offset."""
+    """`CONTRIBUTING.md`: UTC internally, serialized with an explicit offset."""
     with pytest.raises(ValueError, match="timezone-aware"):
         bare_record(**{field_name: datetime(2026, 8, 10)})
 
@@ -430,7 +430,7 @@ def test_the_schema_version_moved_with_the_shape() -> None:
 
 
 def test_one_account_may_hold_several_keys_each_with_its_own_identity() -> None:
-    """`prompts/07-hardening.md` budgets and suspends per key *and* per account,
+    """`docs/threat-model.md` budgets and suspends per key *and* per account,
     which are two layers only if a key is not another name for the account."""
     from emailcheck.adapters.auth.api_keys import build_authenticator
 

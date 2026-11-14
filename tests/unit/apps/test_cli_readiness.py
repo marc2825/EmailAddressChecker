@@ -1,6 +1,6 @@
 """The two reporting-only commands, at the boundary a person actually types.
 
-`prompts/08-limited-beta.md` work items 1 and 6. `tests/unit/test_readiness_reporting.py`
+`docs/beta-report-template.md`. `tests/unit/test_readiness_reporting.py`
 covers the reports themselves; this file covers what the command does with them:
 it answers without an address, it reaches nothing, it prints no secret, and its
 exit code is not a pass/fail somebody can script a deployment against.

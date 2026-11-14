@@ -125,7 +125,7 @@ USABLE_ROUTE_REASONS: Final[frozenset[ReasonCode]] = frozenset(
 #: in tier 4, so an unrecognised reason **blocks** `likely_deliverable` rather
 #: than being ignored. That direction is the whole design of this constant: a
 #: reason code added in a later Phase and forgotten here resolves to `unknown`,
-#: which is what `AGENTS.md` requires ambiguity to do.
+#: which is what `CONTRIBUTING.md` requires ambiguity to do.
 #:
 #: `provider_opaque` is deliberately absent. `docs/status-model.md` section 2
 #: lists "remote server hides recipient validity" under `unknown`, so a provider

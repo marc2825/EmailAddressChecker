@@ -5,7 +5,7 @@ which is the whole contract: routing, method handling, validation, error
 mapping, and the public body. Binding an ASGI route to it adds no policy and is
 the only untested piece.
 
-The active endpoint is a **job** endpoint. `prompts/06-api-cli.md` requires that
+The active endpoint is a **job** endpoint. `docs/architecture.md` requires that
 it return quickly with a job and never wait for SMTP in an API worker, so every
 test here asserts on the job it returned and drives the executor separately.
 """
@@ -269,7 +269,7 @@ async def test_the_passive_endpoint_never_reaches_smtp() -> None:
 
 
 async def test_the_active_endpoint_returns_a_job_without_waiting_for_smtp() -> None:
-    """`prompts/06-api-cli.md`: no synchronous waiting for active SMTP.
+    """`docs/architecture.md`: no synchronous waiting for active SMTP.
 
     The response is a job in `pending`, the SMTP fake has not been called at
     all, and the work is sitting in the executor — which is the difference
@@ -355,7 +355,7 @@ async def test_a_job_can_be_cancelled_and_cancellation_is_idempotent() -> None:
 
 @pytest.mark.parametrize("method", ["GET", "DELETE"])
 async def test_another_account_can_neither_read_nor_cancel_the_job(method: str) -> None:
-    """`prompts/06-api-cli.md`: cross-account result access forbidden.
+    """`docs/architecture.md`: cross-account result access forbidden.
 
     The answer is the same one an unknown identifier gets. ADR 0014: a `403`
     would confirm that the identifier names a real job belonging to somebody

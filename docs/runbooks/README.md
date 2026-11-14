@@ -1,6 +1,6 @@
 # Runbooks
 
-`prompts/08-limited-beta.md` work item 3. Seven procedures, one file each, for
+Seven procedures, one file each, for
 the seven situations a limited beta can actually get into.
 
 Every one is written to be followed at 03:00 by somebody who did not write the
@@ -32,7 +32,7 @@ incident is the moment it is most tempting and least safe to remove one. In
 particular, no procedure in this directory may ever tell you to:
 
 - send SMTP `DATA`, `VRFY`, or `EXPN`, or transmit any message content —
-  `AGENTS.md` forbids all four unconditionally, and no outage makes them
+  `CONTRIBUTING.md` forbids all four unconditionally, and no outage makes them
   diagnostic;
 - retry with additional recipients, or issue a second `RCPT TO` in a session —
   one verification is at most one `RCPT TO`, and more recipients is what

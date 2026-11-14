@@ -1,6 +1,6 @@
 """The limited-beta harness: off by default, allowlisted, and bounded.
 
-`prompts/08-limited-beta.md` work items 4 and 5. Every test here uses fakes —
+`docs/beta-report-template.md`. Every test here uses fakes —
 the harness is the one component whose *purpose* is to reach real hosts, so it
 is exactly the component whose default must be measured rather than assumed.
 """
@@ -94,7 +94,7 @@ async def test_the_default_run_is_a_dry_run_and_opens_nothing() -> None:
 @asyncio_test
 async def test_a_live_run_without_operator_authorization_is_refused() -> None:
     """`external_probing_authorized` is `False` by default and nothing infers
-    it. `prompts/08-limited-beta.md`'s exit criteria give that decision to a
+    it. `docs/beta-report-template.md`'s exit criteria give that decision to a
     human who has verified every gate in `docs/operations.md`."""
     runner, probe = harness(
         BetaAuthorization(corpus=corpus(("ok@example.test", ControlledTruth.OWNED_MAILBOX)))
@@ -165,7 +165,7 @@ async def test_only_corpus_members_are_probed() -> None:
 
 @asyncio_test
 async def test_a_run_stops_at_the_target_ceiling() -> None:
-    """`prompts/08-limited-beta.md` forbids mass tests; the ceiling is what
+    """`docs/beta-report-template.md` forbids mass tests; the ceiling is what
     stops an operator's larger corpus becoming one."""
     authorized = BetaAuthorization(
         corpus=corpus(*((f"u{i}@example.test", ControlledTruth.OWNED_MAILBOX) for i in range(10))),

@@ -122,7 +122,7 @@ def test_a_trust_anchor_comes_from_operator_configuration_only() -> None:
     defines the system-trust default, and nothing in the tree reads the
     environment.
 
-    `plans/phase-04-smtp.md` records this as a stop condition for Phase 6.
+    `docs/adr/0009-smtp-dialogue-and-tls.md` records this as a stop condition for Phase 6.
     """
     root = Path(__file__).resolve().parents[3] / "src" / "emailcheck"
     definition = root / "adapters" / "smtp" / "tls.py"

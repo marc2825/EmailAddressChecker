@@ -1,6 +1,6 @@
 """The five sequence indicators. Conservative, explicit, and reporting-only.
 
-`prompts/07-hardening.md` asks for conservative indicators and forbids opaque
+`docs/threat-model.md` asks for conservative indicators and forbids opaque
 ML. Every rule here is one sentence and every threshold is a small integer, so a
 false positive costs an operator a review rather than costing a caller a refusal.
 """

@@ -46,7 +46,7 @@ def public_job(
     """Project a job record onto the public schema. Reads; never decides.
 
     Timestamps are serialized with an explicit offset, which is what
-    `AGENTS.md` requires and what makes them unambiguous to a client in another
+    `CONTRIBUTING.md` requires and what makes them unambiguous to a client in another
     zone.
     """
     return PublicJob(

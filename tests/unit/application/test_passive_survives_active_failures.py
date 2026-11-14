@@ -1,6 +1,6 @@
 """The passive answer survives every way the active half can fail.
 
-`prompts/08-limited-beta.md` work item 9: *verify passive API remains available
+`docs/beta-report-template.md`: *verify passive API remains available
 when active components fail*. `docs/architecture.md` section 5 names the five
 conditions, and there is one test per condition here, named after it:
 
@@ -16,7 +16,7 @@ and the third is the one that matters most:
 
 - the passive check still answers;
 - it carries the passive evidence it would have carried anyway;
-- the status is never `invalid`. `AGENTS.md` requires unknown or ambiguous
+- the status is never `invalid`. `CONTRIBUTING.md` requires unknown or ambiguous
   evidence to resolve to `unknown` or `temporary_unknown`, and a failure of
   *our own infrastructure* is the least target-specific evidence there is.
 
@@ -136,7 +136,7 @@ async def test_the_passive_check_answers_when_the_budget_store_is_unavailable() 
     """A passive check spends no reputation, so a down budget store is not its problem.
 
     Active work fails **closed** when the store cannot be reached — that is
-    `prompts/07-hardening.md`'s requirement and it is tested elsewhere. This is
+    `docs/threat-model.md`'s requirement and it is tested elsewhere. This is
     the other half of the same decision: a passive check opens no socket,
     touches no remote host, and must keep answering.
     """

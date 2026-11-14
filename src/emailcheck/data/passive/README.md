@@ -42,7 +42,7 @@ answer.
 | Provider MX patterns | `provider_mx_patterns.toml` | **Declared unavailable** |
 | Disposable overrides | `overrides.toml` | Empty, operator-maintained |
 
-Three of the five ship empty on purpose. `prompts/03-passive-classification.md`
+Three of the five ship empty on purpose. `docs/data-sources.md`
 requires that when no redistributable dataset with verified provenance has been
 selected, the loader and format ship with illustrative `.example` data and
 production data stays empty, and that no licence is invented. The environment
@@ -125,8 +125,8 @@ report to name its version. It needs, per `docs/data-sources.md` section 3:
 ## Role local parts
 
 - **Purpose**: flag a shared or functional mailbox as a risk attribute.
-- **Source**: enumerated in `prompts/03-passive-classification.md`, in this
-  repository. No third-party data is included.
+- **Source**: authored entries in `role_local_parts.toml` in this repository,
+  under the role-account policy in `docs/data-sources.md`. No third-party data is included.
 - **Licence**: same as this repository.
 - **Version**: `2026-08-07.1`.
 - **Retrieved**: authored in repository, 2026-08-07.

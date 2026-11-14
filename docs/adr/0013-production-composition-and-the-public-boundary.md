@@ -7,8 +7,8 @@
 ## Context
 
 Phases 1 to 5 published components and deliberately no wiring. Nothing called
-`aggregate_evidence`, nothing built a `Verdict`, and `plans/phase-04-smtp.md`
-and `plans/phase-05-aggregation.md` between them recorded twelve stop
+`aggregate_evidence`, nothing built a `Verdict`, and `docs/adr/0009-smtp-dialogue-and-tls.md`
+and `docs/adr/0012-evidence-aggregation-and-final-status.md` between them recorded twelve stop
 conditions — every one of which is a way the wiring can be wrong.
 
 Phase 6 is the wiring. It adds no deliverability rule, and its risk is not a
@@ -71,7 +71,7 @@ A queue in front of a bounded worker pool is unbounded memory unless the queue
 is bounded too: ten thousand waiters are ten thousand coroutines, ten thousand
 upstream sockets, and — because Phase 4 claims a `_DomainState` *before* global
 admission — ten thousand limiter entries if each names a different domain. That
-is the memory bound `plans/phase-04-smtp.md` said Phase 6 owns.
+is the memory bound `docs/adr/0009-smtp-dialogue-and-tls.md` said Phase 6 owns.
 
 A request arriving to a full queue is refused immediately rather than admitted
 to an unbounded wait.
@@ -203,7 +203,7 @@ putting it in the `WHERE` clause does not.
 
 ## Deferred, and named rather than implied
 
-- the ASGI binding, for the reason above. The `prompts/06-api-cli.md` privacy
+- the ASGI binding, for the reason above. The `docs/architecture.md` privacy
   requirement "request logging middleware must redact" belongs with it and is
   recorded as a stop condition on that work;
 - Redis and PostgreSQL adapters, in the uninstalled `service` extra.
@@ -221,7 +221,7 @@ instruction forbidding work that outlives a request. That instruction was not a
 repository requirement, and recording it here made a transient brief look like
 durable design rationale.
 
-`docs/requirements.md` sections 5 and 11 and `prompts/06-api-cli.md` require
+`docs/requirements.md` sections 5 and 11 and `docs/architecture.md` require
 authenticated asynchronous active checks in Phase 6, so bounded background job
 execution is part of Phase 6. ADR 0014 records the job subsystem; ADR 0015
 records the result cache and the verdict TTL that this ADR previously described

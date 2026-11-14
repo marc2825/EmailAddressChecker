@@ -23,7 +23,7 @@ checked. So provenance is a port instead. This one.
   `docs/threat-model.md` lists as an abuse control rather than a feature.
 
 No implementation exists yet. Gate 4C needs one, because that is where
-`MAIL FROM` is first issued; `plans/phase-04-smtp.md` records that as a stop
+`MAIL FROM` is first issued; `docs/adr/0009-smtp-dialogue-and-tls.md` records that as a stop
 condition.
 """
 
