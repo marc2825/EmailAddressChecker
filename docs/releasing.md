@@ -17,9 +17,10 @@ repository visibility, execute Actions or upload to either index.
 ## Required owner configuration
 
 1. Review source, the local report, dataset limitations, license and history scan.
-   Historical commits include development prompts/plans that were later removed;
-   review them for public suitability. Secret scans cannot establish complete
-   absence of confidential prose. Test TLS keys are intentional public fixtures.
+   Internal development material (prompts, plans, agent configuration) was
+   removed from the entire history before publication. Secret scans cannot
+   establish complete absence of confidential prose, so review new history too.
+   Test TLS keys are intentional public fixtures.
 2. Create GitHub Environments **pypi** and **testpypi**. Set required human
    reviewers, prevent self-review and disable administrative bypass. Restrict
    deployment to protected `v*` tags; restrict who can create those tags.
