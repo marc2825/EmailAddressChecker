@@ -29,9 +29,9 @@ CLAUDE.local.md
 *.sqlite-wal
 *.sqlite-shm
 
-# Local environment overrides. `.env.example` is tracked on purpose and stays.
+# Local environment overrides. No code reads environment variables; the CLI
+# budget configuration is `config/budgets.toml`.
 .env.*
-!.env.example
 
 # Credentials. Nothing of the sort is tracked today; these keep it that way.
 # `tests/fixtures/tls/*.key` are documented throwaway test certificates and are
