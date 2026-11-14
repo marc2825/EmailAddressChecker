@@ -4,6 +4,18 @@
 - Date: 2026-08-07
 - Phase: 2
 
+## Security update — 2026-11-15
+
+Require `dnspython>=2.9.2,<3`. The previous range admitted vulnerable versions:
+[CVE-2026-114605](https://github.com/rthalley/dnspython/security/advisories/GHSA-45c3-73f7-pv4m)
+affects untrusted wire-name decompression and is relevant to DNS responses;
+[CVE-2026-128089](https://github.com/rthalley/dnspython/security/advisories/GHSA-vvf4-9x63-8xvv)
+affects WKS zone-text parsing, which the checker does not expose. Upgrading avoids
+shipping either known vulnerable implementation without adding a dependency.
+The DNS port, timeout, absolute-query policy and conservative failure mapping
+remain unchanged. A bounded upstream WKS example is a regression test; malicious
+large allocations and external DNS are not used in tests.
+
 ## Context
 
 Phase 2 needs MX, A, and AAAA answers, the difference between an authoritative
