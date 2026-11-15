@@ -157,9 +157,13 @@ GitHub CIマトリクスで成功を確認した。第三者MXへのSMTPは実�
 
 差分をレビューし、`fix/post-publication-security-audit` ブランチで関連単位の
 コミットを作成した。2026-11-15に利用者がブランチpush・PR作成・CI検証を
-明示的に許可し、その範囲を実施した。README冒頭の利用者編集は未コミットで保持。
-mainへのマージ・tag・Release・PyPI upload・履歴書換えは行っていない。
-次のPhaseはPRのレビューと公開環境の確認、許可された運用環境でのreadiness gateであり、
+明示的に許可し、その範囲を実施した。初回監査ではREADME冒頭の利用者編集を
+未コミットで保持した。その後、利用者がREADME追記のmain反映とPRのマージを許可した。
+両言語の導入文へ「メールを送信せずに検査する」旨を反映し、配送可能性の推定と
+実在・配送成功の保証を区別する説明を維持する。マージはREADME追加後の最新CI成功と
+PR先頭SHAの一致を確認して行い、結果は[PR #1](https://github.com/marc2825/EmailAddressChecker/pull/1)
+で確認できる。tag・Release・PyPI upload・履歴書換えは許可範囲に含めていない。
+反映後の次のPhaseは公開環境の確認と、許可された運用環境でのreadiness gateであり、
 この監査では実装・実施しない。
 
 

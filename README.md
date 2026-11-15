@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-EmailAddressChecker is a Python CLI and library for checking email address syntax, DNS mail routing, and estimated deliverability. It reports what the available evidence supports—**not whether a mailbox definitely exists or will receive a message**.
+EmailAddressChecker is a Python CLI and library for checking email address syntax, DNS mail routing, and estimated deliverability without sending email messages. It reports what the available evidence supports—**not whether a mailbox definitely exists or will receive a message**.
 
 Local checks never connect to SMTP servers. Active SMTP probing is a separate, restricted operator feature.
 
