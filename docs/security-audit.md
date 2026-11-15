@@ -114,6 +114,11 @@ context managerと例外時にも接続を閉じる処理を使い、pipeのclos
 で確認する。ローカルの上表は初回実装検証の記録であり、接続解放回帰試験1件の追加後は
 4,418件成功（27.08秒）。接続解放の回帰は修正前に失敗し、修正後に成功した。
 
+追加修正コミット `41127cb` の[CI run 43686231075](https://github.com/marc2825/EmailAddressChecker/actions/runs/43686231075)
+でも全10ジョブが成功した。Python 3.12/3.13/3.14は各4,418件成功し、
+ResourceWarning・unraisable warningは0件。securityジョブは既知脆弱性0件、
+全32コミットと展開配布物の秘密情報検出0件だった。
+
 ## D. 未解決事項と公開機能の確認
 
 通常のローカルcheck/batchはDNSのみでSMTPを構成せず、候補生成は完全オフライン。
@@ -140,7 +145,7 @@ GitHub CIマトリクスで成功を確認した。第三者MXへのSMTPは実�
 
 - **GitHub公開継続：可。** 修正済みソースとして公開を継続できる。
   修正ブランチのCI成功を確認した。必須チェック・レビュー保護は別途設定すること。
-- **PyPI公開：条件付き可。** パッケージ検証と独立installが通り、後述の最終結果を
+- **PyPI公開：条件付き可。** パッケージ検証と独立installが通り、上記のCI結果を
   確認した版が対象。全マトリクス成功と公開環境・publisher・承認者の確認前に
   アップロードを承認したという意味ではない。
 - **Active SMTP本番サービス：現状では運用承認不可。** TLSのコード境界は修正したが、
@@ -274,6 +279,7 @@ mainへのマージ・tag・Release・PyPI upload・履歴書換えは行って�
 - [tests/unit/application/test_beta_harness.py](../tests/unit/application/test_beta_harness.py)
 - [tests/unit/application/test_jobs.py](../tests/unit/application/test_jobs.py)
 - [tests/unit/application/test_load_scripted_server.py](../tests/unit/application/test_load_scripted_server.py)
+- [tests/unit/application/test_multi_instance_idempotency.py](../tests/unit/application/test_multi_instance_idempotency.py)
 - [tests/unit/application/test_operation_recipient_budget.py](../tests/unit/application/test_operation_recipient_budget.py)
 - [tests/unit/application/test_passive_survives_active_failures.py](../tests/unit/application/test_passive_survives_active_failures.py)
 - [tests/unit/application/test_retention.py](../tests/unit/application/test_retention.py)
@@ -296,7 +302,9 @@ mainへのマージ・tag・Release・PyPI upload・履歴書換えは行って�
 - [tests/unit/test_failure_injection.py](../tests/unit/test_failure_injection.py)
 - [tests/unit/test_metrics_cardinality.py](../tests/unit/test_metrics_cardinality.py)
 - [tests/unit/test_phase7_composition.py](../tests/unit/test_phase7_composition.py)
+- [tests/unit/test_public_result_safety_boundary.py](../tests/unit/test_public_result_safety_boundary.py)
 - [tests/unit/test_readiness_reporting.py](../tests/unit/test_readiness_reporting.py)
+- [tests/unit/test_remediation_c.py](../tests/unit/test_remediation_c.py)
 - [tests/unit/test_remediation_d.py](../tests/unit/test_remediation_d.py)
 
 </details>
