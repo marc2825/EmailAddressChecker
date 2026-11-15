@@ -7,6 +7,7 @@ answering with a row the current rules did not produce.
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -286,7 +287,7 @@ def test_a_database_from_a_different_schema_version_is_refused(tmp_path: Path) -
 
     import sqlite3
 
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION + 1,))
 
     with pytest.raises(StoreSchemaError, match="schema version"):

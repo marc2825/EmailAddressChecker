@@ -21,6 +21,7 @@ Nothing here opens a socket and nothing sleeps.
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -211,7 +212,7 @@ class Machine:
     def batch_ids(self) -> set[str]:
         import sqlite3
 
-        with sqlite3.connect(self.root / "batch.db") as connection:
+        with closing(sqlite3.connect(self.root / "batch.db")) as connection, connection:
             return {row[0] for row in connection.execute("SELECT batch_id FROM batches")}
 
 

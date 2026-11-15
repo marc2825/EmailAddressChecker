@@ -20,6 +20,7 @@ legitimate safe result would fail too.
 from __future__ import annotations
 
 import json
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -248,7 +249,7 @@ def test_a_store_written_by_the_previous_schema_is_refused_by_version(tmp_path: 
     from emailcheck.adapters.storage.sqlite_job_store import SCHEMA_VERSION, JobStoreSchemaError
 
     path = tmp_path / "jobs.db"
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.executescript(
             "CREATE TABLE job_schema_version (version INTEGER NOT NULL);"
             "INSERT INTO job_schema_version (version) VALUES (3);"

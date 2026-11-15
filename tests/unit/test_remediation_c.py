@@ -19,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -248,7 +249,7 @@ def test_the_stored_row_carries_the_fingerprint_and_the_schema_moved_with_it(
 
     assert SCHEMA_VERSION == 5
     path = tmp_path / "old.db"
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.executescript(
             "CREATE TABLE schema_version (version INTEGER NOT NULL);"
             "INSERT INTO schema_version (version) VALUES (3);"
@@ -680,7 +681,7 @@ class Stores:
 
     def rows(self, table: str, column: str, value: str) -> int:
         database = {"verdicts": "verdicts.db", "jobs": "jobs.db"}.get(table, "batches.db")
-        with sqlite3.connect(self.root / database) as connection:
+        with closing(sqlite3.connect(self.root / database)) as connection, connection:
             return int(
                 connection.execute(
                     # Table and column are chosen from this fixture's own
@@ -736,7 +737,7 @@ async def test_another_account_survives_untouched(tmp_path: Path) -> None:
     assert stores.rows("batches", "account", "acct-b") == 1
     assert stores.rows("batch_artifacts", "account", "acct-a") == 0
     assert stores.rows("batch_artifacts", "account", "acct-b") == 1
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         remaining = [
             row[0]
             for row in connection.execute("SELECT DISTINCT batch_id FROM batch_rows").fetchall()
@@ -1182,7 +1183,7 @@ def deletion_for(root: Path, jobs: JobService | None = None) -> AccountDeletionS
 
 
 def job_rows(root: Path, account: str) -> int:
-    with sqlite3.connect(root / "jobs.db") as connection:
+    with closing(sqlite3.connect(root / "jobs.db")) as connection, connection:
         return int(
             connection.execute("SELECT count(*) FROM jobs WHERE owner = ?", (account,)).fetchone()[
                 0
@@ -1255,7 +1256,7 @@ async def test_a_stale_replica_cannot_write_a_cached_verdict_either(tmp_path: Pa
     await deletion_for(tmp_path).delete(account)
     await executor.run_pending()
 
-    with sqlite3.connect(tmp_path / "verdicts.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "verdicts.db")) as connection, connection:
         cached = connection.execute("SELECT count(*) FROM verdicts").fetchone()[0]
     assert cached == 0, "a stale replica cached a verdict for a deleted account"
 
@@ -1333,7 +1334,7 @@ async def test_a_stale_replica_cannot_reclaim_an_idempotency_binding(
     await deletion_for(tmp_path).delete(account)
     await b.executor.run_pending()
 
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         bindings = connection.execute(
             "SELECT count(*) FROM jobs WHERE idempotency_digest IS NOT NULL"
         ).fetchone()[0]
@@ -1582,12 +1583,12 @@ def deletion_with_cache(root: Path) -> AccountDeletionService:
 
 
 def verdict_rows(root: Path) -> int:
-    with sqlite3.connect(root / "verdicts.db") as connection:
+    with closing(sqlite3.connect(root / "verdicts.db")) as connection, connection:
         return int(connection.execute("SELECT count(*) FROM verdicts").fetchone()[0])
 
 
 def binding_rows(root: Path) -> int:
-    with sqlite3.connect(root / "jobs.db") as connection:
+    with closing(sqlite3.connect(root / "jobs.db")) as connection, connection:
         return int(
             connection.execute(
                 "SELECT count(*) FROM jobs WHERE idempotency_digest IS NOT NULL"
@@ -1860,23 +1861,28 @@ def test_a_crashed_writer_does_not_hold_the_fence_forever(tmp_path: Path) -> Non
         "print('held', flush=True)\n"
         "time.sleep(300)\n".replace("HOLD", repr("INSERT INTO account_fence VALUES (?, ?)"))
     )
-    holder = subprocess.Popen(  # noqa: S603 - a literal interpreter and a file this test wrote
+    with subprocess.Popen(  # noqa: S603 - a literal interpreter and a file this test wrote
         [sys.executable, str(script), str(tmp_path / "jobs.db")],
         stdout=subprocess.PIPE,
         text=True,
-    )
-    try:
-        assert holder.stdout is not None
-        assert holder.stdout.readline().strip() == "held"
-        contender = sqlite3.connect(tmp_path / "jobs.db", timeout=0.2)
-        with pytest.raises(sqlite3.OperationalError):
-            contender.execute("BEGIN IMMEDIATE")
-        contender.close()
-    finally:
-        holder.kill()
-        holder.wait()
+    ) as holder:
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline().strip() == "held"
+            with (
+                closing(sqlite3.connect(tmp_path / "jobs.db", timeout=0.2)) as contender,
+                pytest.raises(sqlite3.OperationalError),
+            ):
+                contender.execute("BEGIN IMMEDIATE")
+        finally:
+            holder.kill()
+            holder.wait()
+    assert holder.stdout is not None and holder.stdout.closed
 
-    with sqlite3.connect(tmp_path / "jobs.db", timeout=OUTER_BOUND) as connection:
+    with (
+        closing(sqlite3.connect(tmp_path / "jobs.db", timeout=OUTER_BOUND)) as connection,
+        connection,
+    ):
         connection.execute("BEGIN IMMEDIATE")
         held = connection.execute(
             "SELECT count(*) FROM account_fence WHERE generation = 99"
@@ -2042,7 +2048,7 @@ def test_a_store_written_before_the_fence_is_refused_by_version(tmp_path: Path) 
     """
     from emailcheck.adapters.storage.sqlite_job_store import JobStoreSchemaError
 
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         connection.execute("CREATE TABLE job_schema_version (version INTEGER NOT NULL)")
         connection.execute("INSERT INTO job_schema_version (version) VALUES (4)")
 
@@ -2058,7 +2064,7 @@ def test_a_missing_binding_is_never_adopted_silently(tmp_path: Path) -> None:
     inheriting whatever is configured — and any later mismatch is refused.
     """
     job_store, state, _ = bind(tmp_path)
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         connection.execute("DELETE FROM store_authority")
 
     other = SQLiteAccountStateStore(path=tmp_path / "other-accounts.db")
@@ -2097,7 +2103,7 @@ async def test_a_partial_cleanup_failure_leaves_the_fence_up(tmp_path: Path) -> 
 
     assert report.complete is False
     assert "jobs" in report.failed_stores
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         fence = connection.execute(
             "SELECT generation FROM account_fence WHERE account = ?", (account,)
         ).fetchone()
@@ -2150,7 +2156,7 @@ async def test_two_concurrent_deletions_leave_one_fence_and_no_rows(tmp_path: Pa
 
     assert all(report.complete for report in reports)
     assert job_rows(tmp_path, account) == 0
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         fence = connection.execute(
             "SELECT generation FROM account_fence WHERE account = ?", (account,)
         ).fetchone()[0]
@@ -2225,13 +2231,13 @@ class UnreadableAccountState:
 
 
 def stored_state(root: Path, account: str) -> str | None:
-    with sqlite3.connect(root / "jobs.db") as connection:
+    with closing(sqlite3.connect(root / "jobs.db")) as connection, connection:
         row = connection.execute("SELECT state FROM jobs WHERE owner = ?", (account,)).fetchone()
     return None if row is None else str(row[0])
 
 
 def fence_rows(root: Path, database: str) -> list[tuple[str, int]]:
-    with sqlite3.connect(root / database) as connection:
+    with closing(sqlite3.connect(root / database)) as connection, connection:
         return [
             (str(account), int(generation))
             for account, generation in connection.execute(
@@ -2280,7 +2286,7 @@ async def test_a_persistent_write_is_refused_while_the_authority_is_unreadable(
     )
     # The outage is operational and says nothing about the mailbox: no status,
     # no confidence, and no reason code reached the stored row.
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         published = connection.execute(
             "SELECT status, confidence, primary_reason FROM jobs WHERE owner = ?", (account,)
         ).fetchone()
@@ -2335,13 +2341,42 @@ def write_legacy_account_state(path: Path) -> None:
     stores beside it were bound to, and inventing one is the configuration
     mistake the binding exists to catch.
     """
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("CREATE TABLE account_state_schema_version (version INTEGER NOT NULL)")
         connection.execute("INSERT INTO account_state_schema_version (version) VALUES (1)")
         connection.execute(
             "CREATE TABLE account_state (account TEXT PRIMARY KEY, generation INTEGER NOT NULL)"
         )
         connection.execute("INSERT INTO account_state (account, generation) VALUES ('acct-a', 3)")
+
+
+def test_legacy_fixture_closes_database_after_committing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SQLite transaction context commits but does not close its connection."""
+    real_connect = sqlite3.connect
+    connections: list[sqlite3.Connection] = []
+
+    def recording_connect(path: Path) -> sqlite3.Connection:
+        connection = real_connect(path)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", recording_connect)
+    path = tmp_path / "legacy.db"
+    write_legacy_account_state(path)
+    (connection,) = connections
+    try:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+    finally:
+        connection.close()
+
+    reader = real_connect(path)
+    try:
+        assert reader.execute("SELECT version FROM account_state_schema_version").fetchone() == (1,)
+    finally:
+        reader.close()
 
 
 def test_a_version_one_account_state_is_refused_rather_than_adopted(tmp_path: Path) -> None:
@@ -2363,7 +2398,7 @@ def test_a_version_one_account_state_is_refused_rather_than_adopted(tmp_path: Pa
 
     # Refused *before* anything was written to it: no authority row was minted
     # for a file this build cannot read.
-    with sqlite3.connect(legacy) as connection:
+    with closing(sqlite3.connect(legacy)) as connection, connection:
         tables = {name for (name,) in connection.execute("SELECT name FROM sqlite_master")}
     assert "account_authority" not in tables
 

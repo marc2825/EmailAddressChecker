@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -97,7 +98,7 @@ class Replicas:
         return [*self.first_executor.submitted, *self.second_executor.submitted]
 
     def rows(self) -> list[tuple[str, str, str, str]]:
-        with sqlite3.connect(self.root / "jobs.db") as connection:
+        with closing(sqlite3.connect(self.root / "jobs.db")) as connection, connection:
             return list(
                 connection.execute(
                     "SELECT job_id, owner, idempotency_digest, target_digest FROM jobs"
@@ -247,7 +248,7 @@ def test_the_idempotency_index_is_unique(tmp_path: Path) -> None:
     store = SQLiteJobStore(path=tmp_path / "jobs.db")
     store.initialize()
 
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         indexes = {row[1]: row[2] for row in connection.execute("PRAGMA index_list('jobs')")}
         columns = [row[2] for row in connection.execute("PRAGMA index_info('jobs_idempotency')")]
 
@@ -388,7 +389,7 @@ def test_a_file_from_an_older_schema_is_refused_by_version(tmp_path: Path) -> No
     error. Version 1 had no uniqueness constraint, so its file may already hold
     the duplicate rows the later schemas prevent."""
     path = tmp_path / "jobs.db"
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.executescript(
             "CREATE TABLE job_schema_version (version INTEGER NOT NULL);"
             "INSERT INTO job_schema_version (version) VALUES (1);"

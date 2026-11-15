@@ -13,6 +13,7 @@ asyncio's own wakeup socketpair is `AF_UNIX`.
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -510,7 +511,7 @@ def test_a_store_written_by_another_schema_is_refused(tmp_path: Path) -> None:
 
     path = tmp_path / "batch.db"
     open_store(path)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("UPDATE batch_schema_version SET version = 99")
 
     with pytest.raises(BatchStoreSchemaError):
@@ -578,5 +579,5 @@ async def test_the_limiter_bounds_different_domains_on_a_shared_exchanger() -> N
 def store_ids(store: SQLiteBatchStore) -> set[str]:
     import sqlite3
 
-    with sqlite3.connect(store.path) as connection:
+    with closing(sqlite3.connect(store.path)) as connection, connection:
         return {row[0] for row in connection.execute("SELECT batch_id FROM batches")}

@@ -14,6 +14,7 @@ mainと一致した。再開時に追加されていたREADME両言語の冒頭�
 | HTTP応答処理 | 全リダイレクト拒否を維持し、拒否時の応答も明示的にcloseする。実際のurllib応答処理を通す回帰テストで、別オリジン・同一オリジン・両方向のscheme変更を確認。 |
 | `domain/smtp_tls.py`、`application/smtp_dialogue.py` | `OPPORTUNISTIC`を削除。既存のREQUIRED型・設定フィールドを維持し、STARTTLS未提供時は無条件で送信者・受信者コマンドより前に終了。 |
 | SMTP関連テスト | 平文で受信者へ進んでいたフィクスチャを明示的な偽TLSに変更。コマンド列・一回のRCPT・キャンセル・期限の検証を維持。cleanup境界の期限テストはRCPT応答直後に偽時計を進め、TLSの読み取り回数に依存しないようにした。 |
+| テスト補助コード・テスト方針 | GitHubのPython 3.13/3.14で顕在化した未close警告を調査。7ファイル39箇所の接続を、トランザクション終了後に明示的にcloseする。接続解放とcommit保持を実物のDBで確認する回帰試験を追加。厳格化で検出した子プロセステストのstdout pipeと例外時の競合接続も解放する。本体の保存アダプターは既に明示的にcloseしていた。 |
 | `pyproject.toml`、ADR 0006、DNS回帰テスト | dnspython最低版を2.9.2に更新。導入済み2.8.0で検出された既知脆弱性2件を解消。 |
 | `docs/architecture.md` | 文書整理で失われた七つのHTTPバインディング安全条件、ジョブ投入順序、limiterのidle/in-flight境界、primary reasonの不変条件を実装確認後に復元。 |
 | `docs/`、`src/`、`tests/`の注釈 | 非公開開発文書への参照を、公開要件・状態モデル・脅威モデル・ADR等へ置換。私的文書自体は公開しない。Phase番号を保持。役割データの出所、キーの長さ検証とエントロピーの違い、過去の計測と設定上限の違いも訂正。 |
@@ -33,7 +34,8 @@ mainと一致した。再開時に追加されていたREADME両言語の冒頭�
 | 高 | dnspython既知脆弱性 | 2.9.2へ更新し最低版も固定。下記の上流情報・回帰試験を確認 | 今後の脆弱性監査は継続して必要 |
 | 中 | デフォルトopenerが環境プロキシを継承 | `ProxyHandler({})`で無効化。URL異常系とreprのキー露出も修正 | HTTPSの通常のシステム信頼ストアは運用者の管理対象 |
 | 中 | リダイレクト拒否応答のcloseが明示されていない | 拒否・HTTPエラー時にclose。応答処理を通す試験で確認 | OS・PythonのTLS/HTTP実装に依存 |
-| 中 | CIが安全条件の文書欠落で失敗 | 文書を復元。テスト削除・基準緩和・ジョブスキップは行わない | push後のGitHub再実行は未実施 |
+| 中 | CIが安全条件の文書欠落で失敗 | 文書を復元。テスト削除・基準緩和・ジョブスキップなしで、承認後のGitHub CI全10ジョブ成功 | mainへのマージ・パッケージ公開は別の承認対象 |
+| 低 | テスト補助コードのSQLite接続未解放 | transaction contextを保持し、その外側でclose。CIログの警告を抑制せず、実物の接続に対する回帰試験で修正 | 本体での接続リークは確認されていない |
 | 確認 | SSRF・DNSリバインディング | DNS候補検査→承認済み数値IP→接続直前再検査→実peerのIP/port照合。TLS前後にもpeerを確認。CNAMEと特殊IPv4埋込IPv6の試験を維持 | OSルーティング、egress、信頼ストアは別の運用境界 |
 | 確認 | SMTP注入・受信者再送 | 六つのコマンドfactory、状態機械、recipient touch、再試行・再起動・ジョブclaimの試験を実行。DATA/VRFY/EXPN等を追加していない | 別の高水準要求を繰り返す利用者は認証・予算で抑制する必要 |
 | 確認 | 認証・所有者分離・クォータ | API認証、所有者付き検索、全verifier比較、共有limiter、予算拒否、kill switch、アカウント分離の既存試験を実行 | limiter/クォータ/admin状態はプロセス内。複数workerでの全体保証はない |
@@ -89,6 +91,29 @@ GitleaksはPATHに未導入だったため、CIと同じ8.30.1を一時領域へ
 CIに固定されたSHA-256を照合して実行した。新規runtime依存は追加していない。
 pytest-asyncioはfixture loop scope未指定の非推奨警告を出すが、テスト失敗はない。
 
+### 承認後のGitHub CI検証（2026-11-15）
+
+利用者の明示的な許可後に修正ブランチをpushし、[PR #1](https://github.com/marc2825/EmailAddressChecker/pull/1)
+を作成した。[CI run 43685471480](https://github.com/marc2825/EmailAddressChecker/actions/runs/43685471480)
+は実装修正コミット `b27b736` で全10ジョブ成功。mainの旧失敗runを再実行した結果ではない。
+
+| GitHubジョブ | 結果 |
+| --- | --- |
+| check / Python 3.12、3.13、3.14 | 各4,417件成功。Lint・整形・型検査・SMTP禁止検査も成功 |
+| distribution / Linux・Windows × Python 3.12、3.13、3.14 | 全6ジョブ成功。両配布形式のbuild・metadata・内容・独立installを確認 |
+| security | 成功。pip-auditは既知脆弱性0件、31コミットと展開配布物のGitleaks検出0件 |
+
+このrunの3.13/3.14では各108件のSQLite ResourceWarningが出た。未解放を
+回帰試験で再現後、テスト所有の接続を明示的にcloseするよう修正した。productionの
+各SQLiteアダプターは既に `closing(connection), connection` で解放していた。
+pytest設定でもResourceWarningとunraisable exceptionを失敗扱いにし、将来の
+接続未解放が成功したCIの警告だけに埋もれないようにした。
+この設定で子プロセス異常終了テストのstdout未closeも再現したため、Popenの
+context managerと例外時にも接続を閉じる処理を使い、pipeのcloseを明示的に検証した。
+追記と補助コード修正を含む最新コミットの状態は[PRのChecks](https://github.com/marc2825/EmailAddressChecker/pull/1/checks)
+で確認する。ローカルの上表は初回実装検証の記録であり、接続解放回帰試験1件の追加後は
+4,418件成功（27.08秒）。接続解放の回帰は修正前に失敗し、修正後に成功した。
+
 ## D. 未解決事項と公開機能の確認
 
 通常のローカルcheck/batchはDNSのみでSMTPを構成せず、候補生成は完全オフライン。
@@ -107,14 +132,14 @@ Trusted Publisher、`PUBLISH_ENABLED`実値、private vulnerability reporting、
 実運用ネットワークと送信者identityは別途所有者の確認が必要。
 release workflowの条件付き公開・一致version tag・検証済み同一run成果物・OIDC境界は維持した。
 
-この環境で実行したのはPython 3.12/Linuxだけ。修正後の3.13/3.14とWindows配布は
-push後の既存CIマトリクスで再確認する必要がある。第三者MXへのSMTPは実行していない。
+ローカル実行はPython 3.12/Linux。修正後の3.13/3.14とWindows配布も、上記の
+GitHub CIマトリクスで成功を確認した。第三者MXへのSMTPは実行していない。
 古いPhaseのテスト数・計測は現在の実測として再利用していない。
 
 ## E. 公開可否
 
 - **GitHub公開継続：可。** 修正済みソースとして公開を継続できる。
-  push後にCIを再実行し、必須チェック・レビュー保護も設定すること。
+  修正ブランチのCI成功を確認した。必須チェック・レビュー保護は別途設定すること。
 - **PyPI公開：条件付き可。** パッケージ検証と独立installが通り、後述の最終結果を
   確認した版が対象。全マトリクス成功と公開環境・publisher・承認者の確認前に
   アップロードを承認したという意味ではない。
@@ -126,10 +151,11 @@ push後の既存CIマトリクスで再確認する必要がある。第三者MX
 ## F. Git管理と次の作業
 
 差分をレビューし、`fix/post-publication-security-audit` ブランチで関連単位の
-ローカルコミットを作成する。README冒頭の利用者編集は
-この監査の変更と分けて保持する。push・tag・Release・PyPI upload・履歴書換えは行わない。
-次のPhaseは新機能ではなく、修正版の全CIマトリクスと公開環境の確認、許可された
-運用環境でのreadiness gateであり、この監査では実装・実施しない。
+コミットを作成した。2026-11-15に利用者がブランチpush・PR作成・CI検証を
+明示的に許可し、その範囲を実施した。README冒頭の利用者編集は未コミットで保持。
+mainへのマージ・tag・Release・PyPI upload・履歴書換えは行っていない。
+次のPhaseはPRのレビューと公開環境の確認、許可された運用環境でのreadiness gateであり、
+この監査では実装・実施しない。
 
 
 ## 変更ファイル一覧
@@ -169,6 +195,7 @@ push後の既存CIマトリクスで再確認する必要がある。第三者MX
 - [docs/security-audit.md](../docs/security-audit.md)
 - [docs/smtp-state-machine.md](../docs/smtp-state-machine.md)
 - [docs/status-model.md](../docs/status-model.md)
+- [docs/test-strategy.md](../docs/test-strategy.md)
 - [docs/threat-model.md](../docs/threat-model.md)
 - [docs/usage-ja.md](../docs/usage-ja.md)
 - [pyproject.toml](../pyproject.toml)
