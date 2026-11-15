@@ -380,7 +380,7 @@ async def test_starting_and_closing_the_stack_starts_and_stops_both_tasks() -> N
 
 @pytest.mark.asyncio
 async def test_the_operator_trigger_runs_one_sweep_and_needs_no_route() -> None:
-    """`prompts/07-hardening.md`'s "trigger deletion", as an application
+    """`docs/threat-model.md`'s "trigger deletion", as an application
     operation on the built stack rather than a public endpoint — a deletion
     route reachable by a caller is a denial-of-service control with an audit
     trail attached."""

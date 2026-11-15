@@ -1,6 +1,6 @@
 """The limited-beta harness: bounded, allowlisted, and off unless told otherwise.
 
-`prompts/08-limited-beta.md` work items 4 and 5 — *a controlled manual
+`docs/beta-report-template.md` — *a controlled manual
 integration test harness disabled by default*, and *an explicit allowlist or
 authorization record for beta targets*. This is both, and the two are one object
 because a harness whose allowlist is optional is a harness with no allowlist.
@@ -23,7 +23,7 @@ nobody will run.
 | every production control permits it | the verification service |
 
 The first is `False` by default and nothing infers it.
-`prompts/08-limited-beta.md`'s exit criteria require a **human** to verify every
+`docs/beta-report-template.md`'s exit criteria require a **human** to verify every
 deployment gate in `docs/operations.md` before a beta starts, and this field is
 where that decision is recorded rather than assumed.
 
@@ -79,7 +79,7 @@ _STATUS_VALUES: Final[frozenset[str]] = frozenset(status.value for status in Sta
 #:
 #: An allowlist rather than a copy: `docs/status-model.md` bounds what a detail
 #: may hold, but a beta export that took the whole mapping would ship whatever a
-#: producer adds later. These four are what `prompts/08-limited-beta.md`'s
+#: producer adds later. These four are what `docs/beta-report-template.md`'s
 #: metrics and ADR 0009's measurement obligation actually need.
 EXPORTED_DETAIL_KEYS: Final[frozenset[str]] = frozenset(
     {"tls_negotiated", "tls_reason", "elapsed_milliseconds", "stage_reached"}
@@ -182,7 +182,7 @@ class BetaRow:
 class BetaReport:
     """One run, with the reproducibility metadata a result needs to mean anything.
 
-    `prompts/08-limited-beta.md` work item 6 asks for ruleset and dataset version
+    `docs/beta-report-template.md` asks for ruleset and dataset version
     reporting; a measurement whose ruleset nobody recorded cannot be compared
     with a later one. The sender identity and every credential are deliberately
     **absent** — a report is shared and those are not.
@@ -243,7 +243,7 @@ class BetaReport:
     def status_summary(self) -> dict[str, int]:
         """The deliverability distribution, over completed rows only.
 
-        `prompts/08-limited-beta.md`'s "unknown distribution" is a distribution
+        `docs/beta-report-template.md`'s "unknown distribution" is a distribution
         of *mailbox answers*. A target the harness never ran has no answer, and
         counting it here would put harness bookkeeping into a product metric.
         """
@@ -346,7 +346,7 @@ class BetaHarness:
             # neither is a condition this harness may work around.
             raise BetaRefused(
                 "a live beta run needs an authorized corpus; "
-                "see prompts/08-limited-beta.md and docs/operations.md section 1"
+                "see docs/beta-report-template.md and docs/operations.md section 1"
             )
 
         selected = corpus.targets[: limits.max_targets]
@@ -512,7 +512,7 @@ def classify_agreement(truth: ControlledTruth, verdict: Verdict) -> Agreement:
 
     A pure function, and the only place a truth class and a status meet. It
     computes no status, changes no verdict, and produces no accuracy figure:
-    `prompts/08-limited-beta.md` asks for "hard-invalid precision on controlled
+    `docs/beta-report-template.md` asks for "hard-invalid precision on controlled
     labels", which is counted from these outcomes by whoever reads the report.
 
     **The unknown statuses are `INCONCLUSIVE`, never a failure.** A beta that

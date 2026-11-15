@@ -6,6 +6,18 @@ This file records user-visible changes. Implementation details and design ration
 
 Initial release candidate for Python 3.12+.
 
+### Security
+
+- Require HTTPS for remote validators; HTTP is restricted to exact loopback IP
+  literals. Disable environment proxies and continue refusing every redirect.
+- Remove opportunistic plaintext SMTP; use `TLSPolicy.REQUIRED` everywhere.
+- Require dnspython 2.9.2+ for its upstream security fixes.
+- Restore documented HTTP-binding safety conditions removed during documentation
+  cleanup, and replace private-development citations with public contracts.
+
+Existing HTTP, proxy-dependent and opportunistic-library configurations need
+the migration described in [ADR 0021](docs/adr/0021-required-encryption-at-network-boundaries.md).
+
 ### Added
 
 - Conservative email checks using syntax and DNS/MX evidence, with a separate, explicitly authorized active SMTP capability.

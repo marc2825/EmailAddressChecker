@@ -1,6 +1,6 @@
 """The accept-all experiment: one control probe, behind five separate gates.
 
-`prompts/09-accept-all.md`. This is a **separate high-level operation**, not a
+`docs/adr/0017-accept-all-control-experiment.md`. This is a **separate high-level operation**, not a
 step inside `verify()`. Nothing about an ordinary check changes because this
 module exists, and an ordinary check never reaches it: `application/verification.py`
 neither imports this module nor is imported by it, and an inspection test holds
@@ -27,8 +27,8 @@ absent by default, and each refuses on its own:
 | the separate accept-all domain budget has room | `BudgetLayer.ACCEPT_ALL_DOMAIN` |
 | no unexpired cached answer exists | `ports/accept_all_cache.py` |
 
-`prompts/09-accept-all.md`'s acceptance criterion is that **no public caller can
-enable the feature without authorization and budget**, and the shape of that
+`docs/adr/0017-accept-all-control-experiment.md`'s acceptance criterion is that **no public caller
+can enable the feature without authorization and budget**, and the shape of that
 here is that a caller has no parameter at all: `run` takes a domain and a
 principal, and every gate above is read from the deployment or from the
 operator's authorization record.
@@ -112,7 +112,7 @@ def generate_control_local_part(
 ) -> ControlLocalPart:
     """A cryptographically random, non-dictionary control local part.
 
-    `prompts/09-accept-all.md`: "generate a cryptographically random
+    `docs/adr/0017-accept-all-control-experiment.md`: "generate a cryptographically random
     non-dictionary ASCII local part" and "no personal names, roles, or
     sequential strings".
 
@@ -194,8 +194,8 @@ class AcceptAllResult:
     """What one experiment produced. **No `Status`, and no mailbox claim.**
 
     `evidence` is empty for every outcome except `SUSPECTED`, because
-    `prompts/09-accept-all.md`'s Result section says the experiment may add only
-    the `accept_all_suspected` risk flag and this project publishes no reason
+    `docs/adr/0017-accept-all-control-experiment.md`'s Result section says the experiment may add
+    only the `accept_all_suspected` risk flag and this project publishes no reason
     code meaning "not accept-all".
     """
 
@@ -216,7 +216,7 @@ class AcceptAllResult:
 #: Which recipient reason a control answer maps to which outcome.
 #:
 #: **Read from the structured evidence, never from the basic code.**
-#: `prompts/09-accept-all.md` says "compare structured evidence, not only the
+#: `docs/adr/0017-accept-all-control-experiment.md` says "compare structured evidence, not only the
 #: basic code", and the reason codes are Phase 4D's — this table adds no
 #: vocabulary and re-derives nothing. A bare `550` arrives here as
 #: `smtp_ambiguous_permanent_failure` and lands in `INCONCLUSIVE`, which is

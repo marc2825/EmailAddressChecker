@@ -1,6 +1,7 @@
 """What a batch must survive a restart, and what it may never persist.
 
-`prompts/10-batch.md`'s scheduler asks for *resumable job state* and its tests
+`docs/adr/0018-controlled-batch-execution.md`'s scheduler asks for *resumable job state* and its
+tests
 ask for *restart/resume*. An in-process registry cannot answer either: the
 process is exactly what a restart destroys. So batch state is a store behind a
 port, on the `ports/verdict_store.py` precedent — the record type fixes what may
@@ -143,7 +144,7 @@ class StoredBatch:
 
 @dataclass(frozen=True, slots=True)
 class BatchArtifact:
-    """The expiring downloadable result. `prompts/10-batch.md` Output.
+    """The expiring downloadable result. `docs/adr/0018-controlled-batch-execution.md` Output.
 
     A bounded blob with an owner and a clock, retrievable through an application
     port. **Not a second `VerdictCache`**: a cache answers "what is this
@@ -164,7 +165,7 @@ class BatchArtifact:
     #: **False is not a defect, it is the honest label.** A batch finishes
     #: submitting long before its verifications finish, and exporting rows whose
     #: jobs are still running as though they were finished deliverability
-    #: results is the one output error `prompts/10-batch.md`'s "no raw SMTP
+    #: results is the one output error `docs/adr/0018-controlled-batch-execution.md`'s "no raw SMTP
     #: replies / row-level status" cannot catch. A non-final artifact is a
     #: submission report and says so.
     complete: bool = False

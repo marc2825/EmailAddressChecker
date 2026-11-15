@@ -27,7 +27,7 @@ classifiers = [
 # ADR 0005: the standard library is not sufficient for domain encoding.
 # ADR 0006: resolving MX is core service behavior, not an optional extra.
 dependencies = [
-  "dnspython>=2.7,<3",
+  "dnspython>=2.9.2,<3",
   "idna>=3.10,<4",
 ]
 
@@ -72,6 +72,12 @@ exclude = ["*.toml.example"]
 addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
 asyncio_mode = "strict"
+# Finalizers may report leaked handles through pytest's unraisable hook.
+# Both paths must fail instead of leaving a successful CI run with leaks.
+filterwarnings = [
+  "error::ResourceWarning",
+  "error::pytest.PytestUnraisableExceptionWarning",
+]
 # The forbidden-command scanner is a safety gate, so it has its own regression
 # tests. They import it directly rather than only running it as a subprocess.
 pythonpath = ["scripts"]

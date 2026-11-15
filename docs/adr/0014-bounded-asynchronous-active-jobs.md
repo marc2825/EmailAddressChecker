@@ -18,7 +18,7 @@
 active CLI" under MVP *Included*. Section 11 says `POST /v1/checks` "creates an
 asynchronous job", supports idempotency, "returns passive evidence immediately
 when available", and that `GET /v1/checks/{id}` "returns job state and result".
-`prompts/06-api-cli.md` fixes the state enum, the idempotency key, a bounded
+`docs/architecture.md` fixes the state enum, the idempotency key, a bounded
 retry decision, cancellation, cache lookup before enqueue, and — explicitly —
 **no synchronous waiting for active SMTP in API workers**.
 
@@ -29,7 +29,7 @@ return a verdict. That is the behaviour the prompt names and forbids.
 
 `pending`, `running`, `retry_scheduled`, `completed`, `failed`, `cancelled`.
 
-Not `queued`, not `succeeded`, not `in_progress`. `prompts/06-api-cli.md` wrote
+Not `queued`, not `succeeded`, not `in_progress`. `docs/architecture.md` wrote
 these six, `retry_scheduled` exists because `docs/requirements.md` section 14
 allows one automatic retry, and renaming a published state to a more familiar
 word would be new API vocabulary invented to match a convention nobody asked
@@ -65,7 +65,7 @@ adapter is `secrets`.
 
 ## Decision: every job is owned by an authenticated principal, and a foreign job is `404`
 
-`prompts/06-api-cli.md` privacy: "job IDs are unguessable" **and** "cross-account
+`docs/architecture.md` privacy: "job IDs are unguessable" **and** "cross-account
 result access forbidden". Both, not either — an unguessable identifier is a
 secret that can leak, and an ownership check is what makes the leak survivable.
 
@@ -79,7 +79,7 @@ somebody else, which is the fact the ownership rule exists to withhold.
 ## Decision: cancellation is `DELETE` on the resource the repository already names
 
 `docs/requirements.md` names three routes and no cancellation route;
-`prompts/06-api-cli.md` requires cancellation without naming one. Rather than
+`docs/architecture.md` requires cancellation without naming one. Rather than
 invent a path, cancellation is `DELETE /v1/checks/{id}` — the resource is the
 one section 11 already publishes, and no new path is added.
 
@@ -104,7 +104,7 @@ all the way into the SMTP dialogue, and a cancelled job leaves nothing running.
 ## Decision: the executor is a port with a bounded in-memory implementation
 
 `JobExecutor` in `ports/job_executor.py`; `InMemoryJobExecutor` in
-`adapters/execution/memory_executor.py`, which is `prompts/06-api-cli.md`'s
+`adapters/execution/memory_executor.py`, which is `docs/architecture.md`'s
 "memory executor for tests".
 
 Everything about it is finite: a fixed number of worker tasks and one scheduler
@@ -327,7 +327,7 @@ would be the exact re-derivation Phase 5 stop condition 1 forbids.
   limiter, and the deadline — every bound Phase 6 added.
 - **Durable jobs in SQLite.** No document asks for them, and a job table that
   outlives a process is retained personal data with no retention rule.
-  **Reversed by Phase 10 and ADR 0019**: `prompts/10-batch.md` does ask for
+  **Reversed by Phase 10 and ADR 0019**: `docs/adr/0018-controlled-batch-execution.md` does ask for
   resumable job state, and the retention rule exists —
   `RetentionService` sweeps the job store on the same window as the registry, so
   persistence does not quietly extend `docs/privacy.md` section 3.

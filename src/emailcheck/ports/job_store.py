@@ -1,6 +1,6 @@
 """What a job must survive a process restart, and what it may never persist.
 
-`prompts/10-batch.md` asks for *resumable job state* and a *restart/resume*
+`docs/adr/0018-controlled-batch-execution.md` asks for *resumable job state* and a *restart/resume*
 test. Phase 10 persisted the batch's own rows and found that insufficient: a
 restarted process could recover a row's `JobId` and its handle, but the
 `JobService` registry that turns a handle back into a job lived only in memory —

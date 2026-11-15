@@ -296,7 +296,7 @@ chosen by a DNS answer.
 
 Controls:
 
-- `TLSPolicy.REQUIRED` by default. A server advertising no `STARTTLS` ends the
+- `TLSPolicy.REQUIRED` is the only policy. A server advertising no `STARTTLS` ends the
   probe as a non-target `TLS_ERROR` rather than continuing in plaintext;
 - certificate and host name verification always on, with no parameter that can
   change either. The one seam adds a trust anchor and cannot remove one;
@@ -307,14 +307,14 @@ Controls:
   `CERT_NONE` by a longer route. No such path exists today; an inspection test
   refuses a `TLSTrust` constructed anywhere in `src/` outside the module holding
   the system-trust default, and refuses any production module that reads the
-  environment. `plans/phase-04-smtp.md` carries it as a Phase 6 stop condition;
+  environment. `docs/adr/0009-smtp-dialogue-and-tls.md` carries it as a Phase 6 stop condition;
 - **a `TLSUpgradeRequest` authorizes one connection, not any connection.** The
   peer it carries is compared against the endpoint the connection actually
   reached, before a handshake byte moves, so a request built from another
   connection's `ConfirmedPeer` cannot supply that host's name as SNI. Two
   barriers — this comparison and the `getpeername()` re-read — and each has its
   own test, because the review found that removing this one broke nothing;
-- no plaintext fallback after a failed handshake, under either policy, and no
+- no plaintext fallback after a failed handshake, and no
   transition back to plaintext in the state machine;
 - the upgrade is refused when anything is already buffered, because those bytes
   are plaintext an attacker could have injected before it (CVE-2011-0411);
@@ -386,7 +386,7 @@ Required controls before service-active:
 
 ## 5. Phase 7 control checklist
 
-`prompts/07-hardening.md`'s acceptance criterion: each implemented control
+Each implemented control is
 mapped to its code and its tests. Read with section 3, which says *why* each
 exists; this says where it is and what fails when it stops working.
 

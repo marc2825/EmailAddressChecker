@@ -593,8 +593,8 @@ class AsyncioSMTPConnection:
         left to say.
 
         `close_seconds` is therefore consumed nowhere. It stays a validated
-        field so a future graceful shutdown has a budget to use, and
-        `IMPLEMENTATION_STATUS.md` records that it is currently unused.
+        field so a future graceful shutdown has a budget to use. It is currently
+        unused; this close performs no awaited network operation.
         """
         if self._closed:
             return

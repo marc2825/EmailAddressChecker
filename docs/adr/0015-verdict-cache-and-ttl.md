@@ -6,7 +6,7 @@
 
 ## Context
 
-`prompts/06-api-cli.md` requires "cache lookup before enqueue" and a test that a
+`docs/architecture.md` requires "cache lookup before enqueue" and a test that a
 cache hit skips the enqueue. `docs/architecture.md` section 6 fixes the rule:
 "Repeated requests within the address cache window return the existing result
 unless an authorized caller explicitly requests a refresh and has budget."
@@ -96,7 +96,7 @@ with zero DNS lookups and zero sockets.
 ```
 
 Section 13 requires the first three. The fourth is retained from the existing
-store rather than dropped: `prompts/06-api-cli.md` forbids cross-account result
+store rather than dropped: `docs/architecture.md` forbids cross-account result
 access, and a shared cache row is the quietest way to hand one account another
 account's answer. Section 13's list is a minimum, and narrowing isolation to
 meet it exactly would trade a privacy property for a hit rate.
@@ -118,7 +118,7 @@ A row filtered after selection is a row an implementation can still answer with;
 one excluded by the query is not. This is the same argument Phase 5 stop
 condition 4 made for the ruleset, and it gets the same treatment.
 
-The schema version moves from 1 to 2. `prompts/06-api-cli.md` says not to
+The schema version moves from 1 to 2. `docs/architecture.md` says not to
 overbuild migrations, and no document requires an existing development database
 to survive, so a version-1 database is refused at start rather than migrated.
 
@@ -139,7 +139,7 @@ authenticated principal is equal, and there is no separate refresh budget.
 
 So no refresh parameter is accepted. Adding one now would be a
 request-controlled cache bypass with the authorization half missing, which is
-the shape `prompts/06-api-cli.md`'s closed request schema exists to refuse. The
+the shape `docs/architecture.md`'s closed request schema exists to refuse. The
 request body still carries exactly one key.
 
 ## Consequences

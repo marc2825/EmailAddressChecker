@@ -2,14 +2,14 @@
 
 `docs/requirements.md` section 11 makes `POST /v1/checks` create an asynchronous
 job and `GET /v1/checks/{id}` return its state and result;
-`prompts/06-api-cli.md` adds idempotency, a bounded retry, cancellation, and
+`docs/architecture.md` adds idempotency, a bounded retry, cancellation, and
 cache lookup before enqueue. ADR 0014 records the decisions and ADR 0015 the
 cache.
 
 **Nothing here waits for SMTP.** `submit` runs the passive half — which is what
 section 11's "returns passive evidence immediately when available" asks for —
 and hands the active half to a `JobExecutor`. That is the requirement
-`prompts/06-api-cli.md` states as "no synchronous waiting for active SMTP in API
+`docs/architecture.md` states as "no synchronous waiting for active SMTP in API
 workers", and the first Phase 6 build failed it.
 
 **Nothing here decides a status either.** A job's result is
@@ -33,7 +33,7 @@ The passive check comes **first**, because both lookups below it are keyed by
 the normalized target and that target does not exist until the address has been
 parsed. So a cache hit or an idempotent repeat still costs the passive DNS work;
 what it avoids is the enqueue and the SMTP probe, which is the property
-`prompts/06-api-cli.md` requires and the expensive half by orders of magnitude.
+`docs/architecture.md` requires and the expensive half by orders of magnitude.
 
 An earlier version of this docstring claimed the cache was consulted before the
 passive step and that a hit therefore cost nothing. It was not true, and an
@@ -344,7 +344,7 @@ class SubmitOutcome:
     #: passive evidence is returned immediately when available.
     passive: PublicResult | None
     #: Whether this submission created work. `False` for an idempotent repeat
-    #: and for a cache hit, which is the property `prompts/06-api-cli.md`
+    #: and for a cache hit, which is the property `docs/architecture.md`
     #: requires a test for.
     enqueued: bool
     #: Whether the job already existed. A caller distinguishes `202` from `200`.
@@ -353,7 +353,8 @@ class SubmitOutcome:
     #: `None`. Carried straight from `VerificationOutcome.scheduling_key` and
     #: never re-derived; it decides nothing here either. A caller submitting
     #: many checks uses it to order the *next* ones fairly across destinations,
-    #: which is what `prompts/10-batch.md` asks for and what no caller can learn
+    #: which is what `docs/adr/0018-controlled-batch-execution.md` asks for and what no caller can
+    #: learn
     #: without resolving DNS through a second, unreviewed path.
     scheduling_key: str | None = None
 

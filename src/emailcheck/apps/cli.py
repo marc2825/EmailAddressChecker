@@ -115,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--remote",
         metavar="URL",
-        help="submit an active check to a remote validator instead of checking locally",
+        help="remote validator HTTPS URL (HTTP only for 127.0.0.1 or [::1])",
     )
     parser.add_argument(
         "--remote-key-file",
@@ -166,7 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return asyncio.run(_run_local(arguments))
 
 
-# --- readiness reporting, from `prompts/08-limited-beta.md` ------------------
+# --- readiness reporting, from `docs/beta-report-template.md` ------------------
 
 
 def _print_deployment_report(arguments: argparse.Namespace) -> int:
@@ -178,7 +178,7 @@ def _print_deployment_report(arguments: argparse.Namespace) -> int:
     outbound operation this project has not been authorized to make.
 
     It also **authorizes nothing**. A clean report is not permission to start a
-    beta — `prompts/08-limited-beta.md`'s exit criteria give that to a human, and
+    beta — `docs/beta-report-template.md`'s exit criteria give that to a human, and
     `BetaAuthorization.external_probing_authorized` is where the decision lives.
     The exit code is `EXIT_OK` whatever the gates say, because a non-zero code
     would turn an advisory report into a pass/fail somebody could script against.
@@ -382,6 +382,8 @@ def read_key_file(path: Path) -> str:
         # smuggled newline. Refused rather than stripped, so what the operator
         # put in the file is what this client sends.
         raise RemoteKeyError("the remote key file carries a control character")
+    if not text.isascii():
+        raise RemoteKeyError("the remote key file must contain a printable ASCII key")
     return text
 
 

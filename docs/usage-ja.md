@@ -134,4 +134,4 @@ emailcheck --check-deployment
 
 `--report-versions` はパッケージ、判定ルール、データセットのバージョンを表示します。使い捨てメール・フリーメール・プロバイダーの分類データは現時点で未収録であり、フラグが付かないことは「該当しない」という意味ではありません。`--check-deployment` はActive環境の準備状況を表示する参考情報で、外部接続も運用承認も行わず、終了コードは常に0です。
 
-従来形式の `emailcheck ADDRESS --remote URL --remote-key-file PATH [--wait]` は、別途構築・許可されたActive検査サービス向けです。リモート接続ではHTTPSを使用してください。対象の所有・許可、認証、レート制限、TLS、運用準備が必要です。通常の `check` / `batch` にActive検査への切り替え機能はありません。詳しくは [運用ガイド](operations.md) と [セキュリティポリシー](../SECURITY.md) を参照してください。
+従来形式の `emailcheck ADDRESS --remote URL --remote-key-file PATH [--wait]` は、別途構築・許可されたActive検査サービス向けです。リモート接続はHTTPS必須です。開発用HTTPは厳密な `127.0.0.1` / `[::1]` のみ許可し、`localhost`、リダイレクト、環境プロキシは使用しません。対象の所有・許可、認証、レート制限、TLS、運用準備が必要です。通常の `check` / `batch` にActive検査への切り替え機能はありません。詳しくは [運用ガイド](operations.md) と [セキュリティポリシー](../SECURITY.md) を参照してください。

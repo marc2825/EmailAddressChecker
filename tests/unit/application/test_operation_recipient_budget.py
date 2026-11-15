@@ -60,6 +60,7 @@ from emailcheck.domain.smtp_transport import TransportFailure
 from fake_smtp_server import (
     BANNER_OK,
     CLEANUP_OK,
+    EHLO_WITH_STARTTLS,
     EHLO_WITHOUT_STARTTLS,
     MAIL_FROM_OK,
     QUIT_OK,
@@ -68,6 +69,7 @@ from fake_smtp_server import (
     RCPT_STORAGE_PERMANENT,
     RCPT_STORAGE_TEMPORARY,
     RCPT_TEMPORARY,
+    STARTTLS_READY,
     RoutedSMTPTransport,
     ScriptedSMTPPeer,
     failure,
@@ -77,14 +79,12 @@ asyncio_test = pytest.mark.asyncio
 
 OUTER_BOUND: Final = 10.0
 DOMAIN: Final = "recipient.test.example"
-#: The peer advertises no STARTTLS, so the dialogue is asked not to require it.
-#: `TLSPolicy.REQUIRED` stays the production default and its own tests pin it;
-#: this file is measuring recipient commands, not the handshake.
-PLAIN: Final = DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC)
+#: Fake TLS negotiates before any recipient command, as production requires.
+TLS_SETTINGS: Final = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 
 
 def peer(rcpt: object = RCPT_ACCEPTED, *, write_fails: bool = False) -> ScriptedSMTPPeer:
-    """A plain server that answers everything and one scripted `RCPT TO`.
+    """A fake TLS server that answers everything and one scripted `RCPT TO`.
 
     `write_fails` makes the *write* of `RCPT TO` fail, which is a different
     scenario from a scripted failure reply: the command never enters the
@@ -97,7 +97,8 @@ def peer(rcpt: object = RCPT_ACCEPTED, *, write_fails: bool = False) -> Scripted
         peer=PeerEndpoint(address=PUBLIC_V4, port=25),
         banner=BANNER_OK,
         responses={
-            SMTPCommand.EHLO: EHLO_WITHOUT_STARTTLS,
+            SMTPCommand.EHLO: [EHLO_WITH_STARTTLS, EHLO_WITHOUT_STARTTLS],
+            SMTPCommand.STARTTLS: STARTTLS_READY,
             SMTPCommand.MAIL_FROM: MAIL_FROM_OK,
             SMTPCommand.RCPT_TO: rcpt,
             SMTPCommand.RSET: CLEANUP_OK,
@@ -143,7 +144,7 @@ class Wire:
                 identity_provider=identity_provider(),
                 rate_limiter=RecordingRateLimiter(),  # type: ignore[arg-type]
                 clock=FakeMonotonicClock(),
-                settings=PLAIN,
+                settings=TLS_SETTINGS,
             ),
             clock=FakeClock(),
         )

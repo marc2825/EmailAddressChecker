@@ -20,7 +20,7 @@ including `252`.
 gate 4C records it as `ACCEPTED` — at that layer `ACCEPTED` means only "answered
 in the 2xx class" — and a mapping written as `if outcome is ACCEPTED` turns a
 server's refusal to verify into an acceptance. That is the Phase 4D entry
-condition in `plans/phase-04-smtp.md`, and it is the first branch below.
+condition in `docs/adr/0009-smtp-dialogue-and-tls.md`, and it is the first branch below.
 
 **This is a pure function.** No socket, no clock, no resolver, no limiter, no
 storage, and no retry. Even the timestamp is a parameter: `Evidence.observed_at`
@@ -592,7 +592,7 @@ def _is_about_the_target(reason: ReasonCode) -> bool:
     **Derived from what is known to be target evidence, never from what is known
     not to be.** The obvious form, `reason not in NON_TARGET_SMTP_REASONS`, fails
     *open*: a reason added later and forgotten from both published sets would be
-    labelled target evidence, which is the direction `AGENTS.md` says this
+    labelled target evidence, which is the direction `CONTRIBUTING.md` says this
     project must never be wrong in. This form fails closed — an unclassified
     reason is non-target, and section 4 resolves it to `unknown`.
 

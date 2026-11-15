@@ -48,7 +48,7 @@ from fake_smtp_server import (
     RCPT_NO_SUCH_USER,
     RCPT_TEMPORARY,
     RoutedSMTPTransport,
-    plain_session_peer,
+    tls_session_peer,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -61,10 +61,10 @@ OUTER_BOUND_SECONDS: Final = 10.0
 FIRST: Final = "93.184.216.34"
 SECOND: Final = "93.184.216.35"
 
-PLAIN: Final = DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC)
+TLS_SETTINGS: Final = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 
 #: Commands that must never appear in a transcript, at any concurrency.
-#: `AGENTS.md` forbids all four unconditionally.
+#: `CONTRIBUTING.md` forbids all four unconditionally.
 FORBIDDEN: Final = ("DATA", "VRFY", "EXPN", "AUTH")
 
 
@@ -74,7 +74,7 @@ class _WallClock:
 
 
 def peer_at(address_value: str, *, rcpt: object = RCPT_ACCEPTED):  # type: ignore[no-untyped-def]
-    return plain_session_peer(
+    return tls_session_peer(
         PeerEndpoint(address=address_value, port=25),
         rcpt=rcpt,  # type: ignore[arg-type]
     )
@@ -87,7 +87,7 @@ def verifier_over(transport: RoutedSMTPTransport) -> SMTPVerificationService:
             identity_provider=identity_provider(),
             rate_limiter=RecordingRateLimiter(),  # type: ignore[arg-type]
             clock=FakeMonotonicClock(),
-            settings=PLAIN,
+            settings=TLS_SETTINGS,
         ),
         clock=_WallClock(),  # type: ignore[arg-type]
         settings=VerificationSettings(max_attempts=3),

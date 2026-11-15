@@ -45,14 +45,13 @@ from fake_smtp_server import (
     RCPT_ACCEPTED,
     RCPT_NO_SUCH_USER,
     ScriptedSMTPTransport,
-    plain_session_peer,
     tls_session_peer,
 )
 
 pytestmark = pytest.mark.asyncio
 
 PUBLIC_V4 = "93.184.216.34"
-PLAIN = DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC)
+TLS_SETTINGS = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 REQUIRE_TLS = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 
 #: What a probe whose connect never answers may cost. A mutation that puts the
@@ -65,7 +64,7 @@ OUTER_BOUND_SECONDS = 5.0
 def service(
     transport: object,
     limiter: RecordingRateLimiter | None = None,
-    settings: DialogueSettings = PLAIN,
+    settings: DialogueSettings = TLS_SETTINGS,
     clock: object | None = None,
 ) -> tuple[SMTPProbeService, RecordingRateLimiter]:
     limiter = limiter or RecordingRateLimiter()
@@ -131,7 +130,7 @@ class SlowTransport:
 
 
 async def test_a_probe_reaches_the_recipient_stage_and_closes() -> None:
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, _ = service(transport)
 
     report = await probe.probe(candidate(PUBLIC_V4), PUBLIC_V4, address(), account="acct-1")
@@ -164,7 +163,7 @@ async def test_the_tls_path_works_end_to_end() -> None:
 
 
 async def test_the_rate_limiter_is_asked_before_anything_connects() -> None:
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, limiter = service(transport)
 
     await probe.probe(candidate(PUBLIC_V4), PUBLIC_V4, address(), account="acct-1")
@@ -175,7 +174,7 @@ async def test_the_rate_limiter_is_asked_before_anything_connects() -> None:
 
 
 async def test_the_lease_is_released_even_when_the_probe_fails() -> None:
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     transport.connect_failure = TransportFailure.CONNECTION_REFUSED
     probe, limiter = service(transport)
 
@@ -187,7 +186,7 @@ async def test_the_lease_is_released_even_when_the_probe_fails() -> None:
 
 
 async def test_a_destination_the_candidate_never_offered_is_refused_before_the_socket() -> None:
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, limiter = service(transport)
 
     outcome = await probe.probe(candidate(PUBLIC_V4), "8.8.8.8", address(), account="acct-1")
@@ -207,7 +206,7 @@ async def test_the_service_cannot_be_built_without_a_rate_limiter() -> None:
     assert fields["rate_limiter"].default_factory is dataclasses.MISSING
     with pytest.raises(TypeError):
         SMTPProbeService(  # type: ignore[call-arg]
-            transport=transport_for(plain_session_peer(peer_endpoint())),
+            transport=transport_for(tls_session_peer(peer_endpoint())),
             identity_provider=identity_provider(),
             clock=FakeMonotonicClock(),
         )
@@ -285,7 +284,7 @@ async def test_the_production_limiter_is_not_permissive() -> None:
 
 async def test_the_budget_key_carries_no_local_part() -> None:
     """`docs/requirements.md` section 16: no full address in metrics or keys."""
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, limiter = service(transport)
     target = address("Secret.Person+tag@recipient.test.example")
 
@@ -301,7 +300,7 @@ async def test_the_budget_key_carries_no_local_part() -> None:
 
 
 async def test_the_connection_closes_when_the_dialogue_raises() -> None:
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, _ = service(transport)
 
     async def broken(*args: object, **kwargs: object) -> None:
@@ -322,7 +321,7 @@ async def test_the_connection_closes_when_the_dialogue_raises() -> None:
 
 async def test_a_cancelled_probe_closes_the_connection_and_propagates() -> None:
     """4B's cancellation rule, carried through the dialogue."""
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, _ = service(transport)
 
     from emailcheck.application import smtp_probe
@@ -353,7 +352,7 @@ async def test_a_cancelled_probe_closes_the_connection_and_propagates() -> None:
 
 
 async def test_a_refusal_says_nothing_about_the_target() -> None:
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     transport.connect_failure = TransportFailure.CONNECT_TIMEOUT
     probe, _ = service(transport)
 
@@ -395,7 +394,7 @@ async def test_a_connect_that_never_answers_is_stopped_by_the_session_budget() -
     probe, limiter = service(
         transport,
         settings=DialogueSettings(
-            tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=0.05)
+            tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=0.05)
         ),
     )
 
@@ -419,7 +418,7 @@ async def test_the_total_budget_wins_when_it_is_smaller_than_the_connect_timeout
     transport = SilentTransport()
     probe, _ = service(
         transport,
-        settings=DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC, budget=budget),
+        settings=DialogueSettings(tls_policy=TLSPolicy.REQUIRED, budget=budget),
     )
 
     async with asyncio.timeout(OUTER_BOUND_SECONDS):
@@ -438,7 +437,7 @@ async def test_a_connect_timeout_smaller_than_the_budget_stays_the_transports_ow
     probe, _ = service(
         transport,
         settings=DialogueSettings(
-            tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=30.0)
+            tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=30.0)
         ),
         clock=clock,
     )
@@ -453,11 +452,11 @@ async def test_a_connect_timeout_smaller_than_the_budget_stays_the_transports_ow
 
 async def test_a_connect_that_finishes_just_inside_the_budget_still_runs_the_dialogue() -> None:
     clock = FakeMonotonicClock()
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, _ = service(
         SlowTransport(inner=transport, clock=clock, seconds=4.5),
         settings=DialogueSettings(
-            tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=5.0)
+            tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=5.0)
         ),
         clock=clock,
     )
@@ -480,11 +479,11 @@ async def test_time_spent_connecting_is_taken_out_of_the_dialogue_budget() -> No
     budget rather than each having its own.
     """
     clock = FakeMonotonicClock()
-    transport = transport_for(plain_session_peer(peer_endpoint()))
+    transport = transport_for(tls_session_peer(peer_endpoint()))
     probe, _ = service(
         SlowTransport(inner=transport, clock=clock, seconds=5.0),
         settings=DialogueSettings(
-            tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=5.0)
+            tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=5.0)
         ),
         clock=clock,
     )
@@ -506,7 +505,7 @@ async def test_a_budget_already_spent_opens_no_socket_at_all() -> None:
     probe, limiter = service(
         transport,
         settings=DialogueSettings(
-            tls_policy=TLSPolicy.OPPORTUNISTIC, budget=SessionBudget(total_seconds=30.0)
+            tls_policy=TLSPolicy.REQUIRED, budget=SessionBudget(total_seconds=30.0)
         ),
         clock=AdvancingClock(step=100.0),
     )
@@ -540,7 +539,7 @@ async def test_a_cancelled_connect_propagates_and_releases_the_lease() -> None:
 
 async def test_a_probe_is_one_attempt_with_no_retry() -> None:
     """A rejected recipient is not tried again, here or anywhere in this gate."""
-    transport = transport_for(plain_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER))
+    transport = transport_for(tls_session_peer(peer_endpoint(), rcpt=RCPT_NO_SUCH_USER))
     probe, limiter = service(transport)
 
     report = await probe.probe(candidate(PUBLIC_V4), PUBLIC_V4, address(), account="acct-1")
@@ -553,7 +552,7 @@ async def test_a_probe_is_one_attempt_with_no_retry() -> None:
 
 
 async def test_a_probe_offers_exactly_one_recipient() -> None:
-    transport = transport_for(plain_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED))
+    transport = transport_for(tls_session_peer(peer_endpoint(), rcpt=RCPT_ACCEPTED))
     probe, _ = service(transport)
 
     await probe.probe(candidate(PUBLIC_V4), PUBLIC_V4, address(), account="acct-1")
@@ -578,7 +577,7 @@ async def test_temporary_reply_defers_future_operations_without_replaying() -> N
 
     from fake_smtp_server import RCPT_TEMPORARY
 
-    transport = transport_for(plain_session_peer(peer_endpoint(), rcpt=RCPT_TEMPORARY))
+    transport = transport_for(tls_session_peer(peer_endpoint(), rcpt=RCPT_TEMPORARY))
     probe, _ = service(transport)
     deferred = []
     probe = replace(probe, on_temporary_reply=lambda domain, mx: deferred.append((domain, mx)))

@@ -1,6 +1,6 @@
 """The accept-all experiment, against the scripted server only.
 
-`prompts/09-accept-all.md`'s Tests section names seven scenarios and this file
+`docs/adr/0017-accept-all-control-experiment.md`'s Tests section names seven scenarios and this file
 covers each: all-recipient accept, only the real recipient accepted, a temporary
 control response, a policy block, inconsistent replies, the domain budget and
 the cache, and the feature disabled.
@@ -63,8 +63,8 @@ from fake_smtp_server import (
     RCPT_TEMPORARY,
     RCPT_UNVERIFIABLE,
     RoutedSMTPTransport,
-    plain_session_peer,
     reply,
+    tls_session_peer,
 )
 
 asyncio_test = pytest.mark.asyncio
@@ -73,7 +73,7 @@ DOMAIN: Final = "example.test"
 FIRST: Final = "93.184.216.34"
 SECOND: Final = "93.184.216.35"
 OUTER_BOUND_SECONDS: Final = 5.0
-PLAIN: Final = DialogueSettings(tls_policy=TLSPolicy.OPPORTUNISTIC)
+TLS_SETTINGS: Final = DialogueSettings(tls_policy=TLSPolicy.REQUIRED)
 
 
 #: The most draws any bounded generator may ask this fake for.
@@ -92,7 +92,7 @@ class ExhaustedRandomSource(AssertionError):
 
 
 class FixedRandom:
-    """A `RandomSource` a test can pin. Deterministic, per `tests/AGENTS.md`."""
+    """A `RandomSource` a test can pin. Deterministic, per `docs/test-strategy.md`."""
 
     def __init__(self, *draws: str) -> None:
         self.draws = list(draws) or ["q7x2m9k4d1p8s5v3n6b0" * 2]
@@ -129,7 +129,7 @@ def two_hosts() -> MailRoute:
 
 
 def peer_at(address: str, *, rcpt: object = RCPT_ACCEPTED):  # type: ignore[no-untyped-def]
-    return plain_session_peer(PeerEndpoint(address=address, port=25), rcpt=rcpt)  # type: ignore[arg-type]
+    return tls_session_peer(PeerEndpoint(address=address, port=25), rcpt=rcpt)  # type: ignore[arg-type]
 
 
 def build(
@@ -157,7 +157,7 @@ def build(
             identity_provider=identity_provider(),
             rate_limiter=RecordingRateLimiter(),  # type: ignore[arg-type]
             clock=FakeMonotonicClock(),
-            settings=PLAIN,
+            settings=TLS_SETTINGS,
         ),
         clock=clock if clock is not None else WallClock(),  # type: ignore[arg-type]
         settings=VerificationSettings(max_attempts=3),
@@ -214,7 +214,7 @@ def experiment_over(
             identity_provider=identity_provider(),
             rate_limiter=RecordingRateLimiter(),  # type: ignore[arg-type]
             clock=FakeMonotonicClock(),
-            settings=PLAIN,
+            settings=TLS_SETTINGS,
         ),
         clock=the_clock,  # type: ignore[arg-type]
         settings=VerificationSettings(max_attempts=3),
@@ -396,7 +396,7 @@ def test_authorization_needs_both_the_flag_and_the_domain() -> None:
 
 @asyncio_test
 async def test_the_experiment_spends_its_own_domain_budget() -> None:
-    """`prompts/09-accept-all.md`: a **separate** domain budget.
+    """`docs/adr/0017-accept-all-control-experiment.md`: a **separate** domain budget.
 
     Exhausting it stops experiments. It is not `per_target_domain`, and the two
     are measured apart below.
@@ -707,7 +707,7 @@ async def test_the_result_never_carries_a_status_or_the_control_address() -> Non
 
 @asyncio_test
 async def test_the_only_risk_flag_this_phase_can_reach_is_accept_all_suspected() -> None:
-    """`prompts/09-accept-all.md`'s Result section: "only add" that flag."""
+    """`docs/adr/0017-accept-all-control-experiment.md`'s Result section: "only add" that flag."""
     from emailcheck.application.aggregate import aggregate_evidence
 
     experiment, _ = build(rcpt=RCPT_ACCEPTED)

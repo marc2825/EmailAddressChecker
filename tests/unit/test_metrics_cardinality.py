@@ -1,6 +1,6 @@
 """Metrics carry no identity, and cannot be made to.
 
-`prompts/07-hardening.md`: metrics must not include local parts. This project
+`docs/threat-model.md`: metrics must not include local parts. This project
 goes further — every label is a value one of its published enumerations already
 declares, so a target, a job identifier, a credential, and a source address are
 *unrepresentable* rather than merely absent. ADR 0016 records the choice and

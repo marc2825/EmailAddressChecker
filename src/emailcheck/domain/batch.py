@@ -1,7 +1,7 @@
 """What a batch is, what it may hold, and who may run one.
 
-`prompts/10-batch.md`. Pure domain values — no CSV parsing, no scheduling, no
-I/O. The parser is `application/batch_csv.py` and the scheduler is
+`docs/adr/0018-controlled-batch-execution.md`. Pure domain values — no CSV parsing, no scheduling,
+no I/O. The parser is `application/batch_csv.py` and the scheduler is
 `application/batch.py`.
 
 **Batch is an operational permission, not a profile switch.** That is the
@@ -18,8 +18,8 @@ budget for many probes. Every row becomes an ordinary Phase 6 job through the
 ordinary service, so admission, the Phase 4 limiter, the Phase 7 quota layers,
 the destination policy, TLS, the sender identity, the one-`RCPT TO` bound, the
 kill switch, and section 14's single retry all apply per row exactly as they
-apply to a single check. `prompts/10-batch.md`'s scheduler section says so in
-four words: *reuse all existing budgets*.
+apply to a single check. `docs/adr/0018-controlled-batch-execution.md`'s scheduler section says so
+in four words: *reuse all existing budgets*.
 
 **Nothing here decides a status.** A row's answer is the `Verdict` the Phase 5
 aggregator produced for that address. This module names no `Status`.
@@ -47,15 +47,15 @@ __all__ = [
     "BatchSettings",
 ]
 
-#: The one column `prompts/10-batch.md` names: *one address column*.
+#: The one column `docs/adr/0018-controlled-batch-execution.md` names: *one address column*.
 #:
 #: A fixed header rather than a caller-supplied index, because a column chosen
 #: by the submitter is a column somebody points at the wrong field — and the
 #: wrong field in this project is somebody's data being probed.
 ADDRESS_COLUMN: Final = "email"
 
-#: `prompts/10-batch.md` Input: *file size and row limits*. Both, because either
-#: alone is bypassable — a million single-character rows is small, and one row
+#: `docs/adr/0018-controlled-batch-execution.md` Input: *file size and row limits*. Both, because
+#: either alone is bypassable — a million single-character rows is small, and one row
 #: can be a megabyte.
 #:
 #: The numbers are this implementation's, and the prompt asks for limits without
@@ -141,7 +141,7 @@ class BatchRowState(StrEnum):
     #: verification's own state is the job's; this says the row got that far.
     SUBMITTED = "submitted"
     #: A duplicate of an earlier row in the same input, detected by HMAC.
-    #: `prompts/10-batch.md` Input: *duplicate detection by HMAC*.
+    #: `docs/adr/0018-controlled-batch-execution.md` Input: *duplicate detection by HMAC*.
     DUPLICATE = "duplicate"
     #: The address did not parse. Phase 1's rejection, carried as a reason code
     #: rather than re-derived — no second parser exists.
@@ -196,7 +196,8 @@ class BatchLimits:
     max_input_bytes: int = 4 * 1024 * 1024
     #: How many rows may be in flight at once, across the whole batch.
     #:
-    #: **Bounded workers, not one task per row.** `prompts/10-batch.md` asks for
+    #: **Bounded workers, not one task per row.** `docs/adr/0018-controlled-batch-execution.md` asks
+    #: for
     #: *bounded global workers*, and a scheduler that created fifty thousand
     #: coroutines and held them behind a semaphore would have moved the growth
     #: rather than stopped it — the shape `application/admission.py` already
@@ -204,14 +205,15 @@ class BatchLimits:
     max_in_flight: int = 8
     #: How many rows of one recipient domain may be in flight at once.
     #:
-    #: `prompts/10-batch.md`: *one domain cannot monopolize workers*. The
+    #: `docs/adr/0018-controlled-batch-execution.md`: *one domain cannot monopolize workers*. The
     #: scheduler's round-robin is what spreads the work; this is the hard cap
     #: behind it, so the property holds even when a batch is one domain and a
     #: rotation has nothing to rotate to.
     max_in_flight_per_domain: int = 2
     #: How many rows heading for one **exchanger** may be in flight at once.
     #:
-    #: `prompts/10-batch.md` asks for fair scheduling by target domain *and MX*,
+    #: `docs/adr/0018-controlled-batch-execution.md` asks for fair scheduling by target domain *and
+    #: MX*,
     #: and the two are not the same bound: twenty domains behind one provider
     #: are twenty domain queues and one destination. A per-domain cap alone lets
     #: that provider hold every worker while satisfying every per-domain rule.
@@ -248,7 +250,7 @@ class BatchApproval:
 
     **Membership is the permission**, on the precedent `BetaCorpus` and
     `AcceptAllAuthorization` set, and the default is empty.
-    `prompts/10-batch.md`'s preconditions are *account review/approval* and
+    `docs/adr/0018-controlled-batch-execution.md`'s preconditions are *account review/approval* and
     *domain ownership or documented lawful purpose* — neither of which a program
     can establish, and both of which a person records here.
 
@@ -289,7 +291,7 @@ class BatchSettings:
     approval: BatchApproval = field(default_factory=BatchApproval)
     limits: BatchLimits = field(default_factory=BatchLimits)
     #: How long a finished batch's result stays downloadable.
-    #: `prompts/10-batch.md` Output: *expiring downloadable result*.
+    #: `docs/adr/0018-controlled-batch-execution.md` Output: *expiring downloadable result*.
     result_retention_seconds: int = 24 * 60 * 60
     #: How long a batch's **submitted addresses** are retained so that an
     #: unfinished row can still be submitted after a restart.

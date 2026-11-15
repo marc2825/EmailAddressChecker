@@ -1,6 +1,6 @@
 """The published API schema, its examples, and its limitations.
 
-`prompts/06-api-cli.md` requires "generated schema with examples and
+`docs/architecture.md` requires "generated schema with examples and
 limitations", and its acceptance criterion is that **API examples state
 explicitly that no existence or delivery guarantee is made**. That sentence is
 `NO_GUARANTEE` below, it appears in the schema document itself, and a docs test
@@ -43,7 +43,7 @@ from emailcheck.domain.job import JobFailure, JobId, JobState
 from emailcheck.domain.reasons import ReasonCode
 from emailcheck.domain.verdict import ConfidenceLevel, RiskFlag, Status
 
-#: The sentence `prompts/06-api-cli.md` makes an acceptance criterion.
+#: The sentence `docs/architecture.md` makes an acceptance criterion.
 #:
 #: `docs/requirements.md` section 1 lists what this system does not prove, and
 #: section 2 requires the documentation to say that a remote mail server may be

@@ -1,6 +1,6 @@
 # Beta evaluation report — template
 
-`prompts/08-limited-beta.md` work item 7. Copy this file per beta run, fill it
+Copy this file per beta run, fill it
 in, and keep the machine-readable `BetaReport` JSON beside it.
 
 Every section below is filled from `application/beta.py`'s `BetaReport` — the
@@ -132,7 +132,7 @@ kind of `unknown`.
 These four strings are the whole published vocabulary. A report using any other
 word for agreement is not this report.
 
-A high `inconclusive` count is not a failure. `AGENTS.md` requires ambiguous
+A high `inconclusive` count is not a failure. `CONTRIBUTING.md` requires ambiguous
 evidence to resolve to `unknown` or `temporary_unknown`, so a run against
 providers that answer opaquely *should* produce them, and a run that produced
 none would be the surprising result.
@@ -217,7 +217,7 @@ production path under an authorized run, not a different reading of this table.
 
 ## 7. Session behaviour
 
-`prompts/08-limited-beta.md`'s beta metrics, as far as this run can speak to
+The beta metrics, as far as this run can speak to
 them:
 
 | Metric | Value | Source |

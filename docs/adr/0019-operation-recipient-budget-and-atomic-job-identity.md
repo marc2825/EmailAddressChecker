@@ -86,7 +86,7 @@ be observed.
 
 **Alternative rejected: keep retrying recipient-stage temporaries and document
 the second touch.** Section 14 is a defaults section; `docs/threat-model.md`'s
-enumeration control is a safety invariant, and `AGENTS.md` resolves that
+enumeration control is a safety invariant, and `CONTRIBUTING.md` resolves that
 ordering. A second `RCPT TO` twenty minutes later is the slower version of the
 harvesting pattern the invariant exists to refuse, and the fact that it is
 scheduled rather than immediate makes it more deliberate, not less.

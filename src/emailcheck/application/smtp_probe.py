@@ -7,7 +7,7 @@ rate-limit authorization
   → connect                 (the policy runs again; no socket if it refuses)
   → confirm peer            (the address and port actually reached)
   → session                 (requires a ConfirmedPeer, checked at run time)
-  → dialogue                (banner, EHLO, optional STARTTLS, MAIL FROM, one RCPT)
+  → dialogue                (banner, EHLO, required STARTTLS, MAIL FROM, one RCPT)
   → close                   (always, from a finally)
 ```
 

@@ -20,7 +20,7 @@ The system does not prove:
 An active check may establish an SMTP session and issue only:
 
 - `EHLO`;
-- optional `STARTTLS`, followed by `EHLO`;
+- required `STARTTLS`, followed by `EHLO`, before sender/recipient commands;
 - `MAIL FROM`;
 - one `RCPT TO` for the requested address;
 - `RSET`;
@@ -191,7 +191,7 @@ Active checks require:
 - one bounded attempt per MX candidate;
 - no parallel race against every MX;
 - all reads, writes, handshakes, and sessions bounded;
-- optional STARTTLS only when implemented safely;
+- required STARTTLS with certificate and exchanger hostname verification;
 - TLS failure is not mailbox invalidity;
 - record a redacted transcript model, not arbitrary unbounded text.
 
@@ -271,6 +271,11 @@ Remote active mode:
 ```bash
 emailcheck user@example.com --remote https://validator.example
 ```
+
+Remote validators require HTTPS. HTTP is limited to exact `127.0.0.1` and `::1`
+IP literals for local development; `localhost`, DNS-derived exceptions and
+alternative IP spellings are refused. No redirects are followed, and environment
+proxies do not route these credential-bearing requests. See ADR 0021.
 
 Direct active mode exists only for the lab profile with an explicit destination
 allowlist. It must not be a convenient unrestricted flag.

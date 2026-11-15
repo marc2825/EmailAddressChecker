@@ -6,7 +6,7 @@ Accepted. Phase 7.
 
 ## Context
 
-`prompts/07-hardening.md` makes the service-active profile suitable for a small
+`docs/threat-model.md` makes the service-active profile suitable for a small
 closed beta. It requires layered budgets across nine dimensions, conservative
 sequence indicators, privacy enforcement, bounded observability, and a
 non-public administrative interface.
@@ -34,7 +34,7 @@ without anything above the port learning which one it has.
 They are not merged and none is re-keyed. Re-keying Phase 4's per-domain token
 bucket onto the account would give every account its own destination pacing,
 which is the opposite of protecting a destination — `docs/architecture.md` says
-so for Phase 6 and it is still true. `prompts/07-hardening.md` lists "global
+so for Phase 6 and it is still true. `docs/threat-model.md` lists "global
 concurrency" among the layered budgets and admission already enforces it; a
 second implementation of a reviewed bound is two bounds that will disagree, so
 Phase 7 does not add one.
@@ -225,7 +225,7 @@ one that refuses to open.
 
 ### 9. Indicators report; they never refuse
 
-`prompts/07-hardening.md` says indicators "may suspend or require manual
+`docs/threat-model.md` says indicators "may suspend or require manual
 review", and both are an operator's action through `application/admin.py`. An
 automatic suspension driven by a blunt heuristic is a denial of service that
 somebody else can trigger on a caller's behalf, and every threshold here is
@@ -264,7 +264,7 @@ form. Recorded as a Phase 8 stop condition rather than left to be inferred.
 ## Consequences
 
 - One account can no longer starve another of the admission queue. F11 closed.
-- Every layer `prompts/07-hardening.md` names is enforced, or is named here as
+- Every layer `docs/threat-model.md` names is enforced, or is named here as
   belonging to an earlier Phase, and a test asserts the mapping is total.
 - An operator can suspend a key without suspending its account, which needed one
   account to be able to hold several keys — so `Principal` gained an opaque

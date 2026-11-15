@@ -1,6 +1,6 @@
 """The seven-day domain cache, as a port.
 
-`prompts/09-accept-all.md` lists "seven-day or longer domain cache" among the
+`docs/adr/0017-accept-all-control-experiment.md` lists "seven-day or longer domain cache" among the
 preconditions, and `docs/requirements.md` section 13 prices accept-all suspicion
 at seven days. A cache is storage, and `docs/architecture.md` section 2 puts
 storage behind a port — so a test can exercise expiry against a fake clock
@@ -66,7 +66,7 @@ class CachedAcceptAll:
     """One stored answer and when it stops being one."""
 
     outcome: AcceptAllOutcome
-    #: When the experiment ran. `prompts/09-accept-all.md`'s Result section
+    #: When the experiment ran. `docs/adr/0017-accept-all-control-experiment.md`'s Result section
     #: requires "checked time and cache expiry" to be reportable.
     checked_at: datetime
     expires_at: datetime

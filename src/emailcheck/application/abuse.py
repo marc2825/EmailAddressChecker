@@ -1,6 +1,6 @@
 """The one place a request is asked whether it may proceed.
 
-`prompts/07-hardening.md`'s layered budgets, its administrative switches, and
+`docs/threat-model.md`'s layered budgets, its administrative switches, and
 its sequence indicators, composed. Everything below is a **refusal**: nothing
 here can permit something another control refused, there is no exemption list,
 and there is no path that widens a budget.
@@ -51,7 +51,7 @@ here, and a test pins the arithmetic.
 
 ## Failing closed
 
-`prompts/07-hardening.md` requires that a rate-storage failure fails closed for
+`docs/threat-model.md` requires that a rate-storage failure fails closed for
 active checks. It does, and it does **not** refuse a passive one:
 `docs/architecture.md` section 5 requires the API to keep serving passive checks
 when a dependency is unavailable, and a passive check opens no socket, touches
@@ -167,7 +167,7 @@ class AbuseGuard:
     settings: QuotaSettings = field(default_factory=QuotaSettings)
     state: AdminState = field(default_factory=AdminState)
     #: Local parts an operator considers dictionary-style. Empty by default:
-    #: `prompts/07-hardening.md` says "when configured", and inventing a list
+    #: `docs/threat-model.md` says "when configured", and inventing a list
     #: would make this project's abuse policy depend on a dataset nobody
     #: licensed or reviewed.
     common_names: frozenset[str] = frozenset()
@@ -292,7 +292,7 @@ class AbuseGuard:
         """May Phase 9's control probe be made against this domain?
 
         The ordinary destination layers **plus** `BudgetLayer.ACCEPT_ALL_DOMAIN`,
-        which `prompts/09-accept-all.md` and `docs/requirements.md` section 10
+        which `docs/adr/0017-accept-all-control-experiment.md` and `docs/requirements.md` section 10
         both require to be *separate*. An experiment is contact a caller did not
         ask for — they asked about one mailbox — so it is paid for out of its own
         budget, and exhausting that budget stops experiments without touching
@@ -381,7 +381,7 @@ class AbuseGuard:
         try:
             decision = await self.quota.consume(requests, now=self._now())
         except QuotaStoreUnavailable:
-            # `prompts/07-hardening.md`: rate storage failure fails closed for
+            # `docs/threat-model.md`: rate storage failure fails closed for
             # active checks. A passive check opens no socket and spends no
             # reputation, and `docs/architecture.md` section 5 requires it to
             # keep working when a dependency is down.
@@ -426,7 +426,7 @@ class AbuseGuard:
     def _unreachable(self, active: bool) -> None:
         """The one answer for a budget backend that could not be reached.
 
-        Active work fails **closed** — `prompts/07-hardening.md` requires it —
+        Active work fails **closed** — `docs/threat-model.md` requires it —
         and a passive check is left alone, because it opens no socket, touches
         no remote host, and spends nobody's reputation;
         `docs/architecture.md` section 5 requires the API to keep serving one
@@ -451,7 +451,7 @@ class AbuseGuard:
     ) -> None:
         """Record the shape of this attempt and report what it raises.
 
-        Nothing here refuses. `prompts/07-hardening.md` says indicators "may
+        Nothing here refuses. `docs/threat-model.md` says indicators "may
         suspend or require manual review", and both of those are an operator's
         decision through `application/admin.py` — an automatic suspension driven
         by a blunt heuristic is a denial of service somebody else can trigger on

@@ -1,7 +1,7 @@
 """Running an accepted job, later and elsewhere.
 
-`prompts/06-api-cli.md` requires a memory executor for tests and a Redis-backed
-executor "or a clearly isolated adapter" for the service profile. This is the
+`docs/architecture.md` describes the in-memory development executor and requires
+an isolated worker for service-active. Only the former is shipped. This is the
 seam between them: `application/jobs.py` submits work and never learns which one
 it has.
 
@@ -9,7 +9,7 @@ it has.
 stub takes any awaitable and returns an opaque string, which is a thread pool
 rather than a job system: it has nowhere to put a delay, no way to cancel one
 piece of work, and no identity to cancel it by. Those three are exactly what
-`prompts/06-api-cli.md` asks for, so the port that carries them says so in its
+`docs/architecture.md` asks for, so the port that carries them says so in its
 signature.
 
 `is_isolated` is the one property `docs/requirements.md` section 15 needs and
@@ -51,7 +51,7 @@ class JobExecutor(Protocol):
         """Accept `work` to run later, or raise `ExecutorFull`.
 
         Must return without running `work`, so a caller never waits for the job
-        it just submitted — `prompts/06-api-cli.md`: no synchronous waiting for
+        it just submitted — `docs/architecture.md`: no synchronous waiting for
         active SMTP in API workers.
         """
         ...

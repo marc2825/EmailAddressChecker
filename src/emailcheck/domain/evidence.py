@@ -6,7 +6,7 @@ its own invariants because an annotation is not a runtime check: mypy runs on
 parameters a caller supplies rather than from values that have already validated
 themselves.
 
-`observed_at` is the field that matters most. `AGENTS.md` requires UTC
+`observed_at` is the field that matters most. `CONTRIBUTING.md` requires UTC
 internally and timestamps serialized with an explicit offset, and a naive
 datetime is not merely untidy: comparing one against an aware one raises
 `TypeError`, so a single naive timestamp makes ordering a mixed set of evidence

@@ -1,7 +1,7 @@
 """The thirteen deployment gates, as one closed vocabulary.
 
 `docs/operations.md` section 1 lists thirteen things that must be true before
-service-active is enabled, and `prompts/08-limited-beta.md` work items 1 and 2
+service-active is enabled, and `docs/beta-report-template.md`
 ask for a validation command and an operational checklist over them. Both, plus
 the docs contract test, read **this** table — three hand-maintained copies of a
 safety checklist is how one of them quietly loses a row.
@@ -14,7 +14,7 @@ report from it and the report is *reporting only*.
 either an external fact — a PTR record, an SPF record, an open port 25 — or a
 human commitment such as "the abuse mailbox is monitored" and "an incident owner
 is assigned". Neither is something a process can observe about itself, and
-`prompts/08-limited-beta.md`'s exit criteria give the verification to a human on
+`docs/beta-report-template.md`'s exit criteria give the verification to a human on
 purpose: *"The beta may start only after a human verifies every deployment gate
 in `docs/operations.md`."*
 

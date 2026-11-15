@@ -1,8 +1,8 @@
-"""The non-public interface `prompts/07-hardening.md` requires, and its audit.
+"""The non-public interface `docs/threat-model.md` requires, and its audit.
 
 Six operations, and no seventh:
 
-| Operation | `prompts/07-hardening.md` | `docs/operations.md` §2 |
+| Operation | `docs/threat-model.md` | `docs/operations.md` §2 |
 |---|---|---|
 | `set_active_probing` | disable active globally | global active checks |
 | `suspend_key` / `restore_key` | suspend key | one account/API key |
@@ -25,7 +25,7 @@ table listed it as a "raw evidence retention" switch, which
 **This module holds no transport and publishes no route.** It is called by an
 operator tool; binding it to an HTTP path would put an interface that can
 disable a security control behind whatever authenticates the public API, and
-`prompts/07-hardening.md` calls it a "non-public interface" precisely to keep
+`docs/threat-model.md` calls it a "non-public interface" precisely to keep
 those apart. Which is a stop condition on the ASGI binding, not a gap here.
 
 **Every change replaces the state.** `AdminState` is frozen, so a decision in
@@ -34,7 +34,7 @@ is editing — which is what makes "suspension is immediate" a statement about
 ordering rather than only about latency.
 
 **An audit event carries no target and no credential.** `docs/privacy.md`
-section 6 logs support access; `prompts/07-hardening.md` requires that
+section 6 logs support access; `docs/threat-model.md` requires that
 indicators do not leak guessed addresses in admin summaries. So an event holds
 the operation, the *category* of subject, an opaque digest of the subject, the
 outcome, and a timestamp — never a raw address, never an API key, never a local

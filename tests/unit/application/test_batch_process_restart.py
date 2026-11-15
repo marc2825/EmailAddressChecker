@@ -2,7 +2,8 @@
 
 `tests/unit/application/test_batch_resume.py` rebuilds the `BatchService` and
 keeps the `JobService`, which is a scheduler restart. That is not what
-`prompts/10-batch.md`'s *restart/resume* asks for, and the difference was not
+`docs/adr/0018-controlled-batch-execution.md`'s *restart/resume* asks for, and the difference was
+not
 cosmetic: with the job registry in memory, a resumed batch presenting its
 deterministic handle was answered "new" by a fresh process and started a
 **second verification** for a row whose verification had already run. A
@@ -20,6 +21,7 @@ Nothing here opens a socket and nothing sleeps.
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -210,7 +212,7 @@ class Machine:
     def batch_ids(self) -> set[str]:
         import sqlite3
 
-        with sqlite3.connect(self.root / "batch.db") as connection:
+        with closing(sqlite3.connect(self.root / "batch.db")) as connection, connection:
             return {row[0] for row in connection.execute("SELECT batch_id FROM batches")}
 
 
@@ -276,7 +278,8 @@ async def test_another_account_cannot_read_a_persisted_job(tmp_path: Path) -> No
 
 @asyncio_test
 async def test_a_batch_resumes_across_a_whole_process_restart(tmp_path: Path) -> None:
-    """`prompts/10-batch.md` Tests: restart/resume, with **both** services new.
+    """`docs/adr/0018-controlled-batch-execution.md` Tests: restart/resume, with **both** services
+    new.
 
     Five rows, interrupted after two, then continued by a process that shares
     only the two database files. Every assertion §4 asks for.

@@ -5,7 +5,7 @@ at least two places:
 
 - the thirteen deployment gates, in `docs/operations.md` section 1, in
   `domain/readiness.py`, and in `docs/readiness-checklist.md`;
-- the seven runbooks, in `prompts/08-limited-beta.md` work item 3 and in
+- the seven runbooks, in `docs/beta-report-template.md` and in
   `docs/runbooks/`;
 - the dataset declaration, in `src/emailcheck/data/passive/README.md`, ADR 0007, and
   `application/readiness.py`.
@@ -37,7 +37,7 @@ RUNBOOKS: Final = DOCS / "runbooks"
 #: behind.
 DATASETS: Final = REPO / "src" / "emailcheck" / "data" / "passive"
 
-#: The seven, exactly as `prompts/08-limited-beta.md` work item 3 lists them.
+#: The seven, exactly as `docs/beta-report-template.md` lists them.
 SEVEN_RUNBOOKS: Final = (
     "stop-active-checks.md",
     "sender-identity-incident.md",
@@ -59,7 +59,7 @@ REQUIRED_SECTIONS: Final = (
 
 #: Phrases that must never appear in a runbook's *prescriptive* sections.
 #:
-#: Each is an action `AGENTS.md` or the threat model forbids, and each is
+#: Each is an action `CONTRIBUTING.md` or the threat model forbids, and each is
 #: plausible enough that somebody under incident pressure would reach for it.
 #: The check is deliberately on the sections that tell an operator what to do —
 #: a "Do not" section naming the same action is the document working.
@@ -164,7 +164,7 @@ def test_no_gate_can_be_reported_as_passed() -> None:
 
 
 def test_the_checklist_says_a_human_starts_the_beta() -> None:
-    """`prompts/08-limited-beta.md`'s exit criteria, restated where it is used."""
+    """`docs/beta-report-template.md`'s exit criteria, restated where it is used."""
     checklist = read(DOCS / "readiness-checklist.md").lower()
 
     assert "external_probing_authorized" in checklist

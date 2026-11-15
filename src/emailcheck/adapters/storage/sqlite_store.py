@@ -1,14 +1,14 @@
 """A development store, in the standard library, with the whole key in the match.
 
 `docs/requirements.md` section 15 gives the local-passive profile a SQLite
-cache; `prompts/06-api-cli.md` asks for a SQLite development store and says not
+cache; `docs/architecture.md` asks for a SQLite development store and says not
 to overbuild migrations. This is that, and no more: one table, an explicit
 schema version, and parameterized SQL.
 
 **The key is in the `WHERE` clause, not beside it.** Section 13 composes a cache
 key from the ruleset, the sender identity, and the normalized target HMAC; ADR
 0015 keeps the account digest from this store's first version as well, because
-`prompts/06-api-cli.md` forbids cross-account result access and a shared row is
+`docs/architecture.md` forbids cross-account result access and a shared row is
 the quietest way to hand one account another account's answer. Expiry is a
 predicate for the same reason Phase 5 stop condition 4 made the ruleset one: a
 row filtered after selection is a row an implementation can still answer with.
@@ -53,7 +53,7 @@ from emailcheck.ports.verdict_store import StoredVerdict
 #: store written by a different shape is refused rather than misread.
 #:
 #: Version 2 adds the sender-identity component of the section 13 key and the
-#: expiry ADR 0015 decided. `prompts/06-api-cli.md` says not to overbuild
+#: expiry ADR 0015 decided. `docs/architecture.md` says not to overbuild
 #: migrations and no document requires a development database to survive, so an
 #: older file is refused at start rather than migrated.
 #:

@@ -38,7 +38,8 @@ Start with the [README](../README.md) or [日本語README](../README.ja.md). For
 ## Records and templates
 
 - [Changelog](../CHANGELOG.md) — user-visible changes and release history.
+- [公開後セキュリティ監査](security-audit.md) — findings, fixes, validation and release boundaries.
 - [Release preparation report](release-report.md) — historical 0.1.0 validation record (Japanese).
 - [Beta report template](beta-report-template.md) — evidence collection for a controlled deployment.
 
-The authoritative behavior is defined, in precedence order, by [requirements](requirements.md), [status model](status-model.md), [threat model](threat-model.md), [SMTP state machine](smtp-state-machine.md) and accepted [ADRs](adr/). The [contribution rules](../CONTRIBUTING.md) also set safety requirements for changes. Historical references to private development notes do not supersede these documents.
+The authoritative behavior is defined, in precedence order, by [requirements](requirements.md), [status model](status-model.md), [threat model](threat-model.md), [SMTP state machine](smtp-state-machine.md) and accepted [ADRs](adr/). The [contribution rules](../CONTRIBUTING.md) also set safety requirements for changes. Historical Phase records describe past work; current implementation and validation take precedence over old measurements.

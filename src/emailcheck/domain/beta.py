@@ -1,13 +1,13 @@
 """Who may be probed during the limited beta, and on whose authority.
 
-`prompts/08-limited-beta.md` work item 5: *require an explicit allowlist or
+`docs/beta-report-template.md`: *require an explicit allowlist or
 authorization record for beta targets*. This is that record, and it is a domain
 value with no I/O in it — the loader lives in `application/beta.py`.
 
 **The corpus is an allowlist, and an empty one permits nothing.** That is the
 default and it is the safe direction: a beta harness whose corpus is missing must
 probe nothing rather than fall back to whatever a caller typed.
-`prompts/08-limited-beta.md` says manual tests "must use owned or explicitly
+`docs/beta-report-template.md` says manual tests "must use owned or explicitly
 authorized infrastructure", so an address with no authorization record is not a
 target this project may reach.
 
@@ -20,7 +20,7 @@ type refuses it rather than treating an empty string as consent.
 "Manual controlled network" section names exactly seven, and this enum is those
 seven. Inventing an eighth would be inventing a beta category nobody asked for,
 and a class like "a real address I found somewhere" is precisely what
-`prompts/08-limited-beta.md`'s "do not populate third-party address lists"
+`docs/beta-report-template.md`'s "do not populate third-party address lists"
 forbids.
 
 **A truth class is not a prediction.** It records what an operator *arranged* —
@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
-#: The most targets one beta corpus may name. `prompts/08-limited-beta.md`
+#: The most targets one beta corpus may name. `docs/beta-report-template.md`
 #: forbids mass tests, and a ceiling in the type is what stops an operator's
 #: typo becoming one. Deliberately small: a limited beta over owned
 #: infrastructure is tens of addresses, not thousands.
@@ -65,7 +65,7 @@ class BetaExecutionState(StrEnum):
     bookkeeping. An execution state says what the *harness* did; a `Status` says
     what the *evidence* concluded, and only a completed run has one.
 
-    Closed and exhaustive: `prompts/08-limited-beta.md`'s metrics are counted per
+    Closed and exhaustive: `docs/beta-report-template.md`'s metrics are counted per
     target, so every selected target must land in exactly one of these.
     """
 
@@ -220,7 +220,7 @@ class BetaCorpus:
 class BetaLimits:
     """Hard ceilings on one beta run, validated like every other bound here.
 
-    `prompts/08-limited-beta.md` forbids mass tests, so these are not tuning
+    `docs/beta-report-template.md` forbids mass tests, so these are not tuning
     knobs with generous defaults — they are the thing that makes an operator's
     mistake bounded. Every one is a whole number, not a boolean, positive, and
     under a ceiling, which is the validation style Phases 4, 6, and 7 use.
@@ -229,7 +229,7 @@ class BetaLimits:
     sequential: one verification at a time. An earlier build carried a
     `max_concurrency` field that was validated and never read, so an operator
     setting it to four still got one — a knob that lies, which an independent
-    review found. Nothing in `prompts/08-limited-beta.md` asks for configurable
+    review found. Nothing in `docs/beta-report-template.md` asks for configurable
     concurrency, and `docs/requirements.md` section 15's lab-active profile asks
     only for "low concurrency", which one satisfies. Sequential is also what
     makes this report's accounting exact: every target is started, refused,
@@ -277,7 +277,7 @@ class BetaAuthorization:
     #: The operator's explicit statement that external probing is permitted.
     #:
     #: **`False` is the default and it is the whole point.**
-    #: `prompts/08-limited-beta.md` work item 4 requires the harness to be
+    #: `docs/beta-report-template.md` requires the harness to be
     #: disabled by default, and its exit criteria require a *human* to verify
     #: every deployment gate in `docs/operations.md` before a beta starts. This
     #: field is where that human decision is recorded; nothing infers it.

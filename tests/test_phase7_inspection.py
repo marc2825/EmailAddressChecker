@@ -88,7 +88,7 @@ def test_no_phase_7_module_names_a_provider(name: str) -> None:
 
 
 def test_every_layer_the_prompt_names_is_enforced_or_accounted_for() -> None:
-    """`prompts/07-hardening.md` lists nine. Eight are `BudgetLayer` members and
+    """`docs/threat-model.md` lists nine. Eight are `BudgetLayer` members and
     the ninth — global concurrency — is `application/admission.py`'s, since
     Phase 6. A second implementation of a reviewed bound is two bounds that will
     disagree, so this asserts the mapping is total rather than that all nine are
@@ -121,9 +121,9 @@ def test_every_layer_the_prompt_names_is_enforced_or_accounted_for() -> None:
     # The ninth, where it actually lives.
     assert AdmissionSettings().max_in_flight > 0
 
-    # Every layer this enum holds is either one `prompts/07-hardening.md` names
+    # Every layer this enum holds is either one `docs/threat-model.md` names
     # or one a later Phase added deliberately. Phase 9's accept-all domain
-    # budget is the second kind: `prompts/09-accept-all.md` requires a
+    # budget is the second kind: `docs/adr/0017-accept-all-control-experiment.md` requires a
     # **separate** domain budget, so it is not `target_domain` and is not one of
     # the eight above. Listing it here rather than widening the comparison keeps
     # a layer added by accident failing.
@@ -307,7 +307,7 @@ def test_the_authenticator_compares_every_credential_before_answering() -> None:
     about the credential.
 
     Asserted by inspection rather than by measurement: a timing test would be
-    flaky, and `tests/AGENTS.md` forbids weakening assertions to make timing
+    flaky, and `docs/test-strategy.md` forbids weakening assertions to make timing
     pass. So this reads the loop and requires that nothing leaves it early. A
     mutation restoring the early return escaped the whole suite until this
     existed.

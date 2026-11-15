@@ -118,7 +118,7 @@ def test_the_two_unknown_statuses_accept_any_published_reason() -> None:
     `docs/status-model.md` section 5 says one reason code may appear under
     different statuses depending on the other evidence present. An aggregator
     that raised on a contradictory evidence set would be worse than one that
-    answered `unknown`, which is what `AGENTS.md` requires ambiguity to do.
+    answered `unknown`, which is what `CONTRIBUTING.md` requires ambiguity to do.
     """
     assert PERMITTED_PRIMARY_REASONS[Status.UNKNOWN] == frozenset(ReasonCode)
     assert PERMITTED_PRIMARY_REASONS[Status.TEMPORARY_UNKNOWN] == frozenset(ReasonCode)
@@ -274,7 +274,8 @@ def test_a_score_outside_any_obvious_range_is_deliberately_not_refused() -> None
     """The decision recorded as a test, so it is visible rather than an omission.
 
     `42.0` is not a probability under any reading, and it is accepted, because
-    refusing it needs a range no document states. `plans/phase-05-aggregation.md`
+    refusing it needs a range no document states.
+    `docs/adr/0012-evidence-aggregation-and-final-status.md`
     carries the range as a pre-calibration stop condition instead of it being
     guessed here.
     """

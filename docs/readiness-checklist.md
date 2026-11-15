@@ -1,12 +1,13 @@
 # Operational readiness checklist
 
-`prompts/08-limited-beta.md` work item 2. One row per deployment gate in
+One row per deployment gate in
 `docs/operations.md` section 1, in that document's order, with somewhere to
 write down who verified it and when.
 
 **A signed copy of this checklist is what starts a beta.** Nothing else does.
-`prompts/08-limited-beta.md`'s exit criteria say the beta may start only after a
-*human* verifies every gate, and Phase 8 is marked complete as ready for manual gate rather than production approved. Until this document is filled
+A beta may start only after a
+*human* verifies every gate. Phase 8 is **ready for manual gate**, not
+**production approved**. Until this document is filled
 in and the incident owner has agreed, `external_probing_authorized` stays
 `False` and the harness probes nothing.
 

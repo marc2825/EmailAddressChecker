@@ -16,7 +16,7 @@ so is specific rather than general. Every mistake available here produces a
 *plausible* answer: a refusal to verify that reads as an acceptance, a rejected
 sender that reads as a rejected recipient, a certificate failure that reads as a
 missing mailbox. None of them looks like a bug in a test run. All of them are
-wrong in the direction `AGENTS.md` says this project must never be wrong in.
+wrong in the direction `CONTRIBUTING.md` says this project must never be wrong in.
 
 The mapping was therefore written into `docs/status-model.md` section 7 during
 gate 4C, **before this code existed**, on the same reasoning that put the 4A
@@ -44,7 +44,7 @@ An inspection test enforces the rest: no `socket`, `asyncio`, `ssl`, `smtplib`,
 
 ## Decision: `252` is separated before any generic handling of `ACCEPTED`
 
-This is the entry condition `plans/phase-04-smtp.md` records, and it is the first
+This is the entry condition `docs/adr/0009-smtp-dialogue-and-tls.md` records, and it is the first
 branch in the classifier.
 
 ```text
@@ -148,7 +148,7 @@ The two are equivalent while the published sets partition every reason this
 mapper emits, which they do and which a test now fixes. They differ for a reason
 that is in **neither** set — which is to say, for a reason someone adds later and
 forgets to classify. The first form calls it non-target, the second calls it
-evidence about the address, and `AGENTS.md` decides between them: unknown or
+evidence about the address, and `CONTRIBUTING.md` decides between them: unknown or
 ambiguous evidence resolves to `unknown`, never to an optimistic verdict.
 
 This is a case where no behavioural test could have chosen for us, because the
@@ -187,7 +187,7 @@ ordering a mixed set of evidence fail at run time rather than at construction,
 and Phase 5 orders evidence from four producers. Three of them take a `Clock`,
 which always answers aware UTC. This mapper takes the timestamp as a parameter
 precisely so that it stays a function of its input, which makes it the one
-producer whose timestamp comes from an unvalidated caller, and `AGENTS.md`
+producer whose timestamp comes from an unvalidated caller, and `CONTRIBUTING.md`
 already requires UTC internally with explicit offsets.
 
 `map_connect_failure` checks its own primitives on top of that. It is the entry
@@ -223,4 +223,4 @@ not answer to two contracts.
   strength may not be mapped directly to `invalid`. Both are the shortest
   correct-looking code an aggregator author could write, which is why they are
   written down rather than left to review attention.
-  `docs/status-model.md` section 7.6 and `plans/phase-04-smtp.md` carry them.
+  `docs/status-model.md` section 7.6 and `docs/adr/0009-smtp-dialogue-and-tls.md` carry them.

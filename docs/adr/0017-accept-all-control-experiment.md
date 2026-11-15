@@ -6,7 +6,7 @@
 
 ## Context
 
-`prompts/09-accept-all.md` asks for an estimate of `accept_all_suspected` "under
+this ADR asks for an estimate of `accept_all_suspected` "under
 strict domain budgets without claiming a mailbox result". The measurement is one
 control recipient — an address nobody created — offered to a domain's exchanger
 to see whether it is accepted.
@@ -50,7 +50,7 @@ the function whose whole guarantee is that it is one.
 | the separate accept-all domain budget has room | `BudgetLayer.ACCEPT_ALL_DOMAIN` |
 | no unexpired cached answer exists | `ports/accept_all_cache.py` |
 
-`prompts/09-accept-all.md`'s acceptance criterion is that no public caller can
+this ADR's acceptance criterion is that no public caller can
 enable the feature without authorization and budget. The shape of that here is
 that a caller has **no parameter at all**: `run` takes a route, a domain, and a
 principal, and every gate is read from operator configuration. No request body
@@ -71,7 +71,7 @@ says a switch most needs to have worked.
 ## Decision: a separate domain budget, sized far below the ordinary one
 
 `BudgetLayer.ACCEPT_ALL_DOMAIN`, with `per_accept_all_domain = 5` against
-`per_target_domain = 500`. Both `prompts/09-accept-all.md` and
+`per_target_domain = 500`. Both this ADR and
 `docs/requirements.md` section 10 require the budget to be *separate*, and the
 reason is directional: an experiment is contact a caller did not ask for — they
 asked about one mailbox — so it may not be paid for out of the budget that
@@ -88,7 +88,7 @@ exists to stop. Spending stays all-or-nothing, so "the experiment ran out" and
 Twenty characters drawn uniformly from thirty-six — lower-case ASCII letters and
 digits — through the `RandomSource` port. About 103 bits.
 
-**No word list.** `prompts/09-accept-all.md` forbids personal names, roles, and
+**No word list.** this ADR forbids personal names, roles, and
 sequential strings, and a blocklist is only as good as its vocabulary. A uniform
 draw at this length is not a word in any language, is not a name, is not a role,
 and is not sequential — and that holds for languages nobody thought of, which a
@@ -109,7 +109,7 @@ decide what to ask next.
 ## Decision: seven days, and only for a decided answer
 
 `docs/requirements.md` section 13 prices accept-all suspicion at seven days and
-`prompts/09-accept-all.md` asks for a "seven-day or longer domain cache".
+this ADR asks for a "seven-day or longer domain cache".
 `AcceptAllSettings.cache_seconds` defaults to seven days and refuses less.
 
 The key is `(domain HMAC, sender identity HMAC, experiment version)`.
@@ -144,7 +144,7 @@ configuration rather than about any mailbox.
 
 ## Decision: the only thing published is `accept_all_suspected`
 
-`prompts/09-accept-all.md`'s Result section says "only add" that flag, safe
+this ADR's Result section says "only add" that flag, safe
 control metadata, and the checked time and cache expiry.
 
 So `SUSPECTED` produces one `Evidence` — layer `accept_all`, reason
@@ -164,7 +164,7 @@ documentation states both halves:
 
 ## Decision: Phase 5 is not touched
 
-`prompts/09-accept-all.md` requires that "an accepted target plus suspected
+this ADR requires that "an accepted target plus suspected
 accept-all aggregates to `unknown`". That already holds:
 `application/aggregate.py` placed `accept_all_suspected` in tier 4 in Phase 5,
 tier 4 is `unknown`, and tier 4 blocks a positive verdict. Phase 5's own status

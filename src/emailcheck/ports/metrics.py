@@ -1,6 +1,6 @@
 """Counting what happened, without recording who it happened to.
 
-`prompts/07-hardening.md` lists what must be measured and states the constraint
+`docs/threat-model.md` lists what must be measured and states the constraint
 first: **metrics must not include local parts**. This port is built so that they
 structurally cannot.
 
@@ -42,7 +42,7 @@ from emailcheck.domain.verdict import Status
 
 
 class MetricName(StrEnum):
-    """Everything this project counts. `prompts/07-hardening.md`'s list."""
+    """Everything this project counts. `docs/threat-model.md`'s list."""
 
     #: Jobs, by state.
     JOB_STATE = "job_state"

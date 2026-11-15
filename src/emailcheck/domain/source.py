@@ -1,6 +1,6 @@
 """Where a request came from, when — and only when — something knows.
 
-`prompts/07-hardening.md` lists source IP among the layered budgets.
+`docs/threat-model.md` lists source IP among the layered budgets.
 `docs/threat-model.md` puts "public client to API" first among the trust
 boundaries, and this is the value that crosses it.
 
@@ -14,8 +14,8 @@ attacker resets by changing a string. So this module reads nothing. A
 peer address, or it does not exist, and `application/abuse.py` simply does not
 count the source layer when it does not.
 
-That is the deliberate stop condition: `plans/phase-07-hardening.md` and
-`docs/architecture.md` record proxy trust as work belonging to the binding
+That is the deliberate stop condition: `docs/adr/0016-abuse-controls-privacy-and-observability.md`
+and `docs/architecture.md` record proxy trust as work belonging to the binding
 Phase, not as something inferable here.
 
 **Canonical, so one client is one budget.** `2001:db8::1` and `2001:DB8:0:0:0:0:0:1`

@@ -1,6 +1,6 @@
 """The job service: submission order, ownership, retry, and the registry bound.
 
-`prompts/06-api-cli.md` fixes the behaviour and ADR 0014 the decisions. The two
+`docs/architecture.md` fixes the behaviour and ADR 0014 the decisions. The two
 measurements that recur are the ones only checkable here: the executor counts
 whether anything was enqueued, and the SMTP fake counts whether anything was
 probed. "A cache hit skips the enqueue" is a count of zero rather than a claim
@@ -100,7 +100,7 @@ class Harness:
 
 
 async def test_submission_creates_a_pending_job_and_probes_nothing() -> None:
-    """`prompts/06-api-cli.md`: no synchronous waiting for active SMTP."""
+    """`docs/architecture.md`: no synchronous waiting for active SMTP."""
     harness = Harness()
     job = await harness.submit()
 
@@ -150,7 +150,7 @@ async def test_a_job_identifier_is_unguessable_rather_than_sequential() -> None:
 
 
 async def test_the_same_key_from_the_same_principal_returns_the_same_job() -> None:
-    """`prompts/06-api-cli.md`: idempotency returns the same job."""
+    """`docs/architecture.md`: idempotency returns the same job."""
     harness = Harness()
     key = IdempotencyKey("order-4711-attempt-1")
 
@@ -190,7 +190,7 @@ async def test_a_submission_without_a_key_is_never_deduplicated() -> None:
 
 
 async def test_a_cache_hit_enqueues_nothing_and_probes_nothing() -> None:
-    """`prompts/06-api-cli.md`: cache lookup before enqueue; cache hit skips it.
+    """`docs/architecture.md`: cache lookup before enqueue; cache hit skips it.
 
     The first submission runs and stores; the second finds the row and never
     reaches the executor. Both counts are asserted, because "it was fast" is not
@@ -803,7 +803,7 @@ async def test_a_cache_hit_still_costs_the_passive_lookup_and_that_is_documented
     Both lookups are keyed by the normalized target, which does not exist until
     the address is parsed — so the passive step runs first and a cache hit costs
     it. What a hit avoids is the enqueue and the SMTP probe, and that is the
-    property `prompts/06-api-cli.md` actually requires.
+    property `docs/architecture.md` actually requires.
     """
     harness = Harness()
     await harness.submit()

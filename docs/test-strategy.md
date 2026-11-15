@@ -11,6 +11,11 @@ This document describes the maintained test approach. Detailed behavioral contra
 - Safety properties measured at the wire, storage, or public-output boundary.
 - Controlled network evaluation only with explicitly authorized targets.
 - Correctness reported by evidence class, not an unsupported single accuracy score.
+- Test-owned SQLite connections must close explicitly after committing or rolling
+  back. A connection's transaction context does not close its handle; use an
+  outer `contextlib.closing` or `finally`, as the production adapters do.
+  Resource warnings and pytest's unraisable-exception reports fail the suite;
+  leaking handles must not leave CI green.
 
 ## Run the checks
 

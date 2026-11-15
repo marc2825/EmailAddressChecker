@@ -146,7 +146,8 @@ class Confidence:
 
         That is the same shape check `TransportTimeouts` makes for the same
         reason — a bound nobody could reach is not a bound, and `True` recorded
-        as `1.0` is a value nobody wrote. `plans/phase-05-aggregation.md` carries
+        as `1.0` is a value nobody wrote. `docs/adr/0012-evidence-aggregation-and-final-status.md`
+        carries
         the range as a pre-calibration stop condition.
         """
         if isinstance(self.score, bool) or not isinstance(self.score, int | float):
@@ -217,7 +218,8 @@ class Verdict:
             # summary carrying a list of MX hosts, so closing the *values* to
             # scalars here would forbid the shape that document publishes. What
             # a public response may carry is Phase 6's schema to choose
-            # explicitly, and `plans/phase-05-aggregation.md` carries that as a
+            # explicitly, and `docs/adr/0012-evidence-aggregation-and-final-status.md` carries that
+            # as a
             # stop condition rather than as a guess made here.
             if not isinstance(key, str):
                 raise ValueError("every verdict check summary must be keyed by a string")

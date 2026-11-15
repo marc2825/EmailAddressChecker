@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -245,7 +246,7 @@ def deletion_for(root: Path, batches: SQLiteBatchStore | None = None) -> Account
 
 
 def batch_rows(root: Path) -> int:
-    with sqlite3.connect(root / "batches.db") as connection:
+    with closing(sqlite3.connect(root / "batches.db")) as connection, connection:
         return int(connection.execute("SELECT count(*) FROM batches").fetchone()[0])
 
 
@@ -368,7 +369,7 @@ def test_a_batch_store_written_before_the_fence_is_refused_by_version(tmp_path: 
     """A version 1 file predates the deletion authority and is not adopted."""
     from emailcheck.adapters.storage.sqlite_batch_store import BatchStoreSchemaError
 
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         connection.execute("CREATE TABLE batch_schema_version (version INTEGER NOT NULL)")
         connection.execute("INSERT INTO batch_schema_version (version) VALUES (1)")
 
@@ -382,7 +383,8 @@ def test_a_batch_store_written_before_the_fence_is_refused_by_version(tmp_path: 
 def test_batch_is_still_reachable_from_no_request_surface() -> None:
     """Remediation D hardens batch; it does not expose it.
 
-    `prompts/10-batch.md`'s non-goals begin with public uploads, and Phase 10's
+    `docs/adr/0018-controlled-batch-execution.md`'s non-goals begin with public uploads, and Phase
+    10's
     own inspection keeps the word out of every request surface. Fixing the
     scheduler is not authorization to compose it, so this states the decision
     rather than leaving it to be inferred from an absence.
@@ -444,7 +446,7 @@ def test_the_accept_all_cache_key_carries_the_route_it_was_obtained_from() -> No
 
 
 def row_counts(root: Path) -> tuple[int, int, int]:
-    with sqlite3.connect(root / "batches.db") as connection:
+    with closing(sqlite3.connect(root / "batches.db")) as connection, connection:
         return (
             int(connection.execute("SELECT count(*) FROM batches").fetchone()[0]),
             int(connection.execute("SELECT count(*) FROM batch_rows").fetchone()[0]),
@@ -665,7 +667,7 @@ async def test_no_stale_write_of_any_kind_survives_a_completed_deletion(tmp_path
 
     # §23: the orphan audit, in SQL rather than through a reader that filters.
     assert row_counts(tmp_path) == (0, 0, 0)
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         orphans = connection.execute(
             "SELECT count(*) FROM batch_rows WHERE batch_id NOT IN (SELECT batch_id FROM batches)"
         ).fetchone()[0]
@@ -673,7 +675,7 @@ async def test_no_stale_write_of_any_kind_survives_a_completed_deletion(tmp_path
             "SELECT count(*) FROM batch_artifacts "
             "WHERE batch_id NOT IN (SELECT batch_id FROM batches)"
         ).fetchone()[0]
-    with sqlite3.connect(tmp_path / "jobs.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "jobs.db")) as connection, connection:
         held_jobs = connection.execute(
             "SELECT count(*) FROM jobs WHERE owner = ?", (ACCOUNT,)
         ).fetchone()[0]
@@ -745,7 +747,7 @@ async def test_a_resumed_scheduler_presents_the_batchs_own_generation(tmp_path: 
     )
 
     report = await service.submit(csv_for("user1@example.test"), principal=PRINCIPAL)
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         recorded = connection.execute(
             "SELECT generation FROM batches WHERE batch_id = ?", (report.batch_id.value,)
         ).fetchone()
@@ -753,7 +755,7 @@ async def test_a_resumed_scheduler_presents_the_batchs_own_generation(tmp_path: 
 
     # Put the row back to schedulable, as an interrupted batch's would be, so
     # the resumed scheduler actually reaches the claim.
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         connection.execute(
             "UPDATE batch_rows SET state = 'queued', job_id = NULL, "
             "submitted = 'user1@example.test'"
@@ -769,7 +771,7 @@ async def test_a_resumed_scheduler_presents_the_batchs_own_generation(tmp_path: 
     resumed = await service.resume(report.batch_id, principal=PRINCIPAL)
 
     assert resumed is not None
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         states = [
             row[0] for row in connection.execute("SELECT state FROM batch_rows ORDER BY number")
         ]
@@ -876,7 +878,7 @@ def batch_service(store: object, state: SQLiteAccountStateStore) -> object:
 
 
 def persisted_generation(root: Path, batch_id: str) -> int | None:
-    with sqlite3.connect(root / "batches.db") as connection:
+    with closing(sqlite3.connect(root / "batches.db")) as connection, connection:
         row = connection.execute(
             "SELECT generation FROM batches WHERE batch_id = ?", (batch_id,)
         ).fetchone()
@@ -884,7 +886,7 @@ def persisted_generation(root: Path, batch_id: str) -> int | None:
 
 
 def row_states(root: Path) -> list[str]:
-    with sqlite3.connect(root / "batches.db") as connection:
+    with closing(sqlite3.connect(root / "batches.db")) as connection, connection:
         return [
             str(state)
             for (state,) in connection.execute("SELECT state FROM batch_rows ORDER BY number")
@@ -951,7 +953,7 @@ async def test_a_restart_loads_the_persisted_generation_rather_than_the_current_
     assert await state.generation(PRINCIPAL.rate_limit_account) == 4
 
     reopened = SQLiteBatchStore(path=tmp_path / "batches.db")
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         expires = connection.execute(
             "SELECT expires_at FROM batches WHERE batch_id = ?", (batch_id,)
         ).fetchone()[0]
@@ -992,7 +994,7 @@ async def test_a_resumed_service_presents_the_batchs_token_and_not_the_current_o
 
     # An interrupted batch: the row is schedulable again, and nothing else of
     # the first process survives.
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         connection.execute(
             "UPDATE batch_rows SET state = 'queued', job_id = NULL, "
             "submitted = 'user1@example.test'"
@@ -1051,7 +1053,7 @@ async def test_a_restart_at_the_same_generation_resumes_normally(tmp_path: Path)
     report = await first.submit(csv_for("user1@example.test"), principal=PRINCIPAL)
     del first
 
-    with sqlite3.connect(tmp_path / "batches.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "batches.db")) as connection, connection:
         connection.execute(
             "UPDATE batch_rows SET state = 'queued', job_id = NULL, "
             "submitted = 'user1@example.test'"

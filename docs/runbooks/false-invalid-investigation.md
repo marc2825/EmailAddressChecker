@@ -100,7 +100,7 @@ acted on them.
 - **Do not "fix" a false `invalid` by making it `likely_deliverable`.** If the
   evidence does not support a decisive answer, `unknown` and
   `temporary_unknown` are the correct answers, and an optimistic verdict is
-  forbidden by `AGENTS.md` in the same sentence as the pessimistic one.
+  forbidden by `CONTRIBUTING.md` in the same sentence as the pessimistic one.
 - Do not probe the address repeatedly to "get a second opinion". Repeated
   probing of one address is what the rate limits exist to prevent, and the
   second answer is not more true than the first.

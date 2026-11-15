@@ -17,7 +17,7 @@ GET    /v1/health           reveals no configuration
 ```
 
 `DELETE` is on the resource section 11 already names, because
-`prompts/06-api-cli.md` requires cancellation and names no route for it; adding
+`docs/architecture.md` requires cancellation and names no route for it; adding
 a path would have been inventing API surface. ADR 0014.
 
 Four rules shape everything below.
@@ -28,7 +28,7 @@ Four rules shape everything below.
 refuses the published reason sets in this module entirely.
 
 **The active endpoint never waits for SMTP.** It returns a job.
-`prompts/06-api-cli.md` states that as a requirement of its own, and the first
+`docs/architecture.md` states that as a requirement of its own, and the first
 Phase 6 build failed it.
 
 **The request schema is closed.** A body carrying a key this module does not
@@ -199,7 +199,7 @@ class CheckApi:
             # Deliberately empty of configuration. A health endpoint that
             # reported the sender identity, the store path, or the key count
             # would be reporting operator configuration to anyone who can reach
-            # it. `prompts/06-api-cli.md`: reveals no secrets.
+            # it. `docs/architecture.md`: reveals no secrets.
             return ApiResponse(_STATUS_OK, {"status": "ok"})
 
         if request.path == PASSIVE_PATH:

@@ -1,6 +1,6 @@
 """The deployment validation and version reports, and what they must not do.
 
-`prompts/08-limited-beta.md` work items 1 and 6. Both commands are *reporting
+`docs/beta-report-template.md`. Both commands are *reporting
 only*, and both of the things they must not do are easy to add by accident:
 
 - **they must perform no I/O.** Checking a PTR, an SPF record, or an open port
@@ -154,7 +154,7 @@ def test_the_readiness_modules_never_name_the_authorization_flag(name: str) -> N
 
     A validation command that could write it — or that a caller could read it
     from — would make "all thirteen reported clean" into an authorization, which
-    is exactly what `prompts/08-limited-beta.md`'s exit criteria give to a human.
+    is exactly what `docs/beta-report-template.md`'s exit criteria give to a human.
     """
     code = code_without_docstrings(READINESS_MODULES[name])
 
@@ -173,7 +173,7 @@ def test_the_readiness_public_surface_is_exactly_the_reviewed_reports() -> None:
 
     which names no beta type, imports nothing, and passed the whole suite —
     while being exactly the "all thirteen clean, so go" predicate
-    `prompts/08-limited-beta.md` gives to a human. So the contract is the other
+    `docs/beta-report-template.md` gives to a human. So the contract is the other
     way round: the module's public callables are compared against its `__all__`,
     and **any** new public function fails until somebody adds it deliberately.
     """

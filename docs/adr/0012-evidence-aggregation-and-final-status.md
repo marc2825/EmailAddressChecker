@@ -44,7 +44,7 @@ tiers 1, 2, 3, 5, or the small explicit tier-6 set lands in tier 4, which is
 `unknown` and which blocks a positive verdict. A reason code added in a later
 Phase and forgotten here therefore resolves to `unknown` rather than being
 ignored. The alternative — an explicit tier-4 list with tier 6 as the fallback —
-fails open, and `AGENTS.md` requires ambiguity to resolve to `unknown`.
+fails open, and `CONTRIBUTING.md` requires ambiguity to resolve to `unknown`.
 
 ## Decision: two gates, each in exactly one place
 
@@ -298,7 +298,7 @@ with nothing behind it.
 score would live in, and `0..1` is a guess about the semantics the calibration
 study exists to establish. Refusing `42.0` would therefore be this ADR
 pre-empting a study it cannot run. The range is a pre-calibration stop
-condition in `plans/phase-05-aggregation.md` instead, and the shape checks are
+condition in this ADR instead, and the shape checks are
 the same ones `TransportTimeouts` makes for the same reason.
 
 `Verdict.ruleset` must be a non-empty string, because a cache is matched against

@@ -1,6 +1,6 @@
 """The deployment validation and version reports. Both are reporting only.
 
-`prompts/08-limited-beta.md` work items 1 and 6: *a deployment validation
+`docs/beta-report-template.md`: *a deployment validation
 command* and *ruleset and dataset version reporting*.
 
 **Neither report performs I/O of any kind.** No DNS lookup for a PTR or an SPF
@@ -15,7 +15,7 @@ place for this project's first unauthorized packet to come from.
 gate and never the gate. A configured sender identity does not mean the SPF
 record exists, and the report says so in as many words.
 
-**And it authorizes nothing.** `prompts/08-limited-beta.md`'s exit criteria give
+**And it authorizes nothing.** `docs/beta-report-template.md`'s exit criteria give
 the verification to a human, and `BetaAuthorization.external_probing_authorized`
 is where that human's decision is recorded. Nothing here writes it, returns it,
 or is consulted by it; a test asserts this module names it nowhere.
@@ -47,7 +47,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle only under type checking
 #:
 #: names no beta type, imports nothing from the beta layer, and passed the whole
 #: suite — while being exactly the "all thirteen reported clean, so go" shape
-#: `prompts/08-limited-beta.md`'s exit criteria give to a human. So the contract
+#: `docs/beta-report-template.md`'s exit criteria give to a human. So the contract
 #: is stated the other way round: the public callables of this module are
 #: *these*, an inspection test compares the module against this list, and adding
 #: any public function at all fails until somebody puts it here on purpose.
@@ -67,7 +67,7 @@ __all__ = [
 #: What a dataset reports when it is **both** declared unavailable and actually
 #: empty.
 #:
-#: A stable category rather than an empty string: `prompts/08-limited-beta.md`
+#: A stable category rather than an empty string: `docs/beta-report-template.md`
 #: work item 6 asks for dataset *version* reporting, and an operator reading
 #: `version=""` cannot tell "unavailable on purpose" from "the loader failed".
 #: ADR 0007's Phase 8 deadline resolved these three as declared-unavailable, and
@@ -207,7 +207,7 @@ def _in_process_evidence(key: str, deployment: Deployment) -> bool:
 class VersionReport:
     """Every version a beta result must be comparable against.
 
-    `prompts/08-limited-beta.md` work item 6. A measurement whose ruleset and
+    `docs/beta-report-template.md`. A measurement whose ruleset and
     dataset versions nobody recorded cannot be compared with a later one, and
     the Phase 8 evaluation report carries these forward.
 

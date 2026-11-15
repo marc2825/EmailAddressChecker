@@ -44,7 +44,7 @@ from emailcheck.ports.batch_store import (
 )
 
 #: Bumped when the shape changes. A file written by another shape is refused at
-#: start rather than migrated — `prompts/06-api-cli.md` says not to overbuild
+#: start rather than migrated — `docs/architecture.md` says not to overbuild
 #: migrations for a development store, and this follows the same rule.
 #: Version 2 is Remediation D: the account fence and the authority binding, on
 #: the shape `adapters/storage/account_fence.py` established for the job and

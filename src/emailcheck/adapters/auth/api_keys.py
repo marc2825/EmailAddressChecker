@@ -1,6 +1,6 @@
 """API keys, stored as verifiers rather than as keys.
 
-`prompts/06-api-cli.md`: store only a secure verifier, not the recoverable key.
+`docs/architecture.md`: store only a secure verifier, not the recoverable key.
 So the mapping this adapter holds is `digest -> account`, and a credential is
 hashed before it is looked up. A dump of the configuration does not let anyone
 authenticate.
@@ -65,8 +65,8 @@ def verifier_for(key: str) -> str:
     SHA-256 over the UTF-8 bytes. This is a *verifier* for a high-entropy
     machine-generated credential, not a password hash: there is nothing to
     stretch, because a 32-character random key is not guessable by iteration.
-    An operator issuing low-entropy keys is refused at load rather than
-    protected by a slow hash.
+    Configuration validates length, not entropy. Operators must generate random
+    keys; repeated or guessable strings can satisfy the length check.
     """
     if not isinstance(key, str) or len(key) < MIN_KEY_LENGTH:
         raise ApiKeyConfigurationError(f"an API key must be at least {MIN_KEY_LENGTH} characters")
@@ -122,7 +122,7 @@ def build_authenticator(
 ) -> StaticApiKeyAuthenticator:
     """Build an authenticator from `{account_id: api_key}` or `{account_id: [keys]}`.
 
-    **One account may hold several keys.** `prompts/07-hardening.md` budgets and
+    **One account may hold several keys.** `docs/threat-model.md` budgets and
     suspends per key *and* per account, which are two layers only if a key is
     not simply another name for the account. Each key gets its own `key_id`, so
     a leaked credential is containable without suspending the account that owns

@@ -1,4 +1,4 @@
-"""Parsing decisions for every case listed in `prompts/01-address-model.md`."""
+"""Parsing decisions for every case listed in `docs/requirements.md`."""
 
 import pytest
 
