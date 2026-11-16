@@ -294,6 +294,7 @@ def test_one_candidate_address_does_not_approve_a_sibling_it_lacks() -> None:
     assert isinstance(approve(multi, "1.1.1.1"), DestinationRefused)
 
 
+@pytest.mark.inspection
 def test_production_code_reaches_a_destination_only_through_the_factory() -> None:
     """Python has no private constructor, so this is fixed by inspection.
 

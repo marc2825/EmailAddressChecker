@@ -118,6 +118,30 @@ def test_supported_forms_are_accepted(text: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "domain",
+    ["localhost", "mailhost", "123.123.123.123", "192.0.2.1", "example.123"],
+)
+def test_single_label_and_numeric_domains_stay_dns_names(domain: str) -> None:
+    """ADR 0005 judgments 4 and 11, stated as specification after issue #2.
+
+    These are letter-digit-hyphen labels, so the grammar accepts them, and the
+    parser is not the layer with evidence about them: DNS answers for the name
+    (a numeric top-level label has no delegation, so the real answer is
+    NXDOMAIN) and the destination policy refuses loopback and private answers.
+    What this pins is that nothing is *reinterpreted*: an unbracketed dotted
+    quad is never rewritten into the address literal `[192.0.2.1]`, which is a
+    different, unsupported form, and the domain is kept exactly as a name.
+    """
+    address = accepted(f"user@{domain}").address
+
+    assert address.domain.ascii_form == domain
+    assert address.smtp_target == f"user@{domain}"
+    literal = rejected(f"user@[{domain}]")
+    assert literal.issue is AddressSyntaxIssue.DOMAIN_LITERAL
+    assert literal.kind is RejectionKind.UNSUPPORTED
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "  user@example.com  ",

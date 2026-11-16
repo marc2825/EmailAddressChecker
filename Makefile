@@ -1,4 +1,4 @@
-.PHONY: install format format-check lint type test invariants cli-smoke check build
+.PHONY: install format format-check lint type test test-spec test-structure invariants cli-smoke check build
 
 install:
 	python -m pip install -e ".[dev]"
@@ -17,6 +17,14 @@ type:
 
 test:
 	python -m pytest
+
+# Specification tests only: behavior, without source-structure or document-wording pins.
+test-spec:
+	python -m pytest -m "not inspection and not docs_contract"
+
+# Tests that read project source or published documentation (see docs/test-strategy.md).
+test-structure:
+	python -m pytest -m "inspection or docs_contract"
 
 invariants:
 	python scripts/check_forbidden_smtp.py

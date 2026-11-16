@@ -118,6 +118,7 @@ def local_deployment() -> Deployment:
 # --- neither report performs I/O --------------------------------------------
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(READINESS_MODULES))
 def test_the_readiness_modules_import_nothing_that_reaches_outside(name: str) -> None:
     offenders = sorted(imported_names(READINESS_MODULES[name]) & set(IO_MODULES))
@@ -125,6 +126,7 @@ def test_the_readiness_modules_import_nothing_that_reaches_outside(name: str) ->
     assert offenders == [], (name, offenders)
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(READINESS_MODULES))
 def test_the_readiness_modules_call_nothing_that_reaches_outside(name: str) -> None:
     """Read from the tree, so a call hidden in prose is not a false positive."""
@@ -148,6 +150,7 @@ def test_validating_a_deployment_reaches_no_network() -> None:
 # --- neither report authorizes anything -------------------------------------
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(READINESS_MODULES))
 def test_the_readiness_modules_never_name_the_authorization_flag(name: str) -> None:
     """The one flag that starts a beta is set by a person, in one place.
@@ -201,6 +204,7 @@ def test_the_readiness_public_surface_is_exactly_the_reviewed_reports() -> None:
     assert public_functions <= exported
 
 
+@pytest.mark.inspection
 def test_no_public_readiness_callable_answers_a_start_no_start_question() -> None:
     """A `DeploymentReport -> bool` predicate is the shape being prevented.
 
@@ -225,6 +229,7 @@ def test_no_public_readiness_callable_answers_a_start_no_start_question() -> Non
         )
 
 
+@pytest.mark.inspection
 def test_the_readiness_layer_names_no_beta_type() -> None:
     """The dependency direction, pinned. Necessary, and on its own insufficient —
     the escaping mutation imported nothing, which is why the surface test above
@@ -235,6 +240,7 @@ def test_the_readiness_layer_names_no_beta_type() -> None:
             assert name not in code, (relative, name)
 
 
+@pytest.mark.inspection
 def test_the_cli_never_sets_the_authorization_flag_either() -> None:
     code = code_without_docstrings("src/emailcheck/apps/cli.py")
 

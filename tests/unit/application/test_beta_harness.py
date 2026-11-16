@@ -391,6 +391,7 @@ def test_a_truncated_run_says_so_in_the_report_it_writes() -> None:
     assert dry.truncated is False
 
 
+@pytest.mark.inspection
 def test_every_beta_limit_is_a_bound_the_harness_actually_reads() -> None:
     """F6: no knob that lies.
 

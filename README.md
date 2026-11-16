@@ -51,7 +51,7 @@ The original single-address command is also supported: `emailcheck alice@example
 
 ### Input and output
 
-CSV input must be UTF-8 with an `email` column; TXT input contains one address per line. Results preserve input order. JSON is the default output format; use `--output-format csv` or an `.csv` output filename for CSV.
+CSV input must be UTF-8 (a leading byte order mark, as written by spreadsheet exports, is accepted) with an `email` column; TXT input contains one address per line. Results preserve input order. JSON is the default output format; use `--output-format csv` or an `.csv` output filename for CSV.
 
 Results omit input addresses unless `--include-address` is specified. Keep input files and outputs containing addresses private. For sensitive addresses, prefer file input over shell arguments, which may remain in command history.
 
@@ -81,6 +81,8 @@ See the [status model](docs/status-model.md) for the evidence rules and reason c
 Passive checks use DNS but do not contact SMTP servers. Pattern expansion is entirely offline. The optional active path is not enabled by default: it requires an authorized deployment with authentication, destination controls, rate limits, and an explicit operator decision. It does not send email messages or provide an unrestricted bulk SMTP checker.
 
 Disposable-domain, free-mail, and provider-classification datasets are currently unpopulated; absence of a flag must not be interpreted as a clean result. Role-address classification is included. See [dataset status](src/emailcheck/data/passive/README.md).
+
+The repository also contains service components (API-key authentication, an HTTP request handler, job and verdict stores, active batch) that are library-only: no HTTP server ships, and the installed command does not reach them. See [component reachability and roadmap](docs/architecture.md#component-reachability).
 
 Use active probing only on systems and addresses you own or are expressly authorized to test. See [SECURITY.md](SECURITY.md) and the [deployment checklist](docs/readiness-checklist.md).
 

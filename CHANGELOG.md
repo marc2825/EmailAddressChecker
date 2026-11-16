@@ -26,6 +26,27 @@ the migration described in [ADR 0021](docs/adr/0021-required-encryption-at-netwo
 - Validated TOML budget configuration and version/dataset reporting.
 - Python package distribution (`email-address-checker`) while retaining the `emailcheck` CLI and import name.
 
+### Fixed
+
+- The service batch CSV parser accepts a leading UTF-8 byte order mark, as the
+  local CLI already did; spreadsheet "CSV UTF-8" exports were refused for
+  lacking an `email` column (issue #2).
+- The DNS cache locks per key instead of on 64 shared stripes, so a slow
+  lookup no longer delays unrelated domains; identical concurrent lookups are
+  still coalesced (issue #2).
+
+### Documentation and tests
+
+- State that single-label (`user@localhost`) and unbracketed numeric
+  (`user@192.0.2.1`) domains are accepted as DNS names and judged by DNS and
+  the destination policy, never reinterpreted as address literals
+  ([ADR 0005](docs/adr/0005-idna-uts46-domain-encoding.md) judgment 11).
+- List which service components are library-only and the prerequisite order
+  for connecting them ([architecture](docs/architecture.md#component-reachability)).
+- Separate specification tests from structural tests with the `inspection` and
+  `docs_contract` markers (`make test-spec`, `make test-structure`); CI runs
+  them as separate steps.
+
 ### Notes
 
 - A mail route or SMTP acceptance does not prove that a mailbox exists.

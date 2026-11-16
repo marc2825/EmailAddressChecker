@@ -1402,6 +1402,7 @@ def _mapper_tree() -> ast.Module:
     return ast.parse(MAPPER.read_text(encoding="utf-8"))
 
 
+@pytest.mark.inspection
 def test_the_mapper_imports_nothing_that_could_reach_the_world() -> None:
     offences: list[str] = []
     for node in ast.walk(_mapper_tree()):
@@ -1420,6 +1421,7 @@ def test_the_mapper_imports_nothing_that_could_reach_the_world() -> None:
     assert offences == [], f"the evidence mapper imports something impure: {offences}"
 
 
+@pytest.mark.inspection
 def test_the_mapper_names_no_collaborator_it_should_not_have() -> None:
     offences: list[str] = []
     for node in ast.walk(_mapper_tree()):
@@ -1436,12 +1438,14 @@ def test_the_mapper_names_no_collaborator_it_should_not_have() -> None:
     assert offences == [], f"the evidence mapper depends on a collaborator: {offences}"
 
 
+@pytest.mark.inspection
 def test_the_mapper_defines_no_coroutine_and_awaits_nothing() -> None:
     """A pure mapping has nothing to wait for."""
     for node in ast.walk(_mapper_tree()):
         assert not isinstance(node, ast.AsyncFunctionDef | ast.Await | ast.AsyncWith)
 
 
+@pytest.mark.inspection
 def test_the_mapper_reads_no_ambient_state() -> None:
     """No environment, no import-time file reads, no global mutation."""
     source = MAPPER.read_text(encoding="utf-8")
@@ -1449,6 +1453,7 @@ def test_the_mapper_reads_no_ambient_state() -> None:
         assert forbidden not in source, forbidden
 
 
+@pytest.mark.inspection
 def test_the_mapper_names_no_provider() -> None:
     """A behavioural test cannot enumerate the providers it has not thought of.
 

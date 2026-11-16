@@ -111,6 +111,13 @@ Risk flags must never overwrite status without independent evidence.
 - IDNA-convertible DNS domain;
 - total and component lengths enforced.
 
+A single-label domain (`user@localhost`) and an unbracketed numeric domain
+(`user@192.0.2.1`) are syntactically accepted as DNS names. Their outcome comes
+from DNS and the destination policy, not from the parser: a numeric top-level
+label has no delegation (NXDOMAIN), and loopback or private answers are refused
+as destinations. Neither is reinterpreted as a domain literal or used as a
+connection target directly. See ADR 0005 judgments 4 and 11.
+
 ### Unsupported, not automatically invalid
 
 - quoted local part;

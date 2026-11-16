@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.docs_contract
+
 ROOT = Path(__file__).resolve().parents[1]
 STATUS_MODEL = ROOT / "docs" / "status-model.md"
 ARCHITECTURE = ROOT / "docs" / "architecture.md"
@@ -403,6 +405,7 @@ def test_the_documented_budget_is_per_recipient_domain(document: Path) -> None:
         assert overclaim not in flat, f"{document.name} claims a three-part budget key"
 
 
+@pytest.mark.inspection
 def test_the_limiter_partitions_on_domain_and_mx() -> None:
     """The documentation above is checked against the code, not only itself."""
     import ast

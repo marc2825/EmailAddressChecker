@@ -73,6 +73,7 @@ def imported_names(relative: str) -> set[str]:
 # --- batch owns no verification logic ---------------------------------------
 
 
+@pytest.mark.inspection
 def test_the_scheduler_reaches_no_lower_than_the_job_service() -> None:
     """Every control this project has is inherited through `JobService`.
 
@@ -100,6 +101,7 @@ def test_the_scheduler_reaches_no_lower_than_the_job_service() -> None:
         assert shortcut not in code, shortcut
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(PHASE_10_MODULES))
 def test_no_batch_module_imports_a_transport_or_resolver(name: str) -> None:
     imported = imported_names(PHASE_10_MODULES[name])
@@ -114,6 +116,7 @@ def test_no_batch_module_imports_a_transport_or_resolver(name: str) -> None:
         assert forbidden not in imported, (name, forbidden)
 
 
+@pytest.mark.inspection
 def test_the_scheduler_learns_an_exchanger_and_never_resolves_one() -> None:
     """`docs/adr/0018-controlled-batch-execution.md` wants MX fairness; it does not want a second
     router.
@@ -138,6 +141,7 @@ def test_the_scheduler_learns_an_exchanger_and_never_resolves_one() -> None:
     assert "scheduling_key" in code, "the scheduler learns nothing at all"
 
 
+@pytest.mark.inspection
 def test_batch_builds_no_limiter_quota_or_deployment_of_its_own() -> None:
     """One process-wide limiter, quota, and admin state. `composition.py`'s rule.
 
@@ -158,6 +162,7 @@ def test_batch_builds_no_limiter_quota_or_deployment_of_its_own() -> None:
         assert constructed not in code, constructed
 
 
+@pytest.mark.inspection
 def test_batch_keeps_no_result_cache_of_its_own() -> None:
     """`docs/adr/0018-controlled-batch-execution.md`: *one active result cache shared with single
     checks*.
@@ -178,6 +183,7 @@ def test_batch_keeps_no_result_cache_of_its_own() -> None:
 # --- Phase 9 stays where it was ---------------------------------------------
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(PHASE_10_MODULES))
 def test_no_batch_module_touches_the_accept_all_experiment(name: str) -> None:
     """Phase 9 is deferred and unwired, and Phase 10 does not wire it.
@@ -197,6 +203,7 @@ def test_no_batch_module_touches_the_accept_all_experiment(name: str) -> None:
 # --- nothing here decides a status ------------------------------------------
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(PHASE_10_POLICY))
 def test_no_batch_module_names_a_deliverability_status(name: str) -> None:
     """A row's answer is Phase 5's, read through the public allowlist."""
@@ -252,6 +259,7 @@ def test_batch_is_disabled_and_unapproved_by_default() -> None:
     assert settings.permits("any-account") is False
 
 
+@pytest.mark.inspection
 def test_no_request_surface_names_the_batch_feature() -> None:
     """`docs/adr/0018-controlled-batch-execution.md`'s non-goals begin with public anonymous
     uploads.
@@ -277,6 +285,7 @@ def test_no_request_surface_names_the_batch_feature() -> None:
         assert "BatchService" not in code_without_docstrings(surface)
 
 
+@pytest.mark.inspection
 def test_no_batch_module_introduces_an_http_surface() -> None:
     """ASGI stays deferred. "Downloadable" is an application port, not a route.
 
@@ -292,6 +301,7 @@ def test_no_batch_module_introduces_an_http_surface() -> None:
             ), (relative, forbidden)
 
 
+@pytest.mark.docs_contract
 def test_the_upload_body_limit_is_recorded_inside_the_existing_stop_condition() -> None:
     """Phase 10's contribution to the ASGI conditions is wording, not a count.
 
@@ -363,6 +373,7 @@ def test_a_persisted_row_hides_its_plaintext_from_its_repr() -> None:
     assert "content" in artifact_hidden
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(PHASE_10_MODULES))
 def test_no_batch_module_logs_or_counts_a_target(name: str) -> None:
     """No metric label, no operator event, and no logger in the batch path.
@@ -378,6 +389,7 @@ def test_no_batch_module_logs_or_counts_a_target(name: str) -> None:
         assert forbidden not in code, (name, forbidden)
 
 
+@pytest.mark.inspection
 def test_the_store_builds_no_sql_at_a_call_site() -> None:
     """Every statement is a module constant, on the Phase 6 store's precedent.
 

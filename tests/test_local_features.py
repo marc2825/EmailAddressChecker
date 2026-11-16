@@ -205,6 +205,36 @@ def test_txt_resume_and_csv_injection(tmp_path: Path, fake_dns: list[str]) -> No
     assert csv_cell("  =cmd") == "'  =cmd"
 
 
+BOM = b"\xef\xbb\xbf"
+
+
+@pytest.mark.parametrize(
+    ("format", "content"),
+    [
+        ("csv", BOM + b"email,name\r\nfirst@example.com,A\r\n" + BOM + b"later@example.com,B\r\n"),
+        ("txt", BOM + b"first@example.com\r\n" + BOM + b"later@example.com\r\n"),
+    ],
+)
+def test_local_input_accepts_one_leading_byte_order_mark(
+    tmp_path: Path, format: str, content: bytes
+) -> None:
+    """Issue #2: the documented `UTF-8 (BOM allowed)` contract, pinned locally.
+
+    The service batch parser had to be fixed to match this path, and nothing
+    tested this path either, so the contract both share is asserted here and in
+    `tests/unit/application/test_batch.py`. Only the leading BOM is removed: a
+    later U+FEFF stays in its row for the address parser to reject, because
+    removing it would be rewriting what was submitted.
+    """
+    source = tmp_path / f"input.{format}"
+    source.write_bytes(content)
+
+    rows = list(read_rows(source, format, BatchLimits()))
+
+    assert [row.address for row in rows] == ["first@example.com", "﻿later@example.com"]
+    assert all(row.error is None for row in rows)
+
+
 def test_bounds_and_atomic_output(tmp_path: Path) -> None:
     source = tmp_path / "input.txt"
     source.write_text("x\nx\nx\n")

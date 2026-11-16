@@ -468,6 +468,52 @@ async def test_an_implicit_route_to_a_metadata_address_is_refused() -> None:
     assert route.candidates[0].decisions[0].deny_reason is DestinationDenyReason.METADATA
 
 
+# --- names the syntax layer accepts and DNS judges (ADR 0005 4 and 11) ----
+
+
+@pytest.mark.asyncio
+async def test_an_unbracketed_numeric_domain_is_looked_up_as_a_name_and_never_connected_to() -> (
+    None
+):
+    """Issue #2: `user@93.184.216.34` is a DNS name, not a connection target.
+
+    The address is public, so the destination policy would allow it if anything
+    treated the domain as an IP. Nothing does: the only route candidates are
+    built from DNS answers, and with no answer there is nothing to connect to.
+    """
+    resolver = FakeResolver()
+    route = await service(resolver).resolve(address("user@93.184.216.34"))  # type: ignore[arg-type]
+
+    assert resolver.calls[0] == ("mx", "93.184.216.34")
+    assert route.outcome is MailRouteOutcome.NO_MAIL_ROUTE
+    assert route.connectable_candidates == ()
+
+
+@pytest.mark.asyncio
+async def test_an_unbracketed_numeric_domain_gets_the_dns_verdict_for_its_name() -> None:
+    """A numeric top-level label has no delegation, so real DNS says NXDOMAIN."""
+    resolver = FakeResolver(mx={"192.0.2.1": MXLookup(failure=DNSFailure.NXDOMAIN)})
+    route = await service(resolver).resolve(address("user@192.0.2.1"))  # type: ignore[arg-type]
+
+    assert route.outcome is MailRouteOutcome.DOMAIN_NOT_FOUND
+    assert route.reason is ReasonCode.DOMAIN_NXDOMAIN
+
+
+@pytest.mark.asyncio
+async def test_localhost_answering_loopback_is_unsafe_rather_than_invalid() -> None:
+    """`user@localhost` is accepted by syntax; the destination policy stops it."""
+    resolver = FakeResolver(
+        a={"localhost": a_answer("127.0.0.1")},
+        aaaa={"localhost": a_answer("::1")},
+    )
+    route = await service(resolver).resolve(address("user@localhost"))  # type: ignore[arg-type]
+
+    assert route.outcome is MailRouteOutcome.UNSAFE_DESTINATION
+    assert route.reason is ReasonCode.UNSAFE_DESTINATION
+    assert route.is_hard_invalid is False
+    assert route.connectable_candidates == ()
+
+
 # --- the address boundary and evidence ------------------------------------
 
 

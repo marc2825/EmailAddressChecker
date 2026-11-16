@@ -14,6 +14,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.inspection
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 PHASE_7_MODULES = {
@@ -132,6 +134,7 @@ def test_every_layer_the_prompt_names_is_enforced_or_accounted_for() -> None:
     assert not set(here.values()) & added_by_later_phases
 
 
+@pytest.mark.docs_contract
 def test_the_public_documentation_lists_the_layers_this_project_claims() -> None:
     """Read from the published threat model, so the two cannot drift apart.
 
@@ -390,6 +393,7 @@ def flattened_architecture() -> str:
     return " ".join(text.split()).lower()
 
 
+@pytest.mark.docs_contract
 @pytest.mark.parametrize(
     ("condition", "markers"), sorted(ASGI_STOP_CONDITIONS.items()), ids=lambda value: value
 )
@@ -399,6 +403,7 @@ def test_every_asgi_stop_condition_is_recorded(condition: str, markers: tuple[st
     assert missing == [], f"the ASGI stop condition for {condition} is not recorded: {missing}"
 
 
+@pytest.mark.docs_contract
 def test_the_stop_conditions_live_under_their_own_heading() -> None:
     """So the list is findable, and so a condition cannot be satisfied by a
     coincidental phrase elsewhere in a long document."""
@@ -406,6 +411,7 @@ def test_the_stop_conditions_live_under_their_own_heading() -> None:
     assert "#### Stop conditions on the ASGI binding" in text
 
 
+@pytest.mark.docs_contract
 def test_there_are_exactly_seven_and_the_count_is_asserted() -> None:
     """A condition added later must be added to this table too, and one quietly
     dropped from the document fails its own row above.

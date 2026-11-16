@@ -147,6 +147,50 @@ def test_a_malformed_input_is_refused_without_naming_its_contents() -> None:
         assert "user@example.test" not in str(raised.value)
 
 
+#: The UTF-8 encoding of U+FEFF, which spreadsheet "CSV UTF-8" exports put first.
+UTF8_BOM: Final = b"\xef\xbb\xbf"
+
+
+def test_a_leading_byte_order_mark_is_accepted() -> None:
+    """Issue #2: a spreadsheet export starts with a BOM and must still be read.
+
+    `docs/usage-ja.md` documents CSV input as UTF-8 with an optional BOM, and the
+    local CLI path already accepted one. The service path decoded with plain
+    `utf-8`, so the BOM became part of the first header name and the file was
+    refused for lacking an `email` column. The fixture here is the exact shape
+    such an export has: BOM, CRLF line endings, more than one column.
+    """
+    content = UTF8_BOM + b"email,name\r\nuser@example.test,A\r\nother@example.test,B\r\n"
+
+    parsed = parse_batch_csv(content)
+
+    assert [row.submitted for row in parsed.rows] == ["user@example.test", "other@example.test"]
+    assert all(row.parsed for row in parsed.rows)
+
+
+def test_only_a_leading_byte_order_mark_is_removed() -> None:
+    """A U+FEFF anywhere else is the submitter's data, and the parser judges it.
+
+    Stripping it from a cell would be rewriting an address. U+FEFF is a format
+    character, which Phase 1 rejects in a local part, so the row is reported
+    rather than silently cleaned.
+    """
+    parsed = parse_batch_csv(b"email\n" + UTF8_BOM + b"user@example.test\n")
+
+    assert len(parsed) == 1
+    assert parsed.rows[0].parsed is False
+    assert parsed.rows[0].rejection is not None
+
+
+def test_a_byte_order_mark_counts_against_the_byte_limit() -> None:
+    """The bound is on what was uploaded, checked before decoding, BOM included."""
+    content = UTF8_BOM + csv_for("user@example.test")
+
+    parse_batch_csv(content, limits=BatchLimits(max_input_bytes=len(content)))
+    with pytest.raises(BatchError):
+        parse_batch_csv(content, limits=BatchLimits(max_input_bytes=len(content) - 1))
+
+
 def test_the_row_and_byte_limits_are_both_enforced() -> None:
     """Either alone is bypassable: many tiny rows, or one enormous one."""
     limits = BatchLimits(max_rows=2, max_input_bytes=4 * 1024 * 1024)
@@ -465,6 +509,17 @@ async def test_every_row_reaches_the_ordinary_job_service() -> None:
 
     assert report.state_summary[BatchRowState.SUBMITTED.value] == 3
     assert len(executor.submitted) == 3
+
+
+@asyncio_test
+async def test_a_file_with_a_byte_order_mark_runs_like_one_without() -> None:
+    """Issue #2, end to end: the service accepts what the local CLI accepts."""
+    batch, executor, _ = build_batch()
+
+    report = await run(batch, UTF8_BOM + csv_for("a@example.test", "b@example.test"))
+
+    assert report.state_summary[BatchRowState.SUBMITTED.value] == 2
+    assert len(executor.submitted) == 2
 
 
 @asyncio_test

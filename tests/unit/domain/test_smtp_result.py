@@ -164,6 +164,7 @@ def test_negative_counters_and_times_are_refused() -> None:
 # --- Phase 5 vocabulary is absent ------------------------------------------
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("module", SMTP_MODULES, ids=lambda p: p.name)
 def test_no_smtp_module_imports_verdict_vocabulary(module: Path) -> None:
     """A code becoming a status here would put the decision in the thinnest layer."""
@@ -177,6 +178,7 @@ def test_no_smtp_module_imports_verdict_vocabulary(module: Path) -> None:
         assert name not in imported, f"{module.name} imports {name}"
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("module", SMTP_MODULES, ids=lambda p: p.name)
 def test_no_smtp_module_names_a_status(module: Path) -> None:
     source = module.read_text(encoding="utf-8")
@@ -190,6 +192,7 @@ def test_no_smtp_module_names_a_status(module: Path) -> None:
                 assert value not in {"likely_deliverable", "temporary_unknown"}
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("module", SMTP_MODULES, ids=lambda p: p.name)
 def test_no_smtp_module_opens_a_connection(module: Path) -> None:
     """Phase 4A has no transport. The stop condition in the plan depends on it."""

@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.inspection
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "emailcheck"
 
@@ -831,6 +833,7 @@ OVERCLAIMS = (
 )
 
 
+@pytest.mark.docs_contract
 @pytest.mark.parametrize("document", ["docs/architecture.md", "src/emailcheck/application/jobs.py"])
 def test_no_document_claims_a_cache_hit_is_free(document: str) -> None:
     """A cache hit costs the passive DNS lookup, because both lookups below it
@@ -886,6 +889,7 @@ def submission_order_block(document: str) -> str:
     return matching[0]
 
 
+@pytest.mark.docs_contract
 @pytest.mark.parametrize("document", ORDER_DOCUMENTS)
 def test_the_submission_order_block_lists_the_steps_in_the_order_the_code_runs(
     document: str,

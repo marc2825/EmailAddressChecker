@@ -27,7 +27,14 @@ jobs:
       - run: python -m ruff check .
       - run: python -m ruff format --check .
       - run: python -m mypy src
-      - run: python -m pytest --cov=emailcheck --cov-report=term-missing
+      # Specification and structural tests run as separate steps so a failure
+      # says which kind broke (issue #2; docs/test-strategy.md). Together they
+      # are the whole suite, and coverage is appended into one report.
+      - name: Specification tests
+        run: python -m pytest -m "not inspection and not docs_contract" --cov=emailcheck --cov-report=
+      - name: Structural and documentation contract tests
+        if: ${{ !cancelled() }}
+        run: python -m pytest -m "inspection or docs_contract" --cov=emailcheck --cov-append --cov-report=term-missing
       - run: python scripts/check_forbidden_smtp.py
       - run: python -m emailcheck --version
 

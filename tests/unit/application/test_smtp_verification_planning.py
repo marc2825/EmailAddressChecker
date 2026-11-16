@@ -282,6 +282,7 @@ def _code_tokens(module: Path) -> list[tuple[int, str]]:
     return tokens
 
 
+@pytest.mark.inspection
 def test_no_module_retries_or_backs_off() -> None:
     """Bounded fallback to a *different* candidate is the only movement here.
 
@@ -298,6 +299,7 @@ def test_no_module_retries_or_backs_off() -> None:
     assert offences == [], f"a retry mechanism appears in the 4E tree: {offences}"
 
 
+@pytest.mark.inspection
 def test_only_the_limiter_may_suspend() -> None:
     """Pacing is a limiter's job; an orchestration sleep would be a backoff.
 
@@ -318,6 +320,7 @@ def test_only_the_limiter_may_suspend() -> None:
     assert "asyncio" not in verification
 
 
+@pytest.mark.inspection
 def test_no_module_generates_a_recipient() -> None:
     """Accept-all detection is Phase 9, and it starts with an invented mailbox.
 
@@ -332,6 +335,7 @@ def test_no_module_generates_a_recipient() -> None:
     assert offences == [], f"the 4E tree can invent a recipient: {offences}"
 
 
+@pytest.mark.inspection
 def test_no_module_produces_a_status() -> None:
     """Phase 5's vocabulary, kept out of the layer that would reach for it first.
 
@@ -364,6 +368,7 @@ def test_no_module_produces_a_status() -> None:
     assert offences == [], f"the 4E tree names Phase 5 vocabulary: {offences}"
 
 
+@pytest.mark.inspection
 def test_the_orchestrator_owns_no_transport_and_no_raw_address() -> None:
     """A raw address handed to a transport would skip `approve_destination`.
 
@@ -384,6 +389,7 @@ def test_the_orchestrator_owns_no_transport_and_no_raw_address() -> None:
         assert forbidden not in imported, f"the loop imports {forbidden}"
 
 
+@pytest.mark.inspection
 def test_the_limiter_key_is_built_from_no_local_part() -> None:
     """The three components `RateLimiter.acquire` takes, and nothing else."""
     import ast

@@ -163,6 +163,7 @@ def test_the_verb_is_read_the_way_a_server_reads_it() -> None:
     assert wire.quit_session().verb == "QUIT"
 
 
+@pytest.mark.inspection
 def test_production_code_builds_wire_commands_only_through_the_factories() -> None:
     """The raw constructor stays validating, and nothing outside this module uses it."""
     import ast

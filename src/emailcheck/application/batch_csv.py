@@ -149,7 +149,8 @@ def parse_batch_csv(content: bytes, *, limits: BatchLimits | None = None) -> Bat
 
     `docs/adr/0018-controlled-batch-execution.md` Input: *documented UTF-8 CSV schema; file size and
     row
-    limits; one address column*.
+    limits; one address column*. A single leading byte order mark is accepted,
+    as it is by the local CLI.
 
     The byte limit is checked **before decoding**, because decoding is the first
     thing that costs memory proportional to a caller's input. The row limit is
@@ -166,7 +167,13 @@ def parse_batch_csv(content: bytes, *, limits: BatchLimits | None = None) -> Bat
         raise BatchError(f"a batch input may be at most {bounds.max_input_bytes} bytes")
 
     try:
-        text = bytes(content).decode("utf-8")
+        # `utf-8-sig` removes one *leading* byte order mark and nothing else.
+        # Spreadsheet "CSV UTF-8" exports begin with one, and the local CLI
+        # (`apps/local_io.py`) already accepts it; with plain `utf-8` it became
+        # part of the first header name and the file was refused for lacking
+        # an address column. A U+FEFF anywhere later is left for the address
+        # parser to judge, so no cell is rewritten.
+        text = bytes(content).decode("utf-8-sig")
     except UnicodeDecodeError:
         # The message is ours, not the decoder's: a codec error carries the
         # offending bytes, and those bytes are the submitter's data.

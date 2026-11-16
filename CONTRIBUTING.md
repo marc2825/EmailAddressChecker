@@ -48,7 +48,7 @@ Changes to any of these boundaries require focused regression tests and a securi
 
 The code follows the dependency structure described in [architecture.md](docs/architecture.md): domain rules and ports remain independent of application entry points and concrete adapters. Keep network operations bounded, public errors structured, and new dependencies justified.
 
-Add tests for behavior changes, particularly in SMTP retries, DNS or destination validation, authorization, caching, persistence and deletion. Update the relevant documentation when behavior changes; use an [architecture decision record](docs/adr/) for durable design decisions.
+Add tests for behavior changes, particularly in SMTP retries, DNS or destination validation, authorization, caching, persistence and deletion. Prefer tests that exercise behavior; a test that reads source code or documentation must carry the `inspection` or `docs_contract` marker (see [test strategy](docs/test-strategy.md#specification-tests-and-structural-tests)). Update the relevant documentation when behavior changes; use an [architecture decision record](docs/adr/) for durable design decisions.
 
 Use Python 3.12+, full public-function annotations and immutable domain values.
 Keep time in UTC and serialize explicit offsets. Do not expose network exception

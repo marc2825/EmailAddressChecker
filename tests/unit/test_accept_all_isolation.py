@@ -94,6 +94,7 @@ def imported_names(relative: str) -> set[str]:
 # --- the ordinary path does not reach the experiment ------------------------
 
 
+@pytest.mark.inspection
 def test_the_ordinary_verification_path_never_imports_the_experiment() -> None:
     """The central separation, and the only one that keeps one `RCPT TO` true.
 
@@ -115,6 +116,7 @@ def test_the_ordinary_verification_path_never_imports_the_experiment() -> None:
         )
 
 
+@pytest.mark.inspection
 def test_the_experiment_does_not_import_the_high_level_verification_service() -> None:
     """The dependency runs one way, so neither can quietly call the other."""
     imported = imported_names(PHASE_9_MODULES["application"])
@@ -122,6 +124,7 @@ def test_the_experiment_does_not_import_the_high_level_verification_service() ->
     assert "emailcheck.application.verification" not in imported
 
 
+@pytest.mark.inspection
 def test_the_experiment_reaches_no_transport_or_probe_directly() -> None:
     """It goes through the production verification service or not at all.
 
@@ -151,6 +154,7 @@ def test_the_feature_flag_is_disabled_by_default() -> None:
     assert AcceptAllSettings().enabled is False
 
 
+@pytest.mark.inspection
 def test_no_request_surface_names_the_feature() -> None:
     """`docs/adr/0017-accept-all-control-experiment.md`: no public caller may enable it.
 
@@ -185,6 +189,7 @@ def test_the_experiment_takes_no_caller_supplied_enablement() -> None:
 # --- nothing here decides a status ------------------------------------------
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", sorted(PHASE_9_MODULES))
 def test_no_phase_9_module_names_a_deliverability_status(name: str) -> None:
     """The experiment produces evidence. Phase 5 decides what evidence means."""
@@ -196,6 +201,7 @@ def test_no_phase_9_module_names_a_deliverability_status(name: str) -> None:
         assert forbidden not in code, (name, forbidden)
 
 
+@pytest.mark.inspection
 def test_the_only_risk_flag_phase_9_can_produce_is_accept_all_suspected() -> None:
     code = code_without_docstrings(PHASE_9_MODULES["application"])
 
@@ -204,6 +210,7 @@ def test_the_only_risk_flag_phase_9_can_produce_is_accept_all_suspected() -> Non
     assert "ACCEPT_ALL_SUSPECTED" in code
 
 
+@pytest.mark.inspection
 def test_the_experiment_re_derives_no_status_from_a_reply_code() -> None:
     """No `if reply == 250`, anywhere.
 
@@ -220,6 +227,7 @@ def test_the_experiment_re_derives_no_status_from_a_reply_code() -> None:
 # --- the generator ----------------------------------------------------------
 
 
+@pytest.mark.inspection
 def test_no_phase_9_module_carries_a_dictionary_of_mailbox_names() -> None:
     """A generator built from a word list would be a dictionary attack.
 
@@ -234,6 +242,7 @@ def test_no_phase_9_module_carries_a_dictionary_of_mailbox_names() -> None:
             assert f"'{name}'" not in code, (relative, name)
 
 
+@pytest.mark.inspection
 def test_the_generator_uses_the_random_source_port_rather_than_a_module() -> None:
     """`docs/architecture.md` section 2 makes randomness a port for this reason."""
     code = code_without_docstrings(PHASE_9_MODULES["application"])
@@ -308,6 +317,7 @@ def test_the_cache_key_has_no_field_a_local_part_could_occupy() -> None:
         assert absent not in fields
 
 
+@pytest.mark.inspection
 def test_the_experiment_never_puts_the_control_into_evidence_details() -> None:
     """The generated address reaches `RCPT TO` and nothing else."""
     code = code_without_docstrings(PHASE_9_MODULES["application"])

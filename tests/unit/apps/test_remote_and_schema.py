@@ -502,6 +502,7 @@ def test_the_client_opener_has_no_following_redirect_handler() -> None:
     assert not any(type(h) is urllib.request.HTTPRedirectHandler for h in handlers)
 
 
+@pytest.mark.inspection
 def test_the_client_never_calls_the_module_level_urlopen() -> None:
     """`urllib.request.urlopen` uses the *default* global opener, which follows
     redirects. The adapter must go through its own."""

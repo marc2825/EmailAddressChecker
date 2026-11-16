@@ -64,6 +64,7 @@ def test_nothing_about_the_probe_target_can_reach_the_loader() -> None:
     assert "Address" not in str(annotation)
 
 
+@pytest.mark.inspection
 def test_the_loader_reads_no_environment_variable() -> None:
     """Configuration is handed in deliberately, not picked up from the ambient shell."""
     import ast

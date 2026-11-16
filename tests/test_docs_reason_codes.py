@@ -7,8 +7,12 @@ and requires documentation to stay synchronized. This test is that check.
 import re
 from pathlib import Path
 
+import pytest
+
 from emailcheck.domain.evidence import EvidenceLayer
 from emailcheck.domain.reasons import ReasonCode
+
+pytestmark = pytest.mark.docs_contract
 
 STATUS_MODEL = Path(__file__).resolve().parents[1] / "docs" / "status-model.md"
 TABLE_ROW = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|\s*`([a-z0-9_]+)`\s*\|", re.MULTILINE)

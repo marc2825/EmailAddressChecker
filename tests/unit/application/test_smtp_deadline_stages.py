@@ -329,6 +329,7 @@ def _connection_calls(tree: ast.AST) -> list[tuple[str, int, ast.Call]]:
     return found
 
 
+@pytest.mark.inspection
 async def test_every_connection_call_sits_inside_the_deadline_wrapper() -> None:
     """A step the matrix above has not thought of still cannot be unbounded.
 
@@ -355,6 +356,7 @@ async def test_every_connection_call_sits_inside_the_deadline_wrapper() -> None:
     assert unbounded == [], f"connection calls outside the session deadline: {unbounded}"
 
 
+@pytest.mark.inspection
 async def test_the_wrapper_itself_still_bounds_what_it_is_given() -> None:
     """`_bounded` has to contain the timeout, or wrapping a call means nothing."""
     tree = ast.parse(DIALOGUE_SOURCE.read_text(encoding="utf-8"))

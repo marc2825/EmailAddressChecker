@@ -90,6 +90,7 @@ def test_a_source_identity_is_usable_as_a_budget_key() -> None:
 # --- provenance --------------------------------------------------------------
 
 
+@pytest.mark.inspection
 def test_the_module_reads_no_header_and_no_environment() -> None:
     """Read from the syntax tree with docstrings excluded, because this module
     explains at length which headers it does not trust and a text scan fails on
@@ -129,6 +130,7 @@ def code_without_docstrings(path: pathlib.Path) -> str:
     return ast.unparse(tree)
 
 
+@pytest.mark.inspection
 def test_no_forwarding_header_is_used_anywhere_in_production() -> None:
     """A header this project never *reads* is one no future edit trusts by
     accident. `docs/architecture.md` carries proxy policy as a stop condition on
@@ -150,6 +152,7 @@ def test_no_request_body_field_could_supply_a_source() -> None:
     assert frozenset({"email"}) == PERMITTED_REQUEST_KEYS
 
 
+@pytest.mark.inspection
 def test_the_constructor_is_not_reachable_from_apps_or_application() -> None:
     """The split `Principal` and `PeerEndpoint` already use: the value
     guarantees the shape, a transport boundary grants the provenance."""
