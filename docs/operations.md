@@ -28,139 +28,69 @@ At minimum:
 - one target domain;
 - one target MX.
 
-`application/admin.py` implements every switch above, with an audit trail
-behind each one: each goes through `AdminControl._record`, which appends an
-`AuditEvent` naming the operation, a digest of the subject, and whether the
-state actually changed.
+`application/admin.py` implements every switch above. Each one goes through `AdminControl._record`, which appends an `AuditEvent` naming the operation, a digest of the subject, and whether the state changed.
 
-**Two things an earlier version of this section listed are not switches**, and
-an operator reaching for them during an incident would not find them. They are
-here as what they actually are, so the distinction is legible before it is
-needed:
+- The global switch stops both new enqueues and the worker, so nothing keeps contacting remote hosts after an operator says stop.
+- A blocked domain refuses the whole verification; no exchanger for that domain is approached. A blocked exchanger is removed from the plan, and another unblocked exchanger for the same domain may still be used. The domain check runs before the candidates are filtered. The exchanger block is exact: every candidate is checked, not only the preferred one.
+- Domain and exchanger blocks are canonicalized like mail routes (case-folded, trailing dot removed, IDNA-encoded), so `EXAMPLE.TEST`, `example.test.`, and `bücher.test` are each one block. An unusable host name is refused instead of stored. Account and API-key subjects are opaque and not normalized.
+- A lab-active deployment also lists what it may contact in `Deployment.lab_destination_allowlist`, canonicalized the same way. It only restricts: a block still wins, and an allowlisted host must still pass the destination policy, the peer check, and TLS verification.
+- No public application route reaches these controls. `application/admin.py` has no transport, and mounting it publicly is forbidden by the stop conditions in `docs/architecture.md`.
 
-*Automatic retries are bounded structurally, not toggled.* `MAX_RETRIES` is 1,
-and `docs/requirements.md` section 14's retry is available **only** to an
-attempt that provably did not reach the recipient stage —
-`RecipientTouch.replay_is_safe`, which `application/jobs.py` checks before
-scheduling one. A safe pre-recipient retry (a DNS failure, a refused banner) can
-still happen; a recipient-stage replay cannot, whatever an operator does. There
-is nothing to disable, which is stronger than a switch somebody has to remember
-to throw. To stop retries along with everything else, use the global
-active-checks switch.
+Two things are not switches:
 
-*Raw evidence retention is configuration and scheduling, not a runtime toggle.*
-What is kept and for how long is `RetentionSettings` — `job_retention_seconds`,
-`interval_seconds`, and `batch_limit` — read at composition, with
-`application/retention.py` sweeping on that interval and calling
-`AdminControl.record_deletion`, which audits the sweep under the `run_deletion`
-event kind. That event kind is the audit record of a sweep having run; it is not
-an operator command, and no method named `run_deletion` exists. Erasing one
-account's data on request is `AccountDeletionService`
-(`docs/runbooks/privacy-deletion.md`), which is a separate operation with its
-own report and is not a retention setting. Changing what is retained means
-changing the deployment's settings and restarting it.
-
-**The administrative control surface publishes no public application route.**
-`application/admin.py` holds no transport, and no request surface reaches it:
-binding a control that can disable a security mechanism to the public
-application is what "non-public interface" exists to prevent, and
-`docs/architecture.md` carries that as a stop condition on the ASGI binding.
-
-**A destination switch is canonicalized before it is stored.** A domain or
-exchanger block goes through the same `HostName` identity the mail route uses —
-case-folded, trailing dot removed, IDNA-encoded through Phase 1's UTS-46
-encoder — so `EXAMPLE.TEST`, `example.test.`, and `bücher.test` are one block
-rather than three that each match nothing. Before Remediation B they were stored
-as typed and compared against a canonical route, so each of those three read as
-thrown and blocked nothing. An unusable host name is refused at the boundary
-rather than stored inert. Account and API-key subjects are **not** normalized:
-those are opaque identifiers, and two spellings really are two accounts.
-
-**A lab-active deployment additionally names what it may contact.**
-`Deployment.lab_destination_allowlist` is the exchanger inventory
-`docs/requirements.md` section 15 requires, canonicalized the same way. It
-restricts and grants nothing: a block still beats it, and an allowlisted host
-still passes the destination policy, the peer check, and TLS verification.
-
-The global switch stops the enqueue **and** the worker. A switch that stopped
-only new work would leave the queue connecting to remote hosts after an operator
-said stop, which is the moment they most need it to have worked.
+- Automatic retries are limited by design. `MAX_RETRIES` is 1, and the retry in `docs/requirements.md` section 14 is available only to an attempt that provably never reached the recipient stage (`RecipientTouch.replay_is_safe`, checked by `application/jobs.py`). A pre-recipient retry, such as after a DNS failure, can still happen; a recipient-stage replay never can. To stop retries along with everything else, use the global switch.
+- Retention is configuration, not a runtime switch. `RetentionSettings` (`job_retention_seconds`, `interval_seconds`, `batch_limit`) is read when the stack is composed, and `application/retention.py` sweeps on that interval and audits each sweep through `AdminControl.record_deletion` under the `run_deletion` event kind. That event records a sweep; there is no `run_deletion` command. Deleting one account's data on request is `AccountDeletionService` (`docs/runbooks/privacy-deletion.md`). Changing what is kept means changing the settings and restarting.
 
 ### Sizing the layered budgets
 
-Every limit in `QuotaSettings` counts **verification budget units**, not API
-requests. One submitted active check spends the caller's layers twice — once for
-the submission's passive pass and once for the active verification — and a third
-time if `docs/requirements.md` section 14's one retry runs. A passive check
-spends one unit.
+Every limit in `QuotaSettings` counts verification budget units, not API requests:
 
-So `per_account = 5000` is roughly 2500 active submissions per window, not 5000.
-Size these as spends. ADR 0016 decision 5c has the table.
+| Operation | Caller layers | Destination layers |
+|---|---|---|
+| A submission's passive pass | 1 | — |
+| The first active verification | 1 | 1 |
+| The one automatic retry | 1 | 1 |
+| A passive check | 1 | — |
 
-The "third time" is now rarer than it reads: ADR 0019 permits an automatic retry
-only for a first attempt that provably did not reach the recipient stage, and in
-this build that is DNS SERVFAIL alone. Size for it anyway — the budget must
-cover the worst case, and the retry that does run costs a full verification.
+`per_account = 5000` is therefore about 2,500 active submissions per window, not 5,000. Retries are rare, because one is allowed only for a first attempt that never reached the recipient stage (in this build, only DNS SERVFAIL), but size for the worst case. Cache hits are charged too.
+
+The per-MX volume budget charges the preferred exchanger, so a verification that falls through to the next exchanger under-charges it by at most `max_attempts - 1`; the domain budget above it still covers the total. The per-MX block is exact (section 2).
+
+Abuse indicators only report. Suspending a caller is an operator decision through `application/admin.py`, never automatic, because a blunt heuristic that suspended automatically could be triggered by someone else on a caller's behalf.
 
 ### Retention
 
-`RetentionService` is now **scheduled**. `VerificationStack.start` starts a
-`RetentionScheduler` for every profile that owns persistent service state —
-local-passive gets none, because it accepts no job and owns no batch — and
-`aclose` stops it. `VerificationStack.run_retention` is the operator trigger and
-runs the same sweep, so a timer and an operator cannot get different policy.
+`VerificationStack.start` starts a `RetentionScheduler` for every profile that keeps persistent service state; local-passive gets none, because it accepts no job and owns no batch. `aclose` stops it, and `VerificationStack.run_retention` runs the same sweep on demand.
 
-`RetentionSettings.interval_seconds` is operator configuration: fifteen minutes
-by default, refused below one minute or above one day, and reachable from no
-request, flag, or admin call. **The effective deletion time is the retention
-cutoff plus at most one interval**, not the cutoff exactly.
+`RetentionSettings.interval_seconds` defaults to fifteen minutes, must be between one minute and one day, and cannot be changed by any request, flag, or admin call. Data is deleted at most one interval after its retention cutoff.
 
-A sweep is logical deletion — rows removed, retained plaintext set to `NULL`.
-Secure physical erasure of SQLite free pages, the write-ahead log, or any backup
-taken before the sweep is outside what this project does; see
-[privacy.md](privacy.md).
-
-One failing store no longer suppresses the others: each cleanup runs under its
-own handler and `DeletionReport.failed_stores` names the categories that failed,
-in this project's vocabulary rather than an exception's text. A failed sweep
-does not end the schedule.
+A sweep deletes logically: rows are removed and retained plaintext is set to `NULL`. It does not securely erase SQLite free pages, the write-ahead log, or backups taken earlier; see [privacy.md](privacy.md). Each store is cleaned under its own handler, so one failure does not stop the others; `DeletionReport.failed_stores` names the failed categories, and a failed sweep does not stop the schedule. Each sweep removes a bounded number of rows and reports whether more remain.
 
 ### Restarts and interrupted jobs
 
-Persistent job state and a durable execution queue are different things, and
-only the first exists. A process that stops does not resume its in-flight
-verifications when it comes back, because a `running` job may already have
-issued its one `RCPT TO` and re-running it would contact one recipient twice.
-Reconciling those rows is an operator action —
-`JobService.recover_interrupted` — and
-[runbooks/queue-store-outage.md](runbooks/queue-store-outage.md) section 7 has
-the procedure and the two conditions on running it.
+Job state is persistent; the execution queue is not. A restarted process does not resume in-flight verifications, because a `running` job may already have issued its one `RCPT TO`, and running it again would contact the recipient twice. Reconciling those jobs is an operator action, `JobService.recover_interrupted`; [runbooks/queue-store-outage.md](runbooks/queue-store-outage.md) section 7 gives the procedure and its two conditions.
 
-Executor admission uses an irrevocable durable token before the executor call.
-A definite refusal preserves the same JobId as an operational failure; a crash
-on either side of the call is never treated as permission for another replica
-to submit the job again. This is conservative handoff safety, not a durable
-queue or exactly-once execution claim.
+Before calling the executor, the service writes an irrevocable, durable handoff token. A definite refusal keeps the same job ID and records an operational failure. A crash on either side of the call is never taken as permission for another replica to submit the job again. This is conservative handoff safety, not a durable queue or exactly-once execution.
 
 ## 3. Alerting
 
 Alert on:
 
-- sudden rise in policy blocks;
-- timeout or tarpit increase;
-- authentication bypass attempts;
-- rate-limit storage failure;
+- a sudden rise in policy blocks;
+- more timeouts or tarpitting;
+- attempts to bypass authentication;
+- rate-limit storage failures;
 - queue growth;
-- deletion job failure;
-- sender IP blocklist appearance;
-- remote abuse complaint;
-- unsafe destination resolution attempt.
+- deletion job failures;
+- the sender IP appearing on a blocklist;
+- a remote abuse complaint;
+- an attempt to resolve an unsafe destination.
+
+Metric labels are closed enumerations, so there are no per-domain metric series. Analyse per-domain rates from the redacted operator events instead.
 
 ## 4. Runbooks
 
-They exist, in [runbooks/](runbooks/). Seven files cover these nine topics —
-[runbooks/README.md](runbooks/README.md) carries the mapping and the rule that
-outranks all of them:
+The runbooks are in [runbooks/](runbooks/). Seven files cover nine topics; [runbooks/README.md](runbooks/README.md) maps them and states the rule that overrides all of them.
 
 | Topic | Runbook |
 | --- | --- |
@@ -174,26 +104,12 @@ outranks all of them:
 | delete user data | [privacy-deletion.md](runbooks/privacy-deletion.md) |
 | restore queue/store | [queue-store-outage.md](runbooks/queue-store-outage.md) |
 
-Two topics share a runbook with a neighbour rather than getting a file of their
-own: revoking a caller's key is the per-account form of the kill switch, and
-rolling a ruleset back is what a false `invalid` traced to a deployment calls
-for. Both are named procedures inside those files.
+Revoking a key is the per-account form of the kill switch, and rolling back a ruleset is the response to a false `invalid` traced to a deployment, so those two topics are procedures inside neighbouring runbooks.
 
-**None of these has been executed.** `global kill switch tested` and
-`retention deletion tested` in section 1 are verified by *performing*
-[stop-active-checks.md](runbooks/stop-active-checks.md) and
-[privacy-deletion.md](runbooks/privacy-deletion.md) on the deployment, once,
-before the beta.
+None of the runbooks has been executed yet. The gates "global kill switch tested" and "retention deletion tested" in section 1 are met by performing [stop-active-checks.md](runbooks/stop-active-checks.md) and [privacy-deletion.md](runbooks/privacy-deletion.md) once on the deployment before the beta.
 
 ## 5. Capacity
 
-Remote etiquette dominates throughput. Increasing workers must not increase
-per-domain or per-MX rates. Fair scheduling should prevent one domain from
-occupying all worker capacity.
+Being a polite remote client limits throughput more than anything else. Adding workers must not raise per-domain or per-MX rates, and fair scheduling keeps one domain from occupying every worker.
 
-The caller-side half of that is `application/admission.py`'s queue share: one
-principal may hold at most `queue_share` of the waiting slots, so a caller
-issuing requests faster than they are served cannot make every other account's
-request refuse while holding no capacity at all. The share is derived from the
-queue length when it is not configured, so the property holds for a deployment
-that tunes nothing.
+On the caller side, `application/admission.py` lets one principal hold at most `queue_share` of the waiting slots, so a caller sending requests faster than they are served cannot force every other account's request to be refused. When `queue_share` is not configured it is derived from the queue length, so a deployment that tunes nothing still has the property.
