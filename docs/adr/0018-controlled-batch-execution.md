@@ -162,6 +162,12 @@ is treating authentication as approval.
 *Documented UTF-8 CSV schema; file size and row limits; one address column;
 duplicate detection by HMAC.*
 
+UTF-8 here includes one optional leading byte order mark, which spreadsheet
+"CSV UTF-8" exports write and the local CLI already accepted. Only the leading
+mark is removed; a U+FEFF anywhere else stays in its cell and Phase 1 rejects it
+as part of an address. (Issue #2: the service parser originally decoded with
+plain `utf-8` and refused such a file for lacking an address column.)
+
 Both limits, because either alone is bypassable: a million one-character rows is
 a small file, and one row can be a megabyte. The byte bound is checked **before
 decoding**, which is the first step that costs memory proportional to a caller's

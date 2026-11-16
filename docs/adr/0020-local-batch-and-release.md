@@ -29,9 +29,17 @@ cleanup. A hard kill may leave a temporary file; no crash-resume claim is made.
 `--start-row` is a new passive suffix run; persistent Active resume remains separate.
 
 The DNS adapter reuses InMemoryDNSCache, with separate record-type keys, bounded
-entry counts, striped locks coalescing concurrent requests, and remaining TTLs
+entry counts, per-key locks coalescing concurrent requests, and remaining TTLs
 on hits. No TTL is restarted by reading a cached answer. DNS sharing crosses
 accounts only for public domain records, never verdicts or address identity.
+
+*Amended 2026-11-16 (issue #2):* the original design used a fixed pool of 64
+striped locks held across the upstream query, so a slow lookup (up to the
+resolver timeout) delayed unrelated keys that shared its stripe. Locks are now
+created per key and dropped when no caller holds or awaits them: identical
+concurrent lookups still reach the resolver once, different keys never wait on
+each other, and the lock table is bounded by in-flight callers. Cancellation
+stays local to the cancelled caller.
 
 TOML exposes budgets only. Defaults of existing programmatic Deployment remain
 compatible; an explicitly configured passive quota gets an independent store and
