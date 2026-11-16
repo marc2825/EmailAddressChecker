@@ -24,7 +24,6 @@ ROOT = Path(__file__).resolve().parents[1]
 STATUS_MODEL = ROOT / "docs" / "status-model.md"
 ARCHITECTURE = ROOT / "docs" / "architecture.md"
 THREAT_MODEL = ROOT / "docs" / "threat-model.md"
-ORCHESTRATION_ADR = ROOT / "docs" / "adr" / "0011-verification-orchestration-and-rate-limiting.md"
 STATE_MACHINE = ROOT / "docs" / "smtp-state-machine.md"
 DIALOGUE_ADR = ROOT / "docs" / "adr" / "0009-smtp-dialogue-and-tls.md"
 OPERATIONS = ROOT / "docs" / "operations.md"
@@ -429,7 +428,7 @@ def test_the_limiter_partitions_on_domain_and_mx() -> None:
 # --- the documented worst case includes the rate-limit waits ----------------
 
 
-@pytest.mark.parametrize("document", [ORCHESTRATION_ADR])
+@pytest.mark.parametrize("document", [ARCHITECTURE])
 def test_the_worst_case_latency_counts_the_rate_limit_waits(document: Path) -> None:
     """ "Three session budgets" left out a term and understated the bound."""
     flat = flattened(text_of(document))

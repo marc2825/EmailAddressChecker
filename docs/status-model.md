@@ -89,7 +89,7 @@ The aggregator works on structured evidence, not strings. Each observation falls
 5. accepted recipient;
 6. residual non-blocking evidence: route and passive metadata, with no qualifying positive answer.
 
-`application/aggregate.py` is the only implementation. The lowest non-empty tier decides; nothing counts or weights observations or reads `EvidenceStrength`. A later network error must not erase a hard passive invalid result, because that network probe should never have run.
+`application/aggregate.py` is the only implementation. The lowest non-empty tier decides; nothing counts or weights observations or reads `EvidenceStrength`. Risk flags are derived after the status and are never read by it. A later network error must not erase a hard passive invalid result, because that network probe should never have run.
 
 `mx_available` and `implicit_mx_available` are in tier 6: a route neither blocks nor answers, so it sits with the risk metadata.
 

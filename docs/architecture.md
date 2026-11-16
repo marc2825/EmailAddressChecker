@@ -107,6 +107,8 @@ The order of the input and repeated observations do not change the result. Publi
 
 ## 3. Package layout
 
+The project is written in Python only. `composition.py` is the only module in `src/` that names a concrete adapter, and `build_verification_stack` takes no parameter for a clock, sleeper, limiter, transport, or TLS trust anchor. A local-passive deployment gets a stack with no SMTP service object at all.
+
 | Package | Holds |
 | --- | --- |
 | `domain/` | Address types, SMTP commands and session transitions, evidence, verdicts, rate-limit values. No network or storage I/O. |
@@ -154,21 +156,62 @@ A reply such as a bare `250`, `252`, or `550` is read in the context of its stag
 | Destination pacing | Global, recipient-domain, and MX-host concurrency and token budgets |
 | Abuse guard and quota | What an authenticated caller may request |
 
-Destination pacing is shared across accounts within a worker, and its keys never contain full email addresses. A probe starts only after every budget is acquired; a failed acquisition releases whatever it held. Operational refusals produce no mailbox verdict.
+Destination pacing is shared across accounts within a worker, and its keys never contain full email addresses. Pacing uses global, per-domain, and per-MX concurrency limits and token buckets; a domain's settings apply to its MX hosts too. A probe starts only after every budget is acquired, within a single wait deadline on a monotonic clock, and a failed acquisition releases whatever it held. Spent bucket state is never evicted to restore capacity. Running out of wait raises `RateLimitTimeout`, which is not a `TimeoutError` and produces no SMTP evidence, because nothing was observed. Operational refusals produce no mailbox verdict, and a temporary reply defers later work for that destination without replaying the recipient that was already touched.
+
+A verification's worst case is one rate-limit wait plus one session budget per MX candidate, because a deadline that runs out before the recipient stage is a pre-recipient failure and the next candidate gets a fresh budget and a fresh wait:
+
+```text
+configured upper bound = max_attempts × (wait_budget_seconds + session budget)
+
+defaults : 3 × ( 10 s +  30 s) =  120 s
+ceiling  : 8 × (120 s + 120 s) = 1920 s = 32 minutes
+```
+
+Each value is validated on its own, but their product has no separate bound, and the ceiling is a legal configuration. Local processing and cleanup run inside these budgets, so this is a configured bound, not a measurement.
 
 The shipped limiter and quota stores belong to one process. Deployments run one worker process, and separate processes or replicas get no global pacing or quota guarantee. Distributed execution would need a shared atomic limiter, admission coordination, and consistent kill switches. See [operations](operations.md) and [ADR 0020](adr/0020-local-batch-and-release.md).
 
 Limiter memory is bounded by the idle-entry cap plus the entries held by in-flight callers, and admission control must bound those callers. The limiter TTL applies to idle entries only and is not required to exceed the longest SMTP session.
 
+### Requests and refusals
+
+- A `Principal` comes only from the authenticator; no handler builds one from a request field, and there is no anonymous principal. Per-principal concurrency is a separate admission gate, so the destination buckets stay keyed by destination.
+- The request schema is closed. An unknown key is refused, so no MX, sender, TLS, CA, retry, cache, or catch-all override can be passed.
+- Admission bounds both running and waiting work; a request that finds the queue full is refused at once.
+- A total deadline covers admission and verification. When it expires the request is refused; no partial verdict is returned, because a caller could not tell "the server was opaque" from "we ran out of time". `VerificationRefused` is neither a `TimeoutError` nor an `OSError`.
+- Refusals use service-level response codes and carry no status.
+
 ### Jobs, caching, and persistence
 
 Active checks run as asynchronous jobs: an API request is admitted and gets the job state back, so no API worker waits on an SMTP dialogue. Idempotency binds the caller, the normalized target, and the submitted key, and retries are limited by the recipient-contact history. A cache hit must not enqueue a new probe.
 
-Verdict caches are scoped by account, normalized target, sender identity, ruleset, dataset fingerprint, and expiry. The DNS cache is bounded separately by record type and TTL and does not share recipient observations across accounts. A cached result never overrides the conservative status rules.
+- Job states are `pending`, `running`, `retry_scheduled`, `completed`, `failed`, and `cancelled`. Transitions follow a closed table that is checked at run time, and the last three states are terminal.
+- A job identifier is `secrets.token_urlsafe(32)`, carries no information, and can never contain `@`. Every job belongs to an authenticated principal, and another account's job answers exactly like an unknown one: `404`.
+- `DELETE /v1/checks/{id}` cancels a job and is idempotent; cancellation reaches the SMTP dialogue and releases the permit, the lease, and the socket. A client disconnecting does not cancel an accepted job.
+- The executor is a port. `InMemoryJobExecutor` has a fixed set of workers and a bounded queue that refuses when full, and it is not a service-active worker. An executor that refuses a job leaves no non-terminal job behind.
+
+Verdict caches are scoped by account, normalized target, sender identity, ruleset, dataset fingerprint, and expiry; every key component is an HMAC under the operator's correlation key. Only an active verification's verdict is cached. It lives no longer than the shortest TTL among its decision-relevant reasons (all reason codes except the four risk-only ones), using the DNS TTL for DNS reasons and the `docs/requirements.md` section 13 table for SMTP reasons. Any other reason, `internal_error`, and a DNS TTL of zero make the verdict uncacheable. Expiry is part of the lookup, and there is no refresh field. A stored verdict holds digests and published vocabulary only. A cached result never overrides the conservative status rules.
+
+The DNS cache is bounded separately by record type and TTL and does not share recipient observations across accounts. Concurrent lookups for the same key reach the resolver once; lookups for different keys never wait on each other.
 
 Local `check` and `batch` reuse the passive verification service, keep the input order, and bound concurrent work and memory. Local batch has no job database or checkpoint, and `--start-row` begins a new passive run rather than resuming an old one. Offline expansion produces a bounded number of candidates and calls neither DNS nor SMTP.
 
-The internal active batch subsystem runs ordinary authorized jobs instead of a second SMTP path. Its durable state, ownership, fairness, and recovery are described in [ADR 0018](adr/0018-controlled-batch-execution.md).
+### Active batch
+
+Active batch is library-only and runs ordinary authorized jobs, never a second SMTP path.
+
+- It runs only when the feature is enabled and an operator has approved the account; authentication alone is not approval. Both checks happen before the file is read.
+- CSV input has byte and row limits checked before decoding, accepts one leading UTF-8 byte order mark, needs a fixed `email` column, and sends each cell through the ordinary address parser. An unparseable row is reported as `rejected`, never `invalid`, and the rest of the file proceeds.
+- Duplicates are detected by HMAC. Bounded workers rotate fairly across exchangers and then domains, using exchangers learned from the ordinary pipeline.
+- Every row ends in an explicit state, and the report balances against the file. Report cells are escaped against spreadsheet formulas, and no raw SMTP reply can appear in a row.
+- Row state is persisted. A row is claimed before its job is submitted, so a restart presents the same idempotency handle and never starts a second verification.
+- Results expire, belong to one principal, and are checked for ownership at three independent points.
+- The submitted text is the only plaintext kept, and only so an unsubmitted row can still be submitted after a restart. It is cleared when the row reaches a terminal state and after `input_retention_seconds`, capped at 24 hours; a row whose input expired is recorded as refused.
+- The owner can delete a batch, which removes its rows, retained plaintext, and result but no child job. Another account's delete removes nothing and does not reveal whether the batch exists.
+
+### Accept-all experiment
+
+The accept-all experiment is library-only operator tooling. It is a separate verification against a non-dictionary random local part, never a second `RCPT TO` in an ordinary verification. Five gates, all closed by default, must be opened; enabling it does not authorize it. It has its own domain budget, far below the ordinary one. Only decided answers are cached, for seven days, and the only thing published is the `accept_all_suspected` risk flag; aggregation is unchanged.
 
 ## 5. Failure isolation
 

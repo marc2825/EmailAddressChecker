@@ -1,23 +1,35 @@
 # Dataset policy
 
-## 1. Initial data categories
+## 1. Data categories and current state
 
-- disposable domains;
-- free-mail domains;
-- role local parts;
-- provider MX patterns.
+| Dataset | Used for | State |
+| --- | --- | --- |
+| Role local parts | `role_account` risk flag | Populated; entries authored in this repository (`source: project-maintained`) |
+| Disposable domains | `disposable_domain` risk flag | Empty; declared unavailable |
+| Free-mail domains | `free_mail` risk flag | Empty; declared unavailable |
+| Provider MX patterns | Provider metadata | Empty; declared unavailable |
 
-No dataset is included in the starter beyond illustrative placeholders.
+`src/emailcheck/data/passive/` holds the snapshots, and its `README.md` records the state of each one and how to lift the declaration.
 
-`src/emailcheck/data/passive/` holds the current snapshots and `src/emailcheck/data/passive/README.md` records
-the state of each one. As of Phase 3, only the role list ships populated: its
-entries are authored in this repository, so its provenance is checkable. The
-disposable, free-mail, and provider files ship empty because no upstream licence
-could be verified, and ADR 0007 records that inventing one was refused.
+The three empty datasets are declared unavailable because no upstream licence, source, or version could be verified; checking provenance needs network access to the upstream, which development did not have, and no licence is ever invented. No placeholder dataset was created. A short list of well-known domains would make the feature look present while being wrong about every domain missing from it, and would give a reviewer nothing to verify. An empty list that says it is empty is something a caller can reason about.
+
+Absence produces no evidence, and no negative evidence. An empty disposable list does not mean a domain is not disposable, an empty free-mail list does not mean a domain is not free mail, and an empty provider list gives `provider_family = unknown` ("could not be answered", not "nothing matched"). None of them can produce a verdict, status, confidence level, or risk flag in either direction.
+
+`emailcheck --report-versions` reports an empty dataset as `unavailable-by-declaration` and a populated one by its own version, together with the entry counts. It reports the snapshot the deployment actually loaded.
+
+The declaration is reversible by data. Populating a dataset needs the steps in section 3 and an update to `src/emailcheck/data/passive/README.md` recording when it became available. No code change is needed.
+
+### Classification rules
+
+Classification produces risk flags, provider metadata, and weak, non-temporary evidence. It never produces `invalid` or `likely_deliverable`; `PassiveClassification` has no status field.
+
+The four signals are separate values, not a score or one combined enum, because each answers a different question: a disposable domain may accept mail, a role mailbox is usually deliverable and monitored, a free-mail domain says nothing about one mailbox, and a provider family says nothing about any of them. `free_mail = true, disposable = false` must stay expressible.
+
+Free mail is a property of the domain, not of its mail host. A company domain whose MX points at a consumer provider is not free mail, so provider inference and free-mail membership read different inputs. Role and provider rules are in sections 4 and 5.
 
 ## 2. Required metadata
 
-Every dataset artifact must have:
+Every dataset file carries:
 
 ```yaml
 name:
@@ -31,53 +43,40 @@ update_frequency:
 maintainer:
 ```
 
-Every field is a string, mandatory, and validated. A value is at most 512
-characters and may not contain CR, LF, NUL, another control character, a Unicode
-format character such as a bidirectional override, or a line or paragraph
-separator. A metadata value becomes `Evidence.source_version` and can reach an
-API response or a log line, so it must not be able to break one. Unknown
-metadata fields are rejected rather than ignored.
+Every field is a mandatory, validated string of at most 512 characters, without CR, LF, NUL, other control characters, Unicode format characters such as bidirectional overrides, or line and paragraph separators. A metadata value becomes `Evidence.source_version` and can reach an API response or a log line, so it must not be able to break one. Unknown metadata fields are rejected.
 
-The surrounding document is closed the same way: its entries array is mandatory
-even when the dataset is empty (`domains = []`), and an unknown top-level field
-fails the load. A typo therefore lands on a missing-key error or an
-unknown-field error, never on a silently empty dataset.
+The document around it is closed in the same way. The entries array is mandatory even when empty (`domains = []`), and an unknown top-level field fails the load, so a typo causes an error, never a silently empty dataset. The loader fails closed.
 
 ## 2.1 Override files
 
-An override file corrects one classification without editing a vendored
-snapshot. It declares `target`, and only `"disposable"` is implemented; any
-other target is rejected rather than ignored.
+An override file corrects one classification without editing a vendored snapshot; false positives are fixed in data, not in code. It declares a `target`; only `"disposable"` is implemented, and any other target is rejected.
 
-Its two arrays are `not_disposable` and `disposable`, named for the membership
-they assert. They are not a delivery decision: allow/deny in this project means
-the destination policy in `security/destination.py`, and the two vocabularies
-are deliberately kept apart. A file using the earlier `allow` and `deny` names
-is refused by name. Free-mail overrides are not supported; whether to add them
-is decided before that list is populated.
+Its two arrays, `not_disposable` and `disposable`, are named for the membership they assert. They are not delivery decisions: allow and deny in this project mean the destination policy in `security/destination.py`, and the two vocabularies are kept apart. A file that uses the older `allow` and `deny` names is refused. Free-mail overrides are not supported yet; whether to add them is decided before that list is populated.
 
 ## 3. Update process
 
-1. Retrieve through a reviewed script.
-2. Verify source and license.
+1. Retrieve the data with a reviewed script.
+2. Verify the source and the licence.
 3. Normalize deterministically.
-4. Generate checksum and metadata.
+4. Generate the checksum and metadata.
 5. Review additions and removals.
-6. Run false-positive fixtures.
-7. Commit data and metadata together.
-8. Do not download mutable lists at application startup.
+6. Run the false-positive fixtures.
+7. Commit the data and metadata together.
+
+Never download a mutable list when the application starts.
 
 ## 4. Role accounts
 
-Role detection is a risk flag, not an invalid verdict. Keep the list small,
-documented, and locale-aware. Avoid classifying common personal names as roles.
+Role detection is a risk flag, never an invalid verdict. Keep the list small, documented, and aware of locale, and do not classify common personal names as roles.
+
+Matching is exact, on a comparison form that is lowercased and drops a `+tag`; the `LocalPart` itself is never changed. There is no substring rule: `mysupport` and `support-team` are not roles unless the dataset lists them, and dots are kept, so `info.desk` is not `info`.
 
 ## 5. Provider patterns
 
-Provider patterns may select a response parser or metadata label. They may not
-produce mailbox validity by themselves.
+Provider patterns may select a reply parser or a metadata label, never mailbox validity on their own. Inference is a guess from naming: hosting changes, gateways and filtering services hide the real provider, and nobody refreshes the guess.
 
-The list is expected to hold tens of rows, low hundreds at the most: one suffix
-covers every subdomain beneath it. Matching is a linear scan, which suits that
-size. A submission above 500 rows is reviewed rather than merged, and a genuine
-need for a large one means indexing the matcher first.
+- A host matches a suffix only when it equals it or ends with `"." + suffix`, so `google.com.evil.example` and `notgoogle.com` never match.
+- Families are collected as a set across a domain's MX hosts, so record order does not matter, and two different families give `unknown`. `unknown` means the question could not be answered; `other` means it was answered and nothing matched.
+- Only MX hosts are read. An implicit A/AAAA route and a Null MX have no provider.
+
+The list should hold tens of rows, a few hundred at most, because one suffix covers every subdomain beneath it. Matching is a linear scan, which suits that size. A submission over 500 rows is reviewed instead of merged, and a real need for a large list means indexing the matcher first.
