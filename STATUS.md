@@ -1,42 +1,47 @@
 # Project status
 
-EmailAddressChecker provides conservative email deliverability estimates. It does not verify mailbox existence or guarantee delivery.
+EmailAddressChecker estimates email deliverability conservatively. It does not verify that a mailbox exists and does not guarantee delivery.
 
-## Available functionality
+## Functionality
 
 | Component | Status | Scope |
 | --- | --- | --- |
 | Syntax and DNS/MX checks | Available | Local checks do not contact SMTP servers. |
-| Local batch checks | Available | CSV/TXT input, ordered JSON/CSV output, bounded concurrency and duplicate handling. |
-| Address candidate expansion | Available | Offline wildcard expansion with configurable substitutions and output limits. |
-| Risk classification | Partial | Role-address data is included; disposable-domain, free-mail and provider datasets are currently empty. |
-| Active SMTP checks | Restricted | Library and service components exist, but require a separately configured, explicitly authorized deployment. |
-| Active batch service | Not publicly exposed | The controlled batch subsystem is implemented but is not wired to the public CLI or API. |
-| Service infrastructure | Library only | API-key auth, HTTP request handler, job/verdict/account stores, executor, retention, accept-all experiment and beta harness are tested library components; no HTTP server ships. See [component reachability](docs/architecture.md#component-reachability). |
-| Package release | Pending | Version 0.1.0 is marked unreleased; packaging and publishing workflows are prepared. |
+| Local batch checks | Available | CSV/TXT input, JSON/CSV output in input order, bounded concurrency, duplicate handling. |
+| Candidate expansion | Available | Offline wildcard expansion with configurable substitutions and output limits. |
+| Risk classification | Partial | Role-address data is included; the disposable-domain, free-mail, and provider datasets are empty. |
+| Active SMTP checks | Restricted | Requires a separately configured, explicitly authorized deployment. |
+| Service components | Library only | API-key auth, the HTTP request handler, job/verdict/account stores, the executor, retention, active batch, the accept-all experiment, and the beta harness are tested but not reachable from the CLI. No HTTP server ships. See [component reachability](docs/architecture.md#component-reachability). |
+| Package release | Pending | 0.1.0 is unreleased; packaging and publishing workflows are ready. |
 
 ## Roadmap for service components
 
-No public service surface is scheduled for 0.1.0. Connecting the library-only components is planned as separate, reviewed changes in prerequisite order: (1) an HTTP binding for the existing request handler, passive endpoint first, with a dependency ADR and the documented binding stop conditions; (2) active jobs behind it, only for a deployment that has completed the readiness checklist; (3) active batch upload for operator-approved accounts. The accept-all experiment and beta harness remain operator tooling. None of these becomes reachable from the CLI by configuration alone. Details: [architecture](docs/architecture.md#component-reachability).
+Nothing in 0.1.0 exposes a public service. Each step below is a separate, reviewed change, in this order:
+
+1. An HTTP binding for the existing request handler, passive endpoint first, with a dependency ADR and the documented binding stop conditions.
+2. Active jobs behind it, only for a deployment that has completed the readiness checklist.
+3. Active batch upload for operator-approved accounts.
+
+The accept-all experiment and the beta harness stay operator tooling. Configuration alone never makes any of these reachable from the CLI. Details are in the [architecture](docs/architecture.md#component-reachability).
 
 ## Limitations
 
-- Local checks cannot establish whether an individual mailbox exists. DNS/MX records describe mail routing, not recipient acceptance.
-- SMTPUTF8 local parts and certain valid but unsupported address forms produce an unknown result rather than a false invalid verdict.
-- Local batch processing has input, concurrency and quota limits. It has no persistent checkpoint or automatic resume; `--start-row` starts a new run.
-- Local quota and rate-limit state is process-scoped. Independent processes or replicas do not share a global enforcement budget.
-- Missing classification datasets provide no positive or negative classification evidence.
+- Local checks cannot show whether a mailbox exists. DNS/MX records describe mail routing, not whether a recipient is accepted.
+- SMTPUTF8 local parts and some valid but unsupported address forms give `unknown`, never a false `invalid`.
+- Local batch processing has input, concurrency, and quota limits. It has no checkpoint or automatic resume; `--start-row` starts a new run.
+- Local quota and rate-limit state belongs to one process. Separate processes or replicas do not share a budget.
+- Empty classification datasets give no evidence either way.
 
-See the [README](README.md), [Japanese CLI reference](docs/usage-ja.md) and [status model](docs/status-model.md) for usage and result semantics.
+Usage and result meanings are in the [README](README.md), the [Japanese CLI reference](docs/usage-ja.md), and the [status model](docs/status-model.md).
 
 ## Active deployment
 
-Active probing is disabled by default and must be explicitly authorized for targets the operator owns or has permission to test. Authentication, sender identity, destination controls, rate limits, TLS, monitoring and incident procedures are deployment responsibilities.
+Active probing is off by default. It must be explicitly authorized, and only for targets the operator owns or has permission to test. The deployment is responsible for authentication, sender identity, destination controls, rate limits, TLS, monitoring, and incident procedures.
 
-Before enabling active checks, complete the [readiness checklist](docs/readiness-checklist.md) and follow the [operations guide](docs/operations.md). `emailcheck --check-deployment` is an advisory configuration report, **not** an approval or a live connectivity test; its exit code is always zero.
+Before enabling it, complete the [readiness checklist](docs/readiness-checklist.md) and follow the [operations guide](docs/operations.md). `emailcheck --check-deployment` only reports on configuration. It is not an approval or a connectivity test, and it always exits with 0.
 
-Publishing the source or passing CI does not authorize external probing or certify production readiness.
+Neither publishing the source nor passing CI authorizes external probing or certifies a deployment as production-ready.
 
 ## Release and verification
 
-For the current implementation, consult [CI](https://github.com/marc2825/EmailAddressChecker/actions) and run `make check`. Release status and package-publishing steps are documented in [CHANGELOG.md](CHANGELOG.md) and [docs/releasing.md](docs/releasing.md). Historical release-preparation results are retained in [docs/release-report.md](docs/release-report.md).
+Check [CI](https://github.com/marc2825/EmailAddressChecker/actions) for the current state and run `make check` locally. Release status and publishing steps are in [CHANGELOG.md](CHANGELOG.md) and [docs/releasing.md](docs/releasing.md); past release-preparation results are in [docs/release-report.md](docs/release-report.md).

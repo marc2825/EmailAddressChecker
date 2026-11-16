@@ -1,55 +1,43 @@
 # Changelog
 
-This file records user-visible changes. Implementation details and design rationale belong in the [architecture decisions](docs/adr/); historical release checks are recorded in the [release report](docs/release-report.md).
+This file records user-visible changes. Design reasons are in the [architecture decisions](docs/adr/), and past release checks are in the [release report](docs/release-report.md).
 
 ## [0.1.0] — Unreleased
 
-Initial release candidate for Python 3.12+.
+First release candidate, for Python 3.12+.
 
 ### Security
 
-- Require HTTPS for remote validators; HTTP is restricted to exact loopback IP
-  literals. Disable environment proxies and continue refusing every redirect.
-- Remove opportunistic plaintext SMTP; use `TLSPolicy.REQUIRED` everywhere.
-- Require dnspython 2.9.2+ for its upstream security fixes.
-- Restore documented HTTP-binding safety conditions removed during documentation
-  cleanup, and replace private-development citations with public contracts.
+- Remote validators require HTTPS; HTTP is allowed only for the exact loopback IP literals. Proxy environment variables are ignored, and every redirect is still refused.
+- Opportunistic plaintext SMTP is removed; `TLSPolicy.REQUIRED` applies everywhere.
+- dnspython 2.9.2 or later is required for its upstream security fixes.
+- The documented safety conditions for an HTTP binding, lost in an earlier documentation cleanup, are restored, and citations of private development files are replaced with public documents.
 
-Existing HTTP, proxy-dependent and opportunistic-library configurations need
-the migration described in [ADR 0021](docs/adr/0021-required-encryption-at-network-boundaries.md).
+Configurations that use HTTP, rely on proxies, or set the opportunistic library policy need the migration in [ADR 0021](docs/adr/0021-required-encryption-at-network-boundaries.md).
 
 ### Added
 
-- Conservative email checks using syntax and DNS/MX evidence, with a separate, explicitly authorized active SMTP capability.
-- Passive CSV/TXT batch processing with ordered JSON/CSV results, duplicate handling, progress reporting, bounded work, and atomic file output.
+- Conservative email checks from syntax and DNS/MX evidence, with a separate, explicitly authorized active SMTP capability.
+- Passive CSV/TXT batch processing: JSON/CSV results in input order, duplicate handling, progress reporting, bounded work, and atomic file output.
 - Offline wildcard expansion with configurable candidate sets and generation limits.
-- Validated TOML budget configuration and version/dataset reporting.
-- Python package distribution (`email-address-checker`) while retaining the `emailcheck` CLI and import name.
+- Validated TOML budget configuration, and reports of versions and datasets.
+- The `email-address-checker` package distribution; the CLI and import name stay `emailcheck`.
 
 ### Fixed
 
-- The service batch CSV parser accepts a leading UTF-8 byte order mark, as the
-  local CLI already did; spreadsheet "CSV UTF-8" exports were refused for
-  lacking an `email` column (issue #2).
-- The DNS cache locks per key instead of on 64 shared stripes, so a slow
-  lookup no longer delays unrelated domains; identical concurrent lookups are
-  still coalesced (issue #2).
+- The service batch CSV parser accepts a leading UTF-8 byte order mark, as the local CLI already did. Spreadsheet "CSV UTF-8" exports were refused for lacking an `email` column (issue #2).
+- The DNS cache locks each key separately instead of using 64 shared stripes, so a slow lookup no longer delays unrelated domains. Identical concurrent lookups are still combined into one (issue #2).
 
 ### Documentation and tests
 
-- State that single-label (`user@localhost`) and unbracketed numeric
-  (`user@192.0.2.1`) domains are accepted as DNS names and judged by DNS and
-  the destination policy, never reinterpreted as address literals
-  ([ADR 0005](docs/adr/0005-idna-uts46-domain-encoding.md) judgment 11).
-- List which service components are library-only and the prerequisite order
-  for connecting them ([architecture](docs/architecture.md#component-reachability)).
-- Separate specification tests from structural tests with the `inspection` and
-  `docs_contract` markers (`make test-spec`, `make test-structure`); CI runs
-  them as separate steps.
+- Single-label (`user@localhost`) and unbracketed numeric (`user@192.0.2.1`) domains are documented as DNS names, judged by DNS and the destination policy and never read as address literals ([ADR 0005](docs/adr/0005-idna-uts46-domain-encoding.md), judgment 11).
+- The [architecture](docs/architecture.md#component-reachability) lists which service components are library-only and the order for connecting them.
+- Specification tests and structural tests are separated by the `inspection` and `docs_contract` markers (`make test-spec`, `make test-structure`), and CI runs them as separate steps.
+- The documentation is rewritten for readability, without changing documented behavior.
 
 ### Notes
 
-- A mail route or SMTP acceptance does not prove that a mailbox exists.
-- Disposable-domain, free-mail, and provider datasets are currently empty; the role-account list is included.
-- Active batch processing remains internal and is not exposed through the public CLI/API. Active SMTP requires a separately authorized deployment.
-- Packaging and publishing workflows are prepared; **version 0.1.0 has not been published to PyPI**.
+- Neither a mail route nor an SMTP acceptance proves that a mailbox exists.
+- The disposable-domain, free-mail, and provider datasets are empty; the role-account list is included.
+- Active batch processing is internal and not exposed through the CLI or an API. Active SMTP requires a separately authorized deployment.
+- Packaging and publishing workflows are ready, but 0.1.0 has not been published to PyPI.
