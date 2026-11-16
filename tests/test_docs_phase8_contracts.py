@@ -29,6 +29,8 @@ from emailcheck.application.readiness import UNAVAILABLE_DATASETS
 from emailcheck.domain.beta import BetaExecutionState
 from emailcheck.domain.readiness import DEPLOYMENT_GATES, GateStatus
 
+pytestmark = pytest.mark.docs_contract
+
 REPO: Final = Path(__file__).resolve().parents[1]
 DOCS: Final = REPO / "docs"
 RUNBOOKS: Final = DOCS / "runbooks"
@@ -359,6 +361,7 @@ def test_the_report_template_does_not_claim_connections_per_job() -> None:
     assert "no test in this repository measures it" in flat(template)
 
 
+@pytest.mark.inspection
 def test_the_loopback_load_test_does_not_claim_a_production_metric() -> None:
     """F5: the file says what it exercises, and what it therefore cannot measure.
 

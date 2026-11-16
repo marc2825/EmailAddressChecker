@@ -26,7 +26,7 @@ python -m pip install -e '.[dev]'
 make check
 ```
 
-`make check` runs Ruff linting and formatting checks, mypy, pytest, the forbidden-SMTP-command scanner, and a CLI smoke check. To run an individual check:
+`make check` runs Ruff linting and formatting checks, mypy, pytest, the forbidden-SMTP-command scanner, and a CLI smoke check. `make test-spec` and `make test-structure` run the two halves of the suite separately; see [Specification tests and structural tests](#specification-tests-and-structural-tests). To run an individual check:
 
 ```bash
 python -m pytest
@@ -59,6 +59,30 @@ Manual integration with real infrastructure requires a separately authorized env
 | Contract / inspection | Invariants not captured by examples | Forbidden SMTP verbs, dependency direction, reason-code/doc sync, public field allowlists |
 
 Changes to an interface should add tests at the closest layer and, where safety depends on wiring, one composition-level regression test. Tests must fail on the corresponding unsafe behavior; an assertion that merely restates a mock's configured return value is insufficient.
+
+### Specification tests and structural tests
+
+Contract and inspection tests read the code or the documents instead of running the code, so a harmless refactor or rewording can fail them. They are kept apart from specification tests by two registered pytest markers:
+
+| Marker | Applies to | Typical failure after a harmless change |
+| --- | --- | --- |
+| `inspection` | Tests that read project source or its syntax tree | A function moved or was renamed; an import was restructured |
+| `docs_contract` | Tests that read published documentation | A sentence or table in `docs/` or a README was reworded |
+
+Everything else is a specification test: it exercises behavior through public functions, ports, fakes, or loopback fixtures.
+
+```bash
+make test-spec        # python -m pytest -m "not inspection and not docs_contract"
+make test-structure   # python -m pytest -m "inspection or docs_contract"
+make test             # both; CI runs the two groups as separate steps
+```
+
+Rules:
+
+- **Prefer a specification test.** Use an inspection test only for a property that no example can show: the absence of a code path (no `DATA`, no unverified TLS context), dependency direction, or a single construction point. Its docstring names the invariant it protects.
+- **Assert the property, not the spelling.** Check imports, calls, or names in the syntax tree rather than exact source lines, so a reformatted line does not fail the test.
+- **When a refactor fails a structural test**, confirm the invariant still holds and the specification tests pass, then update the inspection in the same change. Never delete or weaken a guard only to make the run green; a change that actually removes the property is a real failure.
+- **Mark every new structural test.** A module named `*_inspection.py` or `test_docs_*.py` carries the marker module-wide; elsewhere, mark the individual test. `tests/test_test_taxonomy.py` scans the suite and fails when a test that reads source or documentation is unmarked, or when a per-test marker would move a specification test out of the specification run. Its `NOT_STRUCTURAL` list records, with reasons, the few tests the broad scan flags that are not structural (for example, the SMTP-command scanner's own specification, which feeds it synthetic source).
 
 ## Coverage by subsystem
 

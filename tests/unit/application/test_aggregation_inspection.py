@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.inspection
+
 SOURCES = {
     "aggregate": Path("src/emailcheck/application/aggregate.py"),
     "syntax_evidence": Path("src/emailcheck/application/syntax_evidence.py"),

@@ -236,6 +236,7 @@ def _rate_limiter_implementations() -> list[str]:
     return found
 
 
+@pytest.mark.inspection
 async def test_only_the_reviewed_limiter_ships_in_production() -> None:
     """A second implementation is how a permissive one arrives unnoticed.
 

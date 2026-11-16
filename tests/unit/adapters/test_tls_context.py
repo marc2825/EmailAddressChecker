@@ -81,6 +81,7 @@ def test_the_trust_value_carries_nothing_but_a_file() -> None:
         assert forbidden not in fields
 
 
+@pytest.mark.inspection
 def test_nothing_in_the_project_disables_verification() -> None:
     """Asserted over the whole tree, so a future module cannot add it quietly."""
     root = Path(__file__).resolve().parents[3] / "src" / "emailcheck"
@@ -102,6 +103,7 @@ def test_nothing_in_the_project_disables_verification() -> None:
     assert offences == [], f"certificate verification is disabled somewhere: {offences}"
 
 
+@pytest.mark.inspection
 def test_no_unverified_context_helper_is_used() -> None:
     """`ssl._create_unverified_context` is the one-line way to undo all of this."""
     root = Path(__file__).resolve().parents[3] / "src" / "emailcheck"
@@ -111,6 +113,7 @@ def test_no_unverified_context_helper_is_used() -> None:
         assert "_create_default_https_context" not in source, module.name
 
 
+@pytest.mark.inspection
 def test_a_trust_anchor_comes_from_operator_configuration_only() -> None:
     """Trust may be widened, and only by whoever runs the deployment.
 
@@ -155,6 +158,7 @@ def test_a_trust_anchor_comes_from_operator_configuration_only() -> None:
     assert parameters["ca_file"].default is None
 
 
+@pytest.mark.inspection
 def test_the_transport_builds_its_context_through_this_function() -> None:
     """One builder, one call site: the adapter cannot be handed a context."""
     module = (

@@ -214,6 +214,7 @@ def _denied(address: str) -> object:
     )
 
 
+@pytest.mark.inspection
 @pytest.mark.asyncio
 async def test_the_recheck_uses_the_shared_policy_not_a_private_list() -> None:
     """The adapter must reuse Phase 2's function, not keep its own allowlist."""
@@ -279,6 +280,7 @@ def test_the_only_write_capability_takes_a_wire_command() -> None:
         assert parameters == {"command": "WireCommand"}, owner
 
 
+@pytest.mark.inspection
 def test_the_adapter_is_the_only_module_that_imports_ssl() -> None:
     """TLS lives in the adapter tree, and nowhere the domain can reach.
 
@@ -544,12 +546,14 @@ def test_wrapping_a_socket_is_not_a_public_entry_point() -> None:
     assert not hasattr(AsyncioSMTPConnection, "over_socket")
 
 
+@pytest.mark.inspection
 def test_no_production_code_outside_the_adapter_wraps_a_socket() -> None:
     """The one production caller is `connect`, in the adapter's own module."""
     assert _external_mentions_of("_over_socket") == []
     assert _call_sites_in_the_adapter("_over_socket") == 1, "connect is the only caller"
 
 
+@pytest.mark.inspection
 def test_no_production_code_outside_the_adapter_upgrades_a_bare_host_name() -> None:
     """`_start_tls_over` gets the same treatment `_over_socket` already had.
 
@@ -563,6 +567,7 @@ def test_no_production_code_outside_the_adapter_upgrades_a_bare_host_name() -> N
     assert _call_sites_in_the_adapter("_start_tls_over") == 1, "start_tls is the only caller"
 
 
+@pytest.mark.inspection
 def test_the_tls_primitive_cannot_be_selected_by_configuration() -> None:
     """No flag, key, or request field chooses between the two entry points.
 

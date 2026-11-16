@@ -86,6 +86,7 @@ async def test_an_empty_request_set_is_permitted() -> None:
     assert (await InProcessQuotaStore().consume([], now=0.0)).permitted
 
 
+@pytest.mark.inspection
 @asyncio_test
 async def test_consume_takes_no_lock_because_it_awaits_nothing_in_the_middle() -> None:
     """The check and the commit are atomic on one event loop because there is no

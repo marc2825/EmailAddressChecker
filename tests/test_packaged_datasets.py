@@ -320,6 +320,7 @@ def test_the_build_configuration_carries_the_datasets(tmp_path: Path) -> None:
     assert (site / "emailcheck" / "data" / "passive" / "role_local_parts.toml").is_file()
 
 
+@pytest.mark.inspection
 def test_updating_a_dataset_needs_no_python_change() -> None:
     """The repository's published promise, checked against the packaging config.
 
@@ -339,6 +340,7 @@ def test_updating_a_dataset_needs_no_python_change() -> None:
             assert version not in code, f"{source.name} hard-codes the dataset version {version}"
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("name", SHIPPED_FILES)
 def test_the_loader_reaches_each_file_through_the_resource_api(name: str) -> None:
     """No path is built from `__file__`, a parent walk, or the working directory."""

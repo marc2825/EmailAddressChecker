@@ -199,6 +199,7 @@ async def test_the_service_asks_the_store_before_it_submits(tmp_path: Path) -> N
     assert report.state_summary.get("submitted", 0) == 0
 
 
+@pytest.mark.inspection
 def test_a_row_left_claimed_by_a_dead_process_is_not_claimed_again() -> None:
     """The other half of the exclusive claim: recovery must still work.
 
@@ -380,6 +381,7 @@ def test_a_batch_store_written_before_the_fence_is_refused_by_version(tmp_path: 
 # --- D10: composition and coupling -------------------------------------------
 
 
+@pytest.mark.inspection
 def test_batch_is_still_reachable_from_no_request_surface() -> None:
     """Remediation D hardens batch; it does not expose it.
 
@@ -399,6 +401,7 @@ def test_batch_is_still_reachable_from_no_request_surface() -> None:
         assert "batch" not in code_without_docstrings(surface).lower()
 
 
+@pytest.mark.inspection
 def test_neither_optional_subsystem_instantiates_the_other() -> None:
     """D5 and D10 stay independent: enabling one may not enable the other."""
     batch_code = Path("src/emailcheck/application/batch.py").read_text()
@@ -412,6 +415,7 @@ def test_neither_optional_subsystem_instantiates_the_other() -> None:
 # --- D5: accept-all ----------------------------------------------------------
 
 
+@pytest.mark.inspection
 def test_accept_all_authorizes_every_reachable_exchanger() -> None:
     """D5: a block a fallback could step past is not a block.
 

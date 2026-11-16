@@ -440,6 +440,7 @@ def imported_modules(path: Path) -> set[str]:
     return names
 
 
+@pytest.mark.inspection
 @pytest.mark.parametrize("layer", ["domain", "ports"])
 def test_no_lower_layer_module_imports_the_application_layer(layer: str) -> None:
     """`docs/architecture.md`'s direction, as a property of the imports.
@@ -462,6 +463,7 @@ def test_no_lower_layer_module_imports_the_application_layer(layer: str) -> None
     assert offenders == [], offenders
 
 
+@pytest.mark.inspection
 def test_the_remote_port_speaks_the_lower_layer_contract() -> None:
     """Named explicitly as well, because the sweep above would also pass if the
     port stopped naming a job type at all."""
@@ -471,6 +473,7 @@ def test_the_remote_port_speaks_the_lower_layer_contract() -> None:
     assert not any(module.startswith("emailcheck.application") for module in modules)
 
 
+@pytest.mark.inspection
 def test_the_remote_adapter_does_not_reach_around_into_application() -> None:
     """An adapter that compensated by importing application would move the
     violation rather than fix it."""
@@ -480,6 +483,7 @@ def test_the_remote_adapter_does_not_reach_around_into_application() -> None:
     assert not any(module.startswith("emailcheck.application") for module in modules)
 
 
+@pytest.mark.inspection
 def test_the_contract_module_imports_only_the_domain() -> None:
     """It is a data contract, so it may know published vocabulary and nothing
     else — no store, no clock, no orchestration."""

@@ -987,6 +987,7 @@ async def test_the_dialogue_is_the_same_whoever_hosts_the_domain(domain: str) ->
     assert transcripts[0] == transcripts[1]
 
 
+@pytest.mark.inspection
 async def test_no_smtp_module_names_a_mail_provider() -> None:
     """A behavioural branch has to be written down somewhere, so this looks.
 
@@ -1065,6 +1066,7 @@ def _application_smtp_modules() -> list[object]:
     return sorted(root.glob("*smtp*.py"))
 
 
+@pytest.mark.inspection
 async def test_no_application_smtp_module_names_a_status() -> None:
     """The 4A inspection covers `domain/smtp*`; this covers the layer above it.
 
@@ -1112,6 +1114,7 @@ async def test_no_application_smtp_module_names_a_status() -> None:
     assert offences == [], f"Phase 5 vocabulary in a Phase 4 module: {offences}"
 
 
+@pytest.mark.inspection
 async def test_no_application_smtp_module_imports_verdict_vocabulary() -> None:
     import ast
 

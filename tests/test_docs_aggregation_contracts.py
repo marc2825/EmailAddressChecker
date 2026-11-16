@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.docs_contract
+
 ROOT = Path(__file__).resolve().parents[1]
 ADR = ROOT / "docs" / "adr" / "0012-evidence-aggregation-and-final-status.md"
 STATUS_MODEL = ROOT / "docs" / "status-model.md"

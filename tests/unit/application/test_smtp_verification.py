@@ -689,6 +689,7 @@ async def test_a_mapper_failure_before_the_recipient_also_fails_loudly(
     assert calls == ["mapped"]
 
 
+@pytest.mark.inspection
 async def test_the_touch_decision_is_taken_before_the_mapper_runs() -> None:
     """Pinned on the source, because behaviour cannot show an *ordering*.
 

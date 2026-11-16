@@ -150,6 +150,7 @@ def test_an_observation_keeps_a_summary_rather_than_every_sample() -> None:
 # --- inspection --------------------------------------------------------------
 
 
+@pytest.mark.inspection
 def test_the_metrics_port_publishes_no_method_taking_free_text() -> None:
     """Behaviour cannot show the absence of an API, so this is read from the
     syntax tree — with docstrings excluded, because this module explains at

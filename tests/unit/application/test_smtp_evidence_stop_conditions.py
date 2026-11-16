@@ -147,6 +147,7 @@ def test_every_published_outcome_still_maps_through_the_public_entry_point() -> 
         assert evidence.reason in ReasonCode
 
 
+@pytest.mark.inspection
 def test_the_exhaustiveness_guard_is_called_before_any_branch_decides() -> None:
     """Read out of the syntax tree, because position is what makes it total.
 
@@ -173,6 +174,7 @@ def test_the_exhaustiveness_guard_is_called_before_any_branch_decides() -> None:
     assert calls[0] < min(returns)
 
 
+@pytest.mark.inspection
 def test_the_exhaustiveness_guard_uses_assert_never_rather_than_a_default() -> None:
     """Read out of the syntax tree, because a default is what this forbids.
 
@@ -205,6 +207,7 @@ def test_the_exhaustiveness_guard_uses_assert_never_rather_than_a_default() -> N
     assert {outcome.name for outcome in RecipientStageOutcome} <= named
 
 
+@pytest.mark.inspection
 def test_the_guard_is_not_the_dispatch_so_the_4d_barriers_survive() -> None:
     """A `match` that routed the outcome would delete a reviewed barrier.
 

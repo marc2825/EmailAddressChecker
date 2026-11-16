@@ -72,6 +72,13 @@ exclude = ["*.toml.example"]
 addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
 asyncio_mode = "strict"
+# Structural tests are kept apart from specification tests (issue #2); see
+# docs/test-strategy.md. `-m "not inspection and not docs_contract"` runs the
+# specification tests alone. tests/test_test_taxonomy.py enforces the marking.
+markers = [
+  "inspection: reads project source or its syntax tree to pin a structural invariant",
+  "docs_contract: reads published documentation to pin wording that must match the code",
+]
 # Finalizers may report leaked handles through pytest's unraisable hook.
 # Both paths must fail instead of leaving a successful CI run with leaks.
 filterwarnings = [

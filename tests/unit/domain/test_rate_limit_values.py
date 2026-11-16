@@ -288,6 +288,7 @@ def test_a_rate_limit_timeout_is_not_a_transport_or_smtp_error() -> None:
 # --- inspection: the limiter is neutral and reads no wall clock ------------
 
 
+@pytest.mark.inspection
 def test_the_limiter_names_no_provider() -> None:
     """Behaviour cannot enumerate the providers a branch might name."""
     import ast
@@ -332,6 +333,7 @@ def test_the_limiter_names_no_provider() -> None:
     assert found == [], f"the limiter names a provider: {found}"
 
 
+@pytest.mark.inspection
 def test_the_limiter_reads_no_wall_clock() -> None:
     """Pacing from `datetime.now()` grants a burst the moment NTP steps.
 
