@@ -62,10 +62,10 @@ def _section(path: Path, start: str, end: str) -> str:
 # --- the Phase 4D mapping is specified before Phase 4D ---------------------
 
 
-def test_the_mapping_table_exists_before_the_code_that_implements_it() -> None:
-    """4A came before 4B for this reason, and the mapping is the same shape."""
+def test_the_smtp_mapping_is_documented_with_its_inputs() -> None:
+    """The SMTP-to-evidence mapping has its own section and names every input."""
     mapping = text_of(STATUS_MODEL)
-    assert "for Phase 4D" in mapping
+    assert "## 7. SMTP observation to evidence" in mapping
     for field in (
         "stage_reached",
         "basic_code",
