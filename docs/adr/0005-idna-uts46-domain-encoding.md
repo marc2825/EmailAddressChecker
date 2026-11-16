@@ -130,6 +130,21 @@ name. They are recorded here because reversing one changes public results.
     `user@[192.0.2.1]` is an unsupported address literal. A single stray bracket
     is a broken domain and is reported as an invalid character, because reading
     it as a literal would turn a typo into `unknown` instead of `invalid`.
+11. **An unbracketed numeric domain is a DNS name, not an address literal.**
+    `user@192.0.2.1` and `user@example.123` consist of letter-digit-hyphen
+    labels, so they pass the grammar exactly as `user@localhost` does in
+    judgment 4. The parser does not reject them on the ground that a top-level
+    label is never all-numeric: that is a property of the root zone, not of the
+    grammar, and DNS reports it as evidence (the numeric label has no
+    delegation, so the answer is NXDOMAIN, `domain_nxdomain`). The parser also
+    never rewrites them into the literal `[192.0.2.1]`: that is a different,
+    unsupported form (judgment 10), and the rewrite would bypass DNS. The domain
+    is only ever resolved as a name; connection targets come solely from DNS
+    answers, which the destination policy screens, so neither form can steer a
+    connection to an arbitrary IP. Added after review issue #2 asked for this
+    behavior to be stated rather than left implicit; pinned by
+    `test_single_label_and_numeric_domains_stay_dns_names` and the mail-route
+    tests for `localhost` and unbracketed numeric domains.
 
 ## Consequences
 

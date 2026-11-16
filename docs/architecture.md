@@ -16,6 +16,34 @@ This page describes the current component boundaries and runtime behavior. For t
 
 The active path requires authentication, explicit authorization, destination controls, TLS, pacing, and an operator-approved deployment. The default local stack has **no SMTP component**, rather than a disabled SMTP component reachable through a flag. See [readiness](readiness-checklist.md) and [operations](operations.md).
 
+### Component reachability
+
+Much of the code is service infrastructure that the installed `emailcheck` command does not reach. It is kept, tested, and composed only through the library, deliberately: each piece is a prerequisite of a public service surface that does not ship in 0.1.0. This table is the authoritative list.
+
+| Component | Code | Installed `emailcheck` command | Library (`build_verification_stack`) |
+| --- | --- | --- | --- |
+| Passive verification: syntax, DNS, classification, aggregation | `domain/`, `application/verification.py`, `adapters/dns/` | Used by `check`, `batch`, legacy `ADDRESS` | Always composed |
+| API-key authentication | `adapters/auth/api_keys.py` | Internal only: one random per-process key accounts local quota; no key management | Composed from `Deployment.api_keys` |
+| Admission, pacing, quotas, abuse guard, admin switches | `application/admission.py`, `adapters/system/`, `application/abuse.py`, `application/admin.py` | In-process passive quota and budgets | Composed |
+| Version and readiness reports | `application/readiness.py` | `--report-versions`, `--check-deployment` | Callable |
+| Remote active-check client | `adapters/http/urllib_client.py` | Legacy `--remote` client; needs a server this project does not ship | — |
+| HTTP request handler and schema | `apps/api.py`, `apps/schema.py` | Not reachable; no HTTP server is bundled | A plain function, `handle`, with no transport binding |
+| Active SMTP | `application/smtp_*.py`, `adapters/smtp/` | Not reachable: the local stack contains no SMTP object | Only with `active_probing=True` and a sender identity, in the lab-active or service-active profile |
+| Job service and executor | `application/jobs.py`, `adapters/execution/` | Not reachable: the local-passive profile accepts no job | Only in the lab-active or service-active profile |
+| Persistent verdict cache, job and account-state stores | `adapters/storage/sqlite_store.py`, `adapters/storage/sqlite_job_store.py`, `adapters/storage/sqlite_account_state.py`, `application/verdict_cache.py` | Not reachable: the local stack persists nothing | Only when the corresponding store path is configured |
+| Retention and account deletion | `application/retention.py`, `application/account_deletion.py` | Not reachable | Services always composed over whatever stores exist; the background retention scheduler only in the lab-active or service-active profile |
+| Active batch | `application/batch.py`, `adapters/storage/sqlite_batch_store.py` | Not reachable | Not composed; an operator constructs `BatchService` |
+| Accept-all experiment | `application/accept_all.py` | Not reachable | Not composed; operator-run, [ADR 0017](adr/0017-accept-all-control-experiment.md) |
+| Limited-beta harness | `application/beta.py` | Not reachable | Not composed; operator-run measurement tooling |
+
+**Plan for connecting them.** No public service surface is scheduled for 0.1.0, and nothing in this table becomes reachable from the command line by configuration alone. Connecting a component is a separate, reviewed change, in this prerequisite order:
+
+1. **An HTTP binding for `apps/api.py`**, passive endpoint first. It adds the web framework as a production dependency with its ADR ([ADR 0013](adr/0013-production-composition-and-the-public-boundary.md) names this as the one deferred piece) and must meet all seven [stop conditions on the ASGI binding](#stop-conditions-on-the-asgi-binding).
+2. **Active jobs behind that binding**, only for a deployment that has completed the [readiness checklist](readiness-checklist.md), with persistent job and account-state stores and the operator approvals in [operations](operations.md).
+3. **Active batch upload**, only after step 2, for operator-approved accounts ([ADR 0018](adr/0018-controlled-batch-execution.md)), with the request body bounded while it is read.
+
+The accept-all experiment and the beta harness stay operator tooling and are not planned as public endpoints. Until a step lands, the corresponding rows above remain "not reachable", and [STATUS.md](../STATUS.md) says so.
+
 ## 1. Dependency direction
 
 ```text

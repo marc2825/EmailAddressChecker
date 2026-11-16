@@ -12,7 +12,12 @@ EmailAddressChecker provides conservative email deliverability estimates. It doe
 | Risk classification | Partial | Role-address data is included; disposable-domain, free-mail and provider datasets are currently empty. |
 | Active SMTP checks | Restricted | Library and service components exist, but require a separately configured, explicitly authorized deployment. |
 | Active batch service | Not publicly exposed | The controlled batch subsystem is implemented but is not wired to the public CLI or API. |
+| Service infrastructure | Library only | API-key auth, HTTP request handler, job/verdict/account stores, executor, retention, accept-all experiment and beta harness are tested library components; no HTTP server ships. See [component reachability](docs/architecture.md#component-reachability). |
 | Package release | Pending | Version 0.1.0 is marked unreleased; packaging and publishing workflows are prepared. |
+
+## Roadmap for service components
+
+No public service surface is scheduled for 0.1.0. Connecting the library-only components is planned as separate, reviewed changes in prerequisite order: (1) an HTTP binding for the existing request handler, passive endpoint first, with a dependency ADR and the documented binding stop conditions; (2) active jobs behind it, only for a deployment that has completed the readiness checklist; (3) active batch upload for operator-approved accounts. The accept-all experiment and beta harness remain operator tooling. None of these becomes reachable from the CLI by configuration alone. Details: [architecture](docs/architecture.md#component-reachability).
 
 ## Limitations
 
