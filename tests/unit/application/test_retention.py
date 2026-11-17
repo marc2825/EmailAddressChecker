@@ -500,7 +500,7 @@ class RecordingBatchStore:
 
 @asyncio_test
 async def test_one_sweep_forgets_batch_inputs_and_purges_expired_batches() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` retention, reached through the **central**
+    """ADR 0018 retention, reached through the **central**
     seam.
 
     Both calls, from one `run()`. An earlier build had the operations on the

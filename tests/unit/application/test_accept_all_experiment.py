@@ -1,6 +1,6 @@
 """The accept-all experiment, against the scripted server only.
 
-`docs/adr/0017-accept-all-control-experiment.md`'s Tests section names seven scenarios and this file
+ADR 0017's Tests section names seven scenarios and this file
 covers each: all-recipient accept, only the real recipient accepted, a temporary
 control response, a policy block, inconsistent replies, the domain budget and
 the cache, and the feature disabled.
@@ -396,7 +396,7 @@ def test_authorization_needs_both_the_flag_and_the_domain() -> None:
 
 @asyncio_test
 async def test_the_experiment_spends_its_own_domain_budget() -> None:
-    """`docs/adr/0017-accept-all-control-experiment.md`: a **separate** domain budget.
+    """ADR 0017: a **separate** domain budget.
 
     Exhausting it stops experiments. It is not `per_target_domain`, and the two
     are measured apart below.
@@ -707,7 +707,7 @@ async def test_the_result_never_carries_a_status_or_the_control_address() -> Non
 
 @asyncio_test
 async def test_the_only_risk_flag_this_phase_can_reach_is_accept_all_suspected() -> None:
-    """`docs/adr/0017-accept-all-control-experiment.md`'s Result section: "only add" that flag."""
+    """ADR 0017's Result section: "only add" that flag."""
     from emailcheck.application.aggregate import aggregate_evidence
 
     experiment, _ = build(rcpt=RCPT_ACCEPTED)

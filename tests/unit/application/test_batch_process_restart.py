@@ -2,7 +2,7 @@
 
 `tests/unit/application/test_batch_resume.py` rebuilds the `BatchService` and
 keeps the `JobService`, which is a scheduler restart. That is not what
-`docs/adr/0018-controlled-batch-execution.md`'s *restart/resume* asks for, and the difference was
+ADR 0018's *restart/resume* asks for, and the difference was
 not
 cosmetic: with the job registry in memory, a resumed batch presenting its
 deterministic handle was answered "new" by a fresh process and started a
@@ -278,7 +278,7 @@ async def test_another_account_cannot_read_a_persisted_job(tmp_path: Path) -> No
 
 @asyncio_test
 async def test_a_batch_resumes_across_a_whole_process_restart(tmp_path: Path) -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` Tests: restart/resume, with **both** services
+    """ADR 0018 Tests: restart/resume, with **both** services
     new.
 
     Five rows, interrupted after two, then continued by a process that shares

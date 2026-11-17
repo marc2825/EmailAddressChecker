@@ -133,7 +133,7 @@ def build(
 
 @asyncio_test
 async def test_a_fresh_service_resumes_what_an_interrupted_one_left(tmp_path: Path) -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` Tests: restart/resume.
+    """ADR 0018 Tests: restart/resume.
 
     Five rows, interrupted after two, then continued by a **different**
     `BatchService` over the same file. The assertions are the four that matter:
@@ -182,7 +182,7 @@ async def test_a_fresh_service_resumes_what_an_interrupted_one_left(tmp_path: Pa
 async def test_a_row_handed_over_before_the_crash_is_recovered_not_repeated(
     tmp_path: Path,
 ) -> None:
-    """The dangerous handoff. `docs/adr/0018-controlled-batch-execution.md`'s restart test,
+    """The dangerous handoff. ADR 0018's restart test,
     sharpened.
 
     The child job was accepted and the batch never recorded it. This is the
@@ -246,7 +246,7 @@ async def test_resuming_a_finished_batch_submits_nothing_more(tmp_path: Path) ->
 
 @asyncio_test
 async def test_a_cancelled_batch_is_not_resumed_after_a_restart(tmp_path: Path) -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` cancellation, across the restart boundary.
+    """ADR 0018 cancellation, across the restart boundary.
 
     Persisting the flag is what makes this hold: an in-process set would be
     exactly what a restart discards, so the restart would become the way to undo
@@ -398,7 +398,7 @@ async def test_expiring_the_plaintext_makes_an_unfinished_row_refused(tmp_path: 
 
 @asyncio_test
 async def test_an_expired_result_does_not_come_back_after_a_restart(tmp_path: Path) -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` Tests: retention expiry, across a reload.
+    """ADR 0018 Tests: retention expiry, across a reload.
 
     A cleanup or a restart must not restore a downloadable expired artifact,
     and the property is checked twice: once through a fresh service on the same
@@ -427,7 +427,7 @@ async def test_an_expired_result_does_not_come_back_after_a_restart(tmp_path: Pa
 @asyncio_test
 async def test_deleting_removes_the_row_plaintext_from_the_file(tmp_path: Path) -> None:
     """
-    `docs/adr/0018-controlled-batch-execution.md` preconditions: cancellation **and deletion**.
+    ADR 0018 preconditions: cancellation **and deletion**.
     """
     path = tmp_path / "batch.db"
     store = open_store(path)
@@ -478,7 +478,7 @@ async def test_deleting_one_batch_leaves_another_intact(tmp_path: Path) -> None:
 @asyncio_test
 async def test_the_store_refuses_at_capacity_rather_than_evicting(tmp_path: Path) -> None:
     """
-    `docs/adr/0018-controlled-batch-execution.md` needs a bound; evicting a live batch is not one.
+    ADR 0018 needs a bound; evicting a live batch is not one.
     """
     store = open_store(tmp_path / "batch.db", max_batches=1)
     batch, _, _ = build(store)

@@ -21,7 +21,6 @@ import pytest
 pytestmark = pytest.mark.docs_contract
 
 ROOT = Path(__file__).resolve().parents[1]
-ADR = ROOT / "docs" / "adr" / "0012-evidence-aggregation-and-final-status.md"
 STATUS_MODEL = ROOT / "docs" / "status-model.md"
 ARCHITECTURE = ROOT / "docs" / "architecture.md"
 
@@ -90,8 +89,8 @@ APPROVED_SEMANTICS = {
     ),
     "252 is not an acceptance": (STATUS_MODEL, ("`252` is not an acceptance",)),
     "line-too-long option b": (
-        ADR,
-        ("keeps its entry-point difference", "neither can ever produce `invalid`"),
+        STATUS_MODEL,
+        ("keep their entry-point difference", "neither can ever produce `invalid`"),
     ),
     "internal_error does not outrank a hard invalid": (
         STATUS_MODEL,
@@ -153,7 +152,7 @@ def test_the_primary_reason_ordering_is_documented_as_enforced() -> None:
 
 def test_the_calibrated_score_range_is_deferred_rather_than_guessed() -> None:
     """Recorded publicly so a later author does not invent `0..1`."""
-    recorded = flattened(ADR)
+    recorded = flattened(STATUS_MODEL)
 
     assert "range of a calibrated score is undefined" in recorded
     assert "checks no range" in recorded
@@ -166,7 +165,7 @@ def test_the_internal_error_future_caution_is_recorded() -> None:
     survive is the reason it is unreachable, so a Phase 6 that makes it reachable
     knows to revisit rather than discovering the question for the first time.
     """
-    recorded = flattened(ADR)
+    recorded = flattened(STATUS_MODEL)
 
     assert "hard-invalid evidence survives an `internal_error`" in recorded
     assert "not reachable from the current pipeline" in recorded

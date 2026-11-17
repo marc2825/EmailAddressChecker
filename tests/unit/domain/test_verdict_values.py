@@ -275,7 +275,7 @@ def test_a_score_outside_any_obvious_range_is_deliberately_not_refused() -> None
 
     `42.0` is not a probability under any reading, and it is accepted, because
     refusing it needs a range no document states.
-    `docs/adr/0012-evidence-aggregation-and-final-status.md`
+    ADR 0012
     carries the range as a pre-calibration stop condition instead of it being
     guessed here.
     """

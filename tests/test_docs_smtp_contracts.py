@@ -24,7 +24,6 @@ ROOT = Path(__file__).resolve().parents[1]
 STATUS_MODEL = ROOT / "docs" / "status-model.md"
 ARCHITECTURE = ROOT / "docs" / "architecture.md"
 THREAT_MODEL = ROOT / "docs" / "threat-model.md"
-ORCHESTRATION_ADR = ROOT / "docs" / "adr" / "0011-verification-orchestration-and-rate-limiting.md"
 STATE_MACHINE = ROOT / "docs" / "smtp-state-machine.md"
 DIALOGUE_ADR = ROOT / "docs" / "adr" / "0009-smtp-dialogue-and-tls.md"
 OPERATIONS = ROOT / "docs" / "operations.md"
@@ -62,10 +61,10 @@ def _section(path: Path, start: str, end: str) -> str:
 # --- the Phase 4D mapping is specified before Phase 4D ---------------------
 
 
-def test_the_mapping_table_exists_before_the_code_that_implements_it() -> None:
-    """4A came before 4B for this reason, and the mapping is the same shape."""
+def test_the_smtp_mapping_is_documented_with_its_inputs() -> None:
+    """The SMTP-to-evidence mapping has its own section and names every input."""
     mapping = text_of(STATUS_MODEL)
-    assert "for Phase 4D" in mapping
+    assert "## 7. SMTP observation to evidence" in mapping
     for field in (
         "stage_reached",
         "basic_code",
@@ -321,22 +320,48 @@ ADR_HEADING = re.compile(r"^#\s*ADR\s*(\d{4})\b", re.MULTILINE)
 ADR_REFERENCE = re.compile(r"ADR\s+(\d{4})")
 
 
+ADR_INDEX = ADR_DIRECTORY / "README.md"
+RETIRED_ROW = re.compile(r"^\|\s*(\d{4})\s*\|", re.MULTILINE)
+
+
+def current_adrs() -> set[str]:
+    return {adr.name[:4] for adr in ADR_DIRECTORY.glob("*.md") if adr.name[:4].isdigit()}
+
+
+def retired_adrs() -> set[str]:
+    """The numbers the index lists as retired, each mapped to a current document."""
+    section = text_of(ADR_INDEX).split("## Retired ADRs", 1)[1]
+    return set(RETIRED_ROW.findall(section))
+
+
 def test_every_adr_heading_matches_its_filename() -> None:
     mismatches: list[str] = []
-    for adr in sorted(ADR_DIRECTORY.glob("*.md")):
+    for adr in sorted(ADR_DIRECTORY.glob("[0-9]*.md")):
         heading = ADR_HEADING.search(text_of(adr))
         if heading is None or not adr.name.startswith(f"{heading.group(1)}-"):
             mismatches.append(adr.name)
     assert mismatches == [], f"an ADR's number and filename disagree: {mismatches}"
 
 
+def test_the_adr_index_lists_every_current_adr_and_no_retired_file() -> None:
+    """The index is how a retired number resolves, so it has to stay exact."""
+    index = text_of(ADR_INDEX)
+    for adr in sorted(ADR_DIRECTORY.glob("[0-9]*.md")):
+        assert f"]({adr.name})" in index, f"the ADR index does not link {adr.name}"
+    assert not current_adrs() & retired_adrs(), "an ADR is both current and retired"
+
+
 def test_every_referenced_adr_exists() -> None:
-    """A reference by number is only useful while the number resolves."""
-    numbered = {adr.name[:4] for adr in ADR_DIRECTORY.glob("*.md") if adr.name[:4].isdigit()}
+    """A reference by number is only useful while the number resolves.
+
+    It resolves to a current ADR file, or to the index row that says where a
+    retired ADR's rules now live.
+    """
+    resolvable = current_adrs() | retired_adrs()
     dangling: list[str] = []
     for document in sorted(ROOT.glob("docs/**/*.md")):
         for reference in ADR_REFERENCE.findall(text_of(document)):
-            if reference not in numbered:
+            if reference not in resolvable:
                 dangling.append(f"{document.name} -> ADR {reference}")
     assert dangling == [], f"a document references an ADR that does not exist: {dangling}"
 
@@ -429,7 +454,7 @@ def test_the_limiter_partitions_on_domain_and_mx() -> None:
 # --- the documented worst case includes the rate-limit waits ----------------
 
 
-@pytest.mark.parametrize("document", [ORCHESTRATION_ADR])
+@pytest.mark.parametrize("document", [ARCHITECTURE])
 def test_the_worst_case_latency_counts_the_rate_limit_waits(document: Path) -> None:
     """ "Three session budgets" left out a term and understated the bound."""
     flat = flattened(text_of(document))

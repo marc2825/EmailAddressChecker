@@ -1,6 +1,6 @@
 """The CSV boundary: what may come in, and what may go out.
 
-`docs/adr/0018-controlled-batch-execution.md` Input and Output. Two pure functions and their values
+ADR 0018 Input and Output. Two pure functions and their values
 —
 no clock, no store, no network — so the whole surface is testable against text.
 
@@ -11,7 +11,7 @@ not a row whose address does not parse. `docs/requirements.md` section 6's
 grammar is the only grammar — `parse_address` is called, and no second parser
 exists.
 
-**Writing is escaping.** `docs/adr/0018-controlled-batch-execution.md` Output: *CSV cells protected
+**Writing is escaping.** ADR 0018 Output: *CSV cells protected
 against spreadsheet formula injection*. A cell beginning `=`, `+`, `-`, `@`, or
 a control character is executed by every major spreadsheet when the file is
 opened, and this project's output is a file somebody opens in a spreadsheet
@@ -107,7 +107,7 @@ class BatchInputRow:
     """One row of the submitted file, as this project understood it."""
 
     #: The 1-based position in the input, so a report can be matched against the
-    #: file the submitter still has. `docs/adr/0018-controlled-batch-execution.md`'s output is
+    #: file the submitter still has. ADR 0018's output is
     #: row-level.
     number: int
     #: Exactly what the cell contained. Bounded by the parser's own input limit
@@ -127,7 +127,7 @@ class BatchInputRow:
 class BatchInput:
     """A parsed input file, and what was wrong with it.
 
-    Malformed rows do not fail the whole file: `docs/adr/0018-controlled-batch-execution.md`'s
+    Malformed rows do not fail the whole file: ADR 0018's
     scheduler
     asks for *partial failure*, and a batch of ten thousand rows refused for one
     unparseable address would be refused for ever. The row is reported as
@@ -147,7 +147,7 @@ class BatchInput:
 def parse_batch_csv(content: bytes, *, limits: BatchLimits | None = None) -> BatchInput:
     """Read an uploaded file into rows, refusing what may not be read.
 
-    `docs/adr/0018-controlled-batch-execution.md` Input: *documented UTF-8 CSV schema; file size and
+    ADR 0018 Input: *documented UTF-8 CSV schema; file size and
     row
     limits; one address column*. A single leading byte order mark is accepted,
     as it is by the local CLI.
@@ -252,7 +252,7 @@ class BatchReportRow:
 def render_batch_csv(rows: tuple[BatchReportRow, ...]) -> str:
     """Render the report, with every cell escaped.
 
-    `docs/adr/0018-controlled-batch-execution.md` Output. The escaping is applied to **every** cell
+    ADR 0018 Output. The escaping is applied to **every** cell
     rather than to the ones that look risky. No submitter-controlled text
     reaches this renderer any more — every column is published vocabulary or an
     integer — so formula injection is now structurally impossible rather than

@@ -251,11 +251,11 @@ def test_turning_a_control_off_is_never_gated_by_the_runbooks() -> None:
 
 def test_the_declaration_names_the_same_three_datasets_everywhere() -> None:
     readme = read(DATASETS / "README.md")
-    adr = read(DOCS / "adr" / "0007-passive-classification-and-datasets.md")
+    policy = read(DOCS / "data-sources.md")
 
     for dataset in ("disposable", "free-mail", "provider"):
         assert dataset in readme.lower()
-        assert dataset in adr.lower()
+        assert dataset in policy.lower()
     assert frozenset({"disposable", "free_mail", "provider"}) == UNAVAILABLE_DATASETS
 
 
@@ -275,18 +275,18 @@ def test_the_declaration_says_absence_is_not_a_negative_answer() -> None:
 
 def test_the_declaration_refuses_a_placeholder_dataset() -> None:
     readme = read(DATASETS / "README.md").lower()
-    adr = read(DOCS / "adr" / "0007-passive-classification-and-datasets.md").lower()
+    policy = read(DOCS / "data-sources.md").lower()
 
     assert "no placeholder dataset was created" in readme
-    assert "no placeholder dataset was created" in adr
+    assert "no placeholder dataset was created" in policy
 
 
-def test_the_adr_records_the_phase_8_decision_and_how_to_reverse_it() -> None:
-    adr = read(DOCS / "adr" / "0007-passive-classification-and-datasets.md")
+def test_the_policy_records_the_declaration_and_how_to_reverse_it() -> None:
+    policy = read(DOCS / "data-sources.md").lower()
 
-    assert "Decision (Phase 8)" in adr
-    assert "declared unavailable" in adr.lower()
-    assert "reversible by data" in adr.lower()
+    assert "declared unavailable" in policy
+    assert "reversible by data" in policy
+    assert "no code change is needed" in policy
 
 
 # --- the beta report template -----------------------------------------------

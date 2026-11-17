@@ -1,35 +1,23 @@
 # Test TLS material
 
-Everything here is a **test fixture**. None of it is secret, none of it is used
-by production code, and none of it may become a production trust anchor.
+Everything here is a test fixture. None of it is secret, production code never uses it, and none of it may become a production trust anchor.
 
 | File | What it is |
 |---|---|
-| `ca.crt`, `ca.key` | A throwaway CA. The client trusts it *only* because a test passes it as an extra anchor. |
+| `ca.crt`, `ca.key` | A throwaway CA. The client trusts it only because a test passes it as an extra anchor. |
 | `server.crt`, `server.key` | `mx.test.example`, signed by that CA. The success path. |
 | `wrong-name.crt`, `wrong-name.key` | `other.test.example`, signed by that CA. Proves hostname verification is on: the chain is valid and the handshake must still fail. |
-| `untrusted.crt`, `untrusted.key` | `mx.test.example`, self-signed by nobody. Proves certificate verification is on. |
+| `untrusted.crt`, `untrusted.key` | `mx.test.example`, self-signed. Proves certificate verification is on. |
 
-The keys are ECDSA P-256 and the certificates expire in 2126, so no test starts
-failing on a date.
-The CA certificate includes critical `keyCertSign`/`cRLSign` key usage for Python
-3.13+'s default strict X.509 validation. Its existing public fixture key is reused;
-production certificate/hostname verification is never relaxed for a test.
+The keys are ECDSA P-256 and the certificates expire in 2126, so no test starts failing on a date. The CA certificate has critical `keyCertSign` and `cRLSign` key usage, which the strict X.509 validation in Python 3.13 and later requires. Production certificate and hostname verification is never relaxed for a test.
 
 ## Why these are committed rather than generated
 
-Generating a certificate needs `cryptography`, which this project does not
-depend on, or the `openssl` binary, which a CI image need not have. A committed
-fixture makes the TLS tests deterministic and dependency-free.
+Generating a certificate needs `cryptography`, which this project does not depend on, or the `openssl` binary, which a CI image may lack. Committed fixtures keep the TLS tests deterministic and free of extra dependencies.
 
 ## How the separation is kept
 
-`build_client_context()` always sets `check_hostname = True` and
-`verify_mode = CERT_REQUIRED`, and there is no parameter through which either
-can be turned off. A caller may supply an **extra trust anchor** and nothing
-else, which is the entire seam these fixtures use: the worst a misuse of it can
-do is trust one more CA, and `tests/unit/adapters/test_tls_context.py` asserts
-that verification itself cannot be disabled.
+`build_client_context()` always sets `check_hostname = True` and `verify_mode = CERT_REQUIRED`, with no parameter to turn either off. A caller may add an extra trust anchor and nothing else; that is the only seam these fixtures use, so the worst misuse trusts one more CA. `tests/unit/adapters/test_tls_context.py` asserts that verification cannot be disabled.
 
 ## Regenerating
 

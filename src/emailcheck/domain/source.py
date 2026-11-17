@@ -14,7 +14,7 @@ attacker resets by changing a string. So this module reads nothing. A
 peer address, or it does not exist, and `application/abuse.py` simply does not
 count the source layer when it does not.
 
-That is the deliberate stop condition: `docs/adr/0016-abuse-controls-privacy-and-observability.md`
+That is the deliberate stop condition: ADR 0016
 and `docs/architecture.md` record proxy trust as work belonging to the binding
 Phase, not as something inferable here.
 

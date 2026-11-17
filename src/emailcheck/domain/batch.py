@@ -1,6 +1,6 @@
 """What a batch is, what it may hold, and who may run one.
 
-`docs/adr/0018-controlled-batch-execution.md`. Pure domain values — no CSV parsing, no scheduling,
+ADR 0018. Pure domain values — no CSV parsing, no scheduling,
 no I/O. The parser is `application/batch_csv.py` and the scheduler is
 `application/batch.py`.
 
@@ -18,7 +18,7 @@ budget for many probes. Every row becomes an ordinary Phase 6 job through the
 ordinary service, so admission, the Phase 4 limiter, the Phase 7 quota layers,
 the destination policy, TLS, the sender identity, the one-`RCPT TO` bound, the
 kill switch, and section 14's single retry all apply per row exactly as they
-apply to a single check. `docs/adr/0018-controlled-batch-execution.md`'s scheduler section says so
+apply to a single check. ADR 0018's scheduler section says so
 in four words: *reuse all existing budgets*.
 
 **Nothing here decides a status.** A row's answer is the `Verdict` the Phase 5
@@ -47,14 +47,14 @@ __all__ = [
     "BatchSettings",
 ]
 
-#: The one column `docs/adr/0018-controlled-batch-execution.md` names: *one address column*.
+#: The one column ADR 0018 names: *one address column*.
 #:
 #: A fixed header rather than a caller-supplied index, because a column chosen
 #: by the submitter is a column somebody points at the wrong field — and the
 #: wrong field in this project is somebody's data being probed.
 ADDRESS_COLUMN: Final = "email"
 
-#: `docs/adr/0018-controlled-batch-execution.md` Input: *file size and row limits*. Both, because
+#: ADR 0018 Input: *file size and row limits*. Both, because
 #: either alone is bypassable — a million single-character rows is small, and one row
 #: can be a megabyte.
 #:
@@ -141,7 +141,7 @@ class BatchRowState(StrEnum):
     #: verification's own state is the job's; this says the row got that far.
     SUBMITTED = "submitted"
     #: A duplicate of an earlier row in the same input, detected by HMAC.
-    #: `docs/adr/0018-controlled-batch-execution.md` Input: *duplicate detection by HMAC*.
+    #: ADR 0018 Input: *duplicate detection by HMAC*.
     DUPLICATE = "duplicate"
     #: The address did not parse. Phase 1's rejection, carried as a reason code
     #: rather than re-derived — no second parser exists.
@@ -196,7 +196,7 @@ class BatchLimits:
     max_input_bytes: int = 4 * 1024 * 1024
     #: How many rows may be in flight at once, across the whole batch.
     #:
-    #: **Bounded workers, not one task per row.** `docs/adr/0018-controlled-batch-execution.md` asks
+    #: **Bounded workers, not one task per row.** ADR 0018 asks
     #: for
     #: *bounded global workers*, and a scheduler that created fifty thousand
     #: coroutines and held them behind a semaphore would have moved the growth
@@ -205,14 +205,14 @@ class BatchLimits:
     max_in_flight: int = 8
     #: How many rows of one recipient domain may be in flight at once.
     #:
-    #: `docs/adr/0018-controlled-batch-execution.md`: *one domain cannot monopolize workers*. The
+    #: ADR 0018: *one domain cannot monopolize workers*. The
     #: scheduler's round-robin is what spreads the work; this is the hard cap
     #: behind it, so the property holds even when a batch is one domain and a
     #: rotation has nothing to rotate to.
     max_in_flight_per_domain: int = 2
     #: How many rows heading for one **exchanger** may be in flight at once.
     #:
-    #: `docs/adr/0018-controlled-batch-execution.md` asks for fair scheduling by target domain *and
+    #: ADR 0018 asks for fair scheduling by target domain *and
     #: MX*,
     #: and the two are not the same bound: twenty domains behind one provider
     #: are twenty domain queues and one destination. A per-domain cap alone lets
@@ -250,7 +250,7 @@ class BatchApproval:
 
     **Membership is the permission**, on the precedent `BetaCorpus` and
     `AcceptAllAuthorization` set, and the default is empty.
-    `docs/adr/0018-controlled-batch-execution.md`'s preconditions are *account review/approval* and
+    ADR 0018's preconditions are *account review/approval* and
     *domain ownership or documented lawful purpose* — neither of which a program
     can establish, and both of which a person records here.
 
@@ -291,7 +291,7 @@ class BatchSettings:
     approval: BatchApproval = field(default_factory=BatchApproval)
     limits: BatchLimits = field(default_factory=BatchLimits)
     #: How long a finished batch's result stays downloadable.
-    #: `docs/adr/0018-controlled-batch-execution.md` Output: *expiring downloadable result*.
+    #: ADR 0018 Output: *expiring downloadable result*.
     result_retention_seconds: int = 24 * 60 * 60
     #: How long a batch's **submitted addresses** are retained so that an
     #: unfinished row can still be submitted after a restart.

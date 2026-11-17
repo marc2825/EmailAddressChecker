@@ -2,11 +2,9 @@
 
 ## 1. Purpose
 
-This client is a recipient-stage observer, not a mail-sending client.
+The client observes the recipient stage; it is not a mail-sending client. It exposes no operation that can submit message content.
 
-The implementation must expose no operation that can submit message content.
-
-## 2. Allowed states
+## 2. States
 
 ```text
 DISCONNECTED
@@ -21,47 +19,23 @@ DISCONNECTED
   → CLOSED
 ```
 
-Error or timeout from any state transitions to a terminal failed state and then
-best-effort close. `FAILED` permits only `QUIT`, and there is no transition from
-it back to a state that can issue `MAIL FROM`, so a failed STARTTLS cannot
-continue in plaintext.
+An error or timeout in any state moves to a terminal failed state, followed by a best-effort close. `FAILED` permits only `QUIT` and has no route back to a state that can issue `MAIL FROM`, so a failed STARTTLS cannot continue in plaintext.
 
-`src/emailcheck/domain/smtp_contract.py` holds the per-state table of permitted
-commands, and `smtp_session.py` holds the transitions as an immutable value.
-Three rules are visible in the table:
+`src/emailcheck/domain/smtp_contract.py` holds the table of permitted commands per state, and `smtp_session.py` holds the transitions as an immutable value. The table enforces three rules:
 
-- `TLS_NEGOTIATED` permits `EHLO` and `QUIT`, and nothing else. `EHLO` is the
-  only way forward, so the session is re-introduced after TLS before anything
-  else happens; `QUIT` exists so an upgraded session can still be ended politely
-  rather than by dropping the socket. **`QUIT` leads nowhere**: it is a cleanup
-  and abort path, it cannot reach `MAIL FROM`, and no state reachable from it
-  can. So the property that matters — nothing but a re-introduction may follow a
-  handshake — holds with both commands permitted;
-- `RCPT_RESULT_RECEIVED` does not permit `RCPT TO`, so a second recipient has no
-  state to be issued from;
-- `RESET_COMPLETED` permits only `QUIT`. `RSET` clears a transaction in SMTP,
-  but this product observes one recipient per session, so it does not buy a
-  second one.
+- `TLS_NEGOTIATED` permits `EHLO` and `QUIT` and nothing else. `EHLO` is the only way forward, so the session introduces itself again after TLS; `QUIT` lets an upgraded session end politely. `QUIT` leads only to closing and cannot reach `MAIL FROM`.
+- `RCPT_RESULT_RECEIVED` does not permit `RCPT TO`, so a second recipient has no state to come from.
+- `RESET_COMPLETED` permits only `QUIT`. `RSET` clears a transaction, but this product observes one recipient per session, so it does not allow a second one.
 
-A session also requires a `ConfirmedPeer`, and checks the type at run time
-rather than trusting the annotation, so the destination policy has run three
-times before any command is permitted. See ADR 0008.
+A session requires a `ConfirmedPeer` and checks the type at run time, so the destination policy has run three times before any command is allowed (ADR 0008).
 
-## 3. Allowed commands
+## 3. Commands
 
-- `EHLO`
-- `STARTTLS`
-- `MAIL FROM`
-- `RCPT TO`
-- `RSET`
-- `QUIT`
+Allowed: `EHLO`, `STARTTLS`, `MAIL FROM`, `RCPT TO`, `RSET`, `QUIT`.
 
-The set is closed by `SMTPCommand`, and by the encoder in
-`domain/smtp_command.py`: six functions, one per command, none of which takes a
-command name. There is no parameter through which to ask for another.
+The set is closed by `SMTPCommand` and by `domain/smtp_command.py`, which has one encoder per command and none that takes a command name.
 
-Forbidden, and refused by `scripts/check_forbidden_smtp.py` in every production
-SMTP path:
+Forbidden, and refused by `scripts/check_forbidden_smtp.py` in every production SMTP path:
 
 - message content: `DATA`, `BDAT`, `SEND`, `SOML`, `SAML`;
 - recipient enumeration: `VRFY`, `EXPN`;
@@ -69,173 +43,71 @@ SMTP path:
 - relay and queue control: `TURN`, `ATRN`, `ETRN`, `BURL`;
 - trusted-peer impersonation: `XCLIENT`, `XFORWARD`;
 - provider login or account endpoints;
-- more than one requested target recipient in one MVP transaction.
+- more than one requested recipient in one transaction.
 
-The recipient limit has two independent barriers: the state table, and a counter
-on the session that refuses a second `RCPT TO` from any state at all.
+Two independent barriers stop a second recipient: the state table, and a session counter that refuses a second `RCPT TO` from any state.
 
-The envelope sender is supplied by `SenderIdentityProvider`
-(`ports/smtp_sender_identity.py`) from operator configuration. It is never
-derived from the probe target, and `EnvelopeSender` alone does not enforce that:
-the value type fixes the shape, the port owns the provenance.
-`adapters/smtp/sender_identity.py` implements it, reads a mapping the caller
-loaded deliberately, reads no environment variable, and refuses the null reverse
-path for a probing identity — `docs/requirements.md` section 9 wants SPF, a PTR,
-and monitored `postmaster` and `abuse` channels, and `<>` has none of them.
+There is no `HELO` fallback. `HELO` is not in `SMTPCommand`, so no encoder, `WireCommand`, or state can produce it, and a server too old for `EHLO` is not probed.
 
-**There is no `HELO` fallback and there will not be one.** `HELO` is not a member
-of `SMTPCommand`, so no encoder produces it, no `WireCommand` can carry it, and
-no state permits it. A server too old for `EHLO` is one this project does not
-probe; that is a narrower capability than a second greeting.
+A command reaches the wire only as a `WireCommand`. `write_command` takes no bytes, string, or command name, only a value naming one of the six commands and carrying the bytes its encoder produced, checked at construction to start with that verb. The verb check, the six factories in `domain/smtp_wire.py`, and an inspection test that production uses only those factories together ensure that no wire line exists that an encoder did not produce (ADR 0009).
 
-**A command reaches the wire only as a `WireCommand`.** The connection port takes
-no `bytes`, no string, and no command name: `write_command` accepts a value that
-names one of the six enum members and carries the bytes the matching encoder
-produced, checked at construction to begin with that verb.
-
-That check fixes the *verb*, not the argument. What fixes the argument is the six
-factories in `domain/smtp_wire.py`, and what fixes that production uses only
-those is an inspection test over `src/`. Three layers; the property "no wire line
-exists that an encoder did not produce" is their conjunction, not the type's
-alone. See ADR 0009.
+The envelope sender comes from `SenderIdentityProvider` (`ports/smtp_sender_identity.py`), backed by operator configuration, and is never derived from the target. `adapters/smtp/sender_identity.py` reads a mapping the caller loaded deliberately, reads no environment variable, and refuses the null reverse path for a probing identity, because `<>` has no SPF, PTR, or monitored mailboxes (`docs/requirements.md` section 9).
 
 ## 4. STARTTLS
 
-STARTTLS is required in every shipped dialogue, including library use. Earlier
-sub-Phases exercised plaintext state transitions; those transitions do not
-authorize plaintext probing. ADR 0021 removes the opportunistic policy.
+STARTTLS is required in every dialogue, including library use; `TLSPolicy.REQUIRED` is the only policy (ADR 0021).
 
-- parse the EHLO capability safely. `domain/smtp_capabilities.py` reads keyword
-  names on exact token boundaries, case-insensitively, ignores an unknown
-  extension, and **never branches on one**: an `X-` keyword is a better
-  fingerprint than an MX name, and `docs/architecture.md` keeps provider identity
-  as metadata that decides nothing;
-- apply `TLSPolicy.REQUIRED`, the only supported policy: a server
-  that advertises no `STARTTLS` ends the probe as `TLS_ERROR`, which is a
-  non-target outcome. No sender or recipient command follows a missing upgrade
-  or failed handshake, and there is no plaintext fallback;
-- send STARTTLS only once, which the session refuses by count;
-- verify the certificate and the host name, always. The name comes from the
-  `ConfirmedPeer`, so it is the MX host the destination chain validated and never
-  the recipient's domain. Verification has no off switch (ADR 0009);
-- refuse the upgrade when anything is already buffered, because those bytes are
-  plaintext an attacker could have injected before it (CVE-2011-0411). That
-  refusal is reported as `tls_handshake_failed`, the same as a genuine handshake
-  failure, and the collapse is deliberate: both are non-target TLS failures with
-  no plaintext fallback and both resolve to `unknown`. The difference is a
-  diagnostic — the smuggling refusal moves zero bytes — not a decision, so no
-  enum member is spent on it. `docs/status-model.md` section 7.2 records this so
-  a Phase 4D author does not have to discover it;
-- re-read `getpeername()` before and after the upgrade, so a connection cannot
-  become a different peer's by being wrapped;
-- connect with `AF_INET` for an IPv4 destination and `AF_INET6` for an IPv6 one,
-  and do not rely on `AI_V4MAPPED`: a dual-stack socket reports an IPv4 peer as
-  `::ffff:…`, which the destination policy refuses, so the transport normalizes
-  the family rather than the policy unwrapping a mapped address;
-- apply handshake timeout;
-- verify the peer according to the explicit TLS policy;
-- issue EHLO again after TLS;
-- never infer mailbox invalidity from TLS failure.
+- Capabilities are parsed safely. `domain/smtp_capabilities.py` matches keyword names on exact token boundaries, case-insensitively, ignores unknown extensions, and never branches on one, since provider identity decides nothing.
+- A server that advertises no `STARTTLS` ends the probe as `TLS_ERROR`, a non-target outcome. No sender or recipient command follows a missing upgrade or a failed handshake.
+- STARTTLS is sent once; the session refuses a second by count.
+- The certificate and host name are always verified, with no off switch. The name comes from the `ConfirmedPeer`, so it is the validated MX host, never the recipient's domain.
+- The upgrade is refused if any bytes are already buffered, because they could be injected plaintext (CVE-2011-0411). The refusal is reported as `tls_handshake_failed`, the same as a real handshake failure: both are non-target TLS failures with no fallback and resolve to `unknown`, and the smuggling refusal differs only in moving zero bytes. `docs/status-model.md` section 7.2 records the same.
+- `getpeername()` is read before and after the upgrade, so wrapping cannot turn the connection into another peer's.
+- The transport connects with `AF_INET` for IPv4 and `AF_INET6` for IPv6 and does not rely on `AI_V4MAPPED`, because a dual-stack socket would report an IPv4 peer as `::ffff:…`, which the destination policy refuses.
+- The handshake has its own timeout.
+- `EHLO` is issued again after TLS.
+- A TLS failure never implies mailbox invalidity.
 
 ## 5. Reply parser
 
-Requirements:
-
-- support multiline replies;
-- cap line bytes and line count;
-- require syntactically consistent reply codes where practical;
-- extract the basic code;
-- extract an enhanced status code only when valid;
-- retain a bounded redacted diagnostic. The guarantee is exactly this, and no
-  more: a whitespace-delimited token containing a literal ASCII `@` is replaced,
-  no literal `@` survives, control and format characters are removed, and the
-  result is capped. It is **not** an RFC mailbox parser and not a general PII
-  scrubber — a local part alone, a percent-encoded form, and a fullwidth at sign
-  all survive — so a raw SMTP reply must never be written to an ordinary log;
-- bound the sanitizer's work, not only its output. Only a fixed prefix of the
-  reply is examined, because a legal 80 KB reply must not cost more than a short
-  one to reduce to 120 characters;
-- drop an enhanced code whose class contradicts the basic code. `250 5.1.1`
-  describes nothing real, and taking the enhanced half would turn an acceptance
-  into a rejection;
-- treat a code that changes mid-reply as malformed rather than preferring one:
-  a `250-` prelude with a `550` conclusion is two replies, and guessing is how a
-  rejection gets attributed to the wrong command;
-- never use raw text alone when a structured code is available.
+- Supports multiline replies, with caps on line bytes and line count.
+- Extracts the basic code, and an enhanced status code only when it is valid.
+- Drops an enhanced code whose class contradicts the basic code: `250 5.1.1` describes nothing real, and using the enhanced half would turn an acceptance into a rejection.
+- Treats a code that changes mid-reply as malformed: a `250-` prelude with a `550` conclusion is two replies, and guessing attributes a rejection to the wrong command.
+- Never relies on raw text when a structured code is available.
+- Keeps a bounded, redacted diagnostic. It guarantees only that a whitespace-delimited token containing an ASCII `@` is replaced, that no `@` remains, that control and format characters are removed, and that the result is capped. It is not a mailbox parser or a general PII scrubber (a local part alone, a percent-encoded form, and a fullwidth at sign survive), so a raw SMTP reply must never be written to an ordinary log.
+- Bounds the sanitizer's work as well as its output: only a fixed prefix is examined, so an 80 KB reply costs no more than a short one.
 
 ## 6. Timeout budget
 
-Separate configuration:
+Separate timeouts cover DNS resolution, TCP connect, banner, each command, the TLS handshake, and the total session.
 
-- DNS resolution;
-- TCP connect;
-- banner;
-- individual command;
-- TLS handshake;
-- total session.
+The total session deadline dominates the others. `domain/smtp_deadline.py` holds a validated `SessionBudget` and a `SessionDeadline` that recomputes the remaining time from a `MonotonicClock`, so clock adjustments cannot move it and an overrunning stage cannot hide. Every awaited dialogue step runs inside the remaining budget. A per-read deadline alone bounds one read, not a dialogue: a peer answering each of eight steps just inside 30 seconds would hold a worker for four minutes.
 
-The total session deadline dominates all others, and it is implemented rather
-than intended: `domain/smtp_deadline.py` holds a validated `SessionBudget` and a
-`SessionDeadline` that recomputes what is left from a `MonotonicClock`, and every
-awaited step of the dialogue runs inside the remaining budget.
+The budget covers the TCP connect too. `application/smtp_probe.py` starts the deadline before connecting, so the connect bound is `min(TransportTimeouts.connect_seconds, remaining session budget)`, and a spent budget opens no socket.
 
-**It covers the TCP connect as well.** `application/smtp_probe.py` starts the
-deadline before it connects, so one budget spans the first SYN to the final
-close, and the effective connect bound is
-`min(TransportTimeouts.connect_seconds, remaining session budget)`. The
-per-operation timeout is kept, not replaced; the smaller of the two applies, as
-everywhere else. A budget already spent opens no socket at all.
+Waiting for a rate-limit lease is outside the budget, so this project's own queueing is never recorded as `deadline_exhausted`, which means a bound on the remote conversation. The limiter bounds that wait separately.
 
-**Waiting for a rate-limit lease is outside it**, deliberately. The deadline
-starts once the lease is held, because a budget spanning the wait would record
-this project's own queueing as `deadline_exhausted`, which Phase 4D reads as a
-bound on a *remote* conversation. Bounding the wait for a budget belongs to the
-limiter (ADR 0009).
-
-Each awaited step is pinned individually rather than collectively:
-`tests/unit/application/test_smtp_deadline_stages.py` gives the dialogue a peer
-that goes silent at one named stage and requires the session to end anyway, and
-reads the source to check that every `self.connection.…` call sits inside the
-deadline wrapper. Removing the wrapper from the read step, the write step, or
-the handshake used to leave the whole suite passing.
-
-Monotonic, not wall clock: a deadline computed from `datetime.now()` moves when
-the machine's clock is adjusted. Recomputed, not decremented: a stage that
-overran cannot leave the budget looking healthy.
-
-Both halves are needed. A per-read deadline of 30 seconds bounds one read; a
-dialogue of eight steps bounds nothing useful, because a peer answering each
-stage just inside its deadline holds a worker for four minutes without ever
-timing out.
+`tests/unit/application/test_smtp_deadline_stages.py` checks each step individually: a peer that goes silent at a named stage must still end the session, and every `self.connection.…` call must sit inside the deadline wrapper.
 
 ## 7. Transcript
 
-Tests record every command. Production records only safe structured events by
-default: `SessionReport.commands_issued` is a tuple of enum members, never the
-bytes that carried them, and the report refuses to be built if the transcript
-and the observation disagree about the recipient.
+Tests record every command. Production records only safe structured events: `SessionReport.commands_issued` is a tuple of enum members, never bytes, and the report cannot be built if the transcript and the observation disagree about the recipient.
 
-A test must fail if the command sequence contains a forbidden command or more
-than one `RCPT TO`. The two shapes are asserted exactly:
+A test fails if the command sequence contains a forbidden command or more than one `RCPT TO`. The two shapes are asserted exactly:
 
 ```text
 plain   EHLO, MAIL FROM, RCPT TO, RSET, QUIT
 TLS     EHLO, STARTTLS, EHLO, MAIL FROM, RCPT TO, RSET, QUIT
 ```
 
-**Cleanup never changes the answer.** By the time `RSET` and `QUIT` are issued,
-the recipient result is in hand; a server that drops the connection first has
-already answered the only question that was asked. A cleanup failure is recorded
-as `CleanupStatus` and changes nothing about the observation, and cleanup is not
-attempted at all after a terminal failure — no command is ever written once the
-connection has failed.
+Cleanup never changes the answer. By the time `RSET` and `QUIT` are sent, the recipient result is already known. A cleanup failure is recorded as `CleanupStatus` and leaves the observation unchanged, and after a terminal failure no command is written at all.
 
 ## 8. MX handling
 
-- use MX priority order;
-- do not race all MX hosts;
-- make a bounded number of attempts;
-- destination limits apply to domain and concrete MX;
-- revalidate each resolved and connected IP;
-- do not use an alternate MX to reinterpret an explicit target-specific
-  recipient rejection without a documented policy.
+- Use MX preference order.
+- Do not race all MX hosts.
+- Make a bounded number of attempts.
+- Apply destination limits to both the domain and the concrete MX host.
+- Check every resolved and connected IP again.
+- Do not use another MX to reinterpret an explicit, target-specific recipient rejection unless a documented policy says so.

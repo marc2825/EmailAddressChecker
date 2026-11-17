@@ -385,7 +385,7 @@ def test_a_batch_store_written_before_the_fence_is_refused_by_version(tmp_path: 
 def test_batch_is_still_reachable_from_no_request_surface() -> None:
     """Remediation D hardens batch; it does not expose it.
 
-    `docs/adr/0018-controlled-batch-execution.md`'s non-goals begin with public uploads, and Phase
+    ADR 0018's non-goals begin with public uploads, and Phase
     10's
     own inspection keeps the word out of every request surface. Fixing the
     scheduler is not authorization to compose it, so this states the decision

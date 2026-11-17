@@ -1,6 +1,6 @@
 """The batch subsystem, against fake adapters only.
 
-`docs/adr/0018-controlled-batch-execution.md`'s Tests section names ten scenarios and this file
+ADR 0018's Tests section names ten scenarios and this file
 covers
 each: thousands of rows against fake adapters, one domain not monopolizing
 workers, cancellation, restart/resume, duplicate rows, malformed CSV, output
@@ -227,7 +227,7 @@ def test_the_limits_refuse_a_boolean_and_a_ceiling() -> None:
 
 
 def test_an_unparseable_row_does_not_fail_the_file() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`'s scheduler asks for partial failure."""
+    """ADR 0018's scheduler asks for partial failure."""
     parsed = parse_batch_csv(csv_for("good@example.test", "not-an-address", "also@example.test"))
 
     assert len(parsed) == 3
@@ -275,7 +275,7 @@ def test_the_guarded_prefixes_are_exactly_these_characters() -> None:
 @pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r"])
 def test_every_formula_prefix_is_neutralised(prefix: str) -> None:
     """
-    `docs/adr/0018-controlled-batch-execution.md` Output: cells protected against formula injection.
+    ADR 0018 Output: cells protected against formula injection.
     """
     rendered = csv_cell(f"{prefix}cmd|'/c calc'!A0")
 
@@ -332,7 +332,7 @@ def test_a_hostile_value_survives_into_the_report_as_text() -> None:
 
 
 def test_the_report_carries_no_field_a_raw_reply_could_occupy() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` Output: *no raw SMTP replies*. Structural.
+    """ADR 0018 Output: *no raw SMTP replies*. Structural.
 
     Every column is either an integer, a published row state, a published job
     state, or vocabulary `application/public_result.py` already allows out.
@@ -376,7 +376,7 @@ def test_the_report_carries_no_field_a_raw_reply_could_occupy() -> None:
 
 
 def test_a_busy_domain_does_not_make_a_quiet_one_wait() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`: one domain cannot monopolize workers."""
+    """ADR 0018: one domain cannot monopolize workers."""
     rotation = FairRotation()
     for number in range(9):
         rotation.add(pending(number + 1, "busy.test"))
@@ -397,7 +397,7 @@ def test_a_busy_domain_does_not_make_a_quiet_one_wait() -> None:
 
 
 def test_one_exchanger_cannot_monopolize_workers_across_several_domains() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`: fair scheduling by target domain **and MX**.
+    """ADR 0018: fair scheduling by target domain **and MX**.
 
     Domain rotation alone satisfies every per-domain rule and still lets one
     provider take everything: two busy domains behind one exchanger get two
@@ -524,7 +524,7 @@ async def test_a_file_with_a_byte_order_mark_runs_like_one_without() -> None:
 
 @asyncio_test
 async def test_duplicate_rows_are_detected_by_digest_and_submitted_once() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` Input: duplicate detection by HMAC."""
+    """ADR 0018 Input: duplicate detection by HMAC."""
     batch, executor, _ = build_batch()
 
     report = await run(batch, csv_for("a@example.test", "a@example.test", "b@example.test"))
@@ -624,7 +624,7 @@ class _ConcurrencyProbe:
 
 @asyncio_test
 async def test_the_global_worker_bound_holds_across_many_domains() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`: *bounded global workers*.
+    """ADR 0018: *bounded global workers*.
 
     Neither narrower cap bounds the batch: eight domains at two each is sixteen,
     and several exchangers at four each is more. Dropping the `max_in_flight`
@@ -649,7 +649,7 @@ async def test_the_global_worker_bound_holds_across_many_domains() -> None:
 
 @asyncio_test
 async def test_a_thousand_rows_run_against_fakes_within_the_worker_bound() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`: thousands of rows against fake adapters.
+    """ADR 0018: thousands of rows against fake adapters.
 
     Structural, not timed: the assertion is that every row is accounted for and
     that the work went through the ordinary executor, never that it was fast.
@@ -806,7 +806,7 @@ async def test_a_target_with_nowhere_to_connect_reports_no_exchanger() -> None:
 
 @asyncio_test
 async def test_a_batch_row_is_served_by_the_cache_a_single_check_filled() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`: *one active result cache shared with single
+    """ADR 0018: *one active result cache shared with single
     checks*.
 
     Proved by measurement at the executor rather than by reading the wiring: a
@@ -866,7 +866,7 @@ async def test_cancelling_a_stored_batch_marks_its_pending_rows_and_persists_it(
 
 @asyncio_test
 async def test_another_account_cannot_cancel_read_or_delete_a_batch() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` Tests: account isolation."""
+    """ADR 0018 Tests: account isolation."""
     batch, _, _ = build_batch()
     report = await run(batch, csv_for("a@example.test"))
 
@@ -894,7 +894,7 @@ async def test_an_unknown_identifier_answers_what_another_accounts_does() -> Non
 @asyncio_test
 async def test_a_result_is_downloadable_by_its_owner_until_it_expires() -> None:
     """
-    `docs/adr/0018-controlled-batch-execution.md` Output: *expiring downloadable result*. Fake
+    ADR 0018 Output: *expiring downloadable result*. Fake
     clock.
     """
     clock = MovableClock()
@@ -925,7 +925,7 @@ async def test_an_expired_batch_answers_nothing_and_cannot_be_resumed() -> None:
 
 @asyncio_test
 async def test_a_result_is_a_submission_report_until_its_jobs_finish() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` Output is a deliverability report, so it must
+    """ADR 0018 Output is a deliverability report, so it must
     say so.
 
     A batch stops submitting long before its verifications stop running.
@@ -1010,7 +1010,7 @@ async def test_no_submitted_address_survives_a_terminal_row_or_a_repr() -> None:
 
 @asyncio_test
 async def test_the_idempotency_handle_is_deterministic_and_carries_no_address() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` has no idempotency of its own; Phase 6's is
+    """ADR 0018 has no idempotency of its own; Phase 6's is
     reused.
 
     Derived from the batch, the row's position, the account, and the target
@@ -1048,7 +1048,7 @@ async def test_the_claim_is_written_before_the_row_is_submitted() -> None:
     """The crash boundary, read off the write log rather than reasoned about.
 
     Recording after the call would leave a row that looks untouched and a
-    verification that is already running — the case `docs/adr/0018-controlled-batch-execution.md`'s
+    verification that is already running — the case ADR 0018's
     restart/resume test exists to make safe.
     """
     store = InMemoryBatchStore()

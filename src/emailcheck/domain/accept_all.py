@@ -1,6 +1,6 @@
 """The accept-all experiment's values: what it may ask, and what it may conclude.
 
-`docs/adr/0017-accept-all-control-experiment.md`. Pure domain logic — no socket, no clock, no cache,
+ADR 0017. Pure domain logic — no socket, no clock, no cache,
 no randomness of its own. The experiment service in `application/accept_all.py`
 is what runs; this is what it is allowed to say.
 
@@ -18,7 +18,7 @@ caller asked about:
 Both halves matter. `docs/requirements.md` section 1 says this project does not
 prove mailbox existence, and neither direction of a control probe changes that.
 The only thing Phase 9 may emit is `accept_all_suspected` — a risk flag —
-because `docs/adr/0017-accept-all-control-experiment.md`'s Result section says "only add" that.
+because ADR 0017's Result section says "only add" that.
 
 **Suspicion, not certainty.** One accepted control is one observation of one
 exchanger at one moment. The prompt says so in those words, `docs/requirements.md`
@@ -29,7 +29,7 @@ reason.
 **The aggregation was decided in Phase 5 and is not touched here.**
 `application/aggregate.py` already places `accept_all_suspected` in tier 4,
 which is `unknown` and which blocks a positive verdict — so
-`docs/adr/0017-accept-all-control-experiment.md`'s "an accepted target plus suspected accept-all
+ADR 0017's "an accepted target plus suspected accept-all
 aggregates to `unknown`" holds already, through the existing evidence
 architecture. Phase 9 produces the evidence; it changes no rule about what
 evidence means. Nothing in this module names a `Status`.
@@ -80,7 +80,7 @@ CONTROL_LOCAL_PART_LENGTH: Final = 20
 #: How many times a generator may draw again when the value it produced is one
 #: the experiment may not use.
 #:
-#: **Finite, and small.** `docs/adr/0017-accept-all-control-experiment.md` forbids sequential
+#: **Finite, and small.** ADR 0017 forbids sequential
 #: strings
 #: and this project forbids adaptive probing, so a generator that kept drawing
 #: until something "worked" would be the beginning of exactly that. A collision
@@ -99,7 +99,7 @@ MAX_COLLISION_RETRIES: Final = 3
 EXPERIMENT_VERSION: Final = "accept-all-2026-08-12"
 
 #: Seven days, the floor `docs/requirements.md` section 13 and
-#: `docs/adr/0017-accept-all-control-experiment.md` agree on, and a ceiling so a typo cannot make an
+#: ADR 0017 agree on, and a ceiling so a typo cannot make an
 #: answer outlive the deployment that produced it.
 MIN_CACHE_SECONDS: Final = 7 * 24 * 60 * 60
 MAX_CACHE_SECONDS: Final = 90 * 24 * 60 * 60
@@ -141,7 +141,7 @@ class AcceptAllOutcome(StrEnum):
 
 #: The outcomes a seven-day cache may hold.
 #:
-#: The two **decided** ones. `docs/adr/0017-accept-all-control-experiment.md` asks for a "seven-day
+#: The two **decided** ones. ADR 0017 asks for a "seven-day
 #: or longer domain cache", and a domain cache stores what was learned about the
 #: domain's configuration — which both `SUSPECTED` and `NOT_SUSPECTED` are.
 #:
@@ -195,7 +195,7 @@ def control_local_part(draw: str) -> ControlLocalPart:
 class AcceptAllSettings:
     """The feature flag and its bounds. **Disabled by default.**
 
-    `docs/adr/0017-accept-all-control-experiment.md` requires a "separate feature flag", and
+    ADR 0017 requires a "separate feature flag", and
     `docs/requirements.md` section 5 excludes "arbitrary active accept-all
     checks before Phase 9" — so the default is the one that probes nothing, and
     enabling it is an operator's deployment decision.
@@ -213,11 +213,11 @@ class AcceptAllSettings:
     enabled: bool = False
     #: How long a decided outcome stays cached, in seconds.
     #: `docs/requirements.md` section 13 prices accept-all suspicion at seven
-    #: days and `docs/adr/0017-accept-all-control-experiment.md` asks for "seven-day or longer", so
+    #: days and ADR 0017 asks for "seven-day or longer", so
     #: seven days is the floor as well as the default.
     cache_seconds: int = 7 * 24 * 60 * 60
     #: How many control probes one experiment may issue. **One**, and it is not
-    #: configurable upward: `docs/adr/0017-accept-all-control-experiment.md` says "exactly one
+    #: configurable upward: ADR 0017 says "exactly one
     #: control
     #: recipient probe", and a second would be the enumeration shape
     #: `docs/threat-model.md` lists first.
