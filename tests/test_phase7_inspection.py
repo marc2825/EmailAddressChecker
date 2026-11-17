@@ -125,7 +125,7 @@ def test_every_layer_the_prompt_names_is_enforced_or_accounted_for() -> None:
 
     # Every layer this enum holds is either one `docs/threat-model.md` names
     # or one a later Phase added deliberately. Phase 9's accept-all domain
-    # budget is the second kind: `docs/adr/0017-accept-all-control-experiment.md` requires a
+    # budget is the second kind: ADR 0017 requires a
     # **separate** domain budget, so it is not `target_domain` and is not one of
     # the eight above. Listing it here rather than widening the comparison keeps
     # a layer added by accident failing.

@@ -274,7 +274,7 @@ class InMemoryBatchStore:
 def resolver_for(routes: dict[str, str]) -> FakeResolver:
     """One exchanger per domain, so several domains can share one.
 
-    The scenario `docs/adr/0018-controlled-batch-execution.md`'s MX fairness needs and a
+    The scenario ADR 0018's MX fairness needs and a
     single-domain
     fixture cannot express: two domains behind one destination are two domain
     queues and one place the packets go.

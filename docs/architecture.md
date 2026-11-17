@@ -31,15 +31,15 @@ Much of the code is service infrastructure that the installed `emailcheck` comma
 | Job service and executor | `application/jobs.py`, `adapters/execution/` | Not reachable: the local-passive profile accepts no job | Only in the lab-active or service-active profile |
 | Persistent verdict cache, job and account-state stores | `adapters/storage/sqlite_store.py`, `adapters/storage/sqlite_job_store.py`, `adapters/storage/sqlite_account_state.py`, `application/verdict_cache.py` | Not reachable: the local stack persists nothing | Only when the corresponding store path is configured |
 | Retention and account deletion | `application/retention.py`, `application/account_deletion.py` | Not reachable | Services always composed over whatever stores exist; the background retention scheduler only in the lab-active or service-active profile |
-| Active batch | `application/batch.py`, `adapters/storage/sqlite_batch_store.py` | Not reachable | Not composed; an operator constructs `BatchService` ([ADR 0018](adr/0018-controlled-batch-execution.md)) |
-| Accept-all experiment | `application/accept_all.py` | Not reachable | Not composed; operator-run, [ADR 0017](adr/0017-accept-all-control-experiment.md) |
+| Active batch | `application/batch.py`, `adapters/storage/sqlite_batch_store.py` | Not reachable | Not composed; an operator constructs `BatchService` (see [Active batch](#active-batch)) |
+| Accept-all experiment | `application/accept_all.py` | Not reachable | Not composed; operator-run (see [Accept-all experiment](#accept-all-experiment)) |
 | Limited-beta harness | `application/beta.py` | Not reachable | Not composed; operator-run measurement tooling |
 
 **Plan for connecting them.** No public service surface is scheduled for 0.1.0, and configuration alone never makes anything in this table reachable from the command line. Each connection is a separate, reviewed change, in this order:
 
-1. An HTTP binding for `apps/api.py`, passive endpoint first. It adds the web framework as a production dependency with its own ADR ([ADR 0013](adr/0013-production-composition-and-the-public-boundary.md) names this as the one deferred piece) and must meet all seven [stop conditions on the ASGI binding](#stop-conditions-on-the-asgi-binding).
+1. An HTTP binding for `apps/api.py`, passive endpoint first. It adds the web framework as a production dependency with its own ADR and must meet all seven [stop conditions on the ASGI binding](#stop-conditions-on-the-asgi-binding).
 2. Active jobs behind that binding, only for a deployment that has completed the [readiness checklist](readiness-checklist.md), with persistent job and account-state stores and the operator approvals in [operations](operations.md).
-3. Active batch upload, only after step 2, for operator-approved accounts ([ADR 0018](adr/0018-controlled-batch-execution.md)), with the request body bounded while it is read.
+3. Active batch upload, only after step 2, for operator-approved accounts (see [Active batch](#active-batch)), with the request body bounded while it is read.
 
 The accept-all experiment and the beta harness stay operator tooling and are not planned as public endpoints. Until a step is done, its rows above stay "not reachable", and [STATUS.md](../STATUS.md) says so.
 
@@ -169,7 +169,7 @@ ceiling  : 8 × (120 s + 120 s) = 1920 s = 32 minutes
 
 Each value is validated on its own, but their product has no separate bound, and the ceiling is a legal configuration. Local processing and cleanup run inside these budgets, so this is a configured bound, not a measurement.
 
-The shipped limiter and quota stores belong to one process. Deployments run one worker process, and separate processes or replicas get no global pacing or quota guarantee. Distributed execution would need a shared atomic limiter, admission coordination, and consistent kill switches. See [operations](operations.md) and [ADR 0020](adr/0020-local-batch-and-release.md).
+The shipped limiter and quota stores belong to one process. Deployments run one worker process, and separate processes or replicas get no global pacing or quota guarantee. Distributed execution would need a shared atomic limiter, admission coordination, and consistent kill switches. See [operations](operations.md).
 
 Limiter memory is bounded by the idle-entry cap plus the entries held by in-flight callers, and admission control must bound those callers. The limiter TTL applies to idle entries only and is not required to exceed the longest SMTP session.
 
@@ -219,7 +219,7 @@ The passive API must keep working when active probing is disabled, the active wo
 
 ## 6. Idempotency
 
-An active request binds the authenticated account, the idempotency key, and the HMAC of the normalized target. Repeating it within the cache or idempotency window returns the existing job or result instead of scheduling another probe, and reusing a key with a different target is a conflict. An explicit, authorized refresh still goes through ordinary admission and quota. Where persistent storage is configured, the bound holds across concurrent submissions and worker restarts. See [ADR 0014](adr/0014-bounded-asynchronous-active-jobs.md) and [ADR 0019](adr/0019-operation-recipient-budget-and-atomic-job-identity.md).
+An active request binds the authenticated account, the idempotency key, and the HMAC of the normalized target. Repeating it within the cache or idempotency window returns the existing job or result instead of scheduling another probe, and reusing a key with a different target is a conflict. An explicit, authorized refresh still goes through ordinary admission and quota. Where persistent storage is configured, the bound holds across concurrent submissions and worker restarts. See [ADR 0019](adr/0019-operation-recipient-budget-and-atomic-job-identity.md).
 
 `JobService.submit` runs in this order:
 

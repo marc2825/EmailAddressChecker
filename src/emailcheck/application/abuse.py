@@ -292,7 +292,7 @@ class AbuseGuard:
         """May Phase 9's control probe be made against this domain?
 
         The ordinary destination layers **plus** `BudgetLayer.ACCEPT_ALL_DOMAIN`,
-        which `docs/adr/0017-accept-all-control-experiment.md` and `docs/requirements.md` section 10
+        which ADR 0017 and `docs/requirements.md` section 10
         both require to be *separate*. An experiment is contact a caller did not
         ask for — they asked about one mailbox — so it is paid for out of its own
         budget, and exhausting that budget stops experiments without touching

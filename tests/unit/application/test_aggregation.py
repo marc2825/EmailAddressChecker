@@ -612,7 +612,7 @@ def test_strength_alone_never_reaches_the_invalid_gate() -> None:
 
 
 def test_a_recipient_acceptance_alone_is_not_likely_deliverable() -> None:
-    """The row `docs/adr/0012-evidence-aggregation-and-final-status.md` records as the ADR 0012
+    """The row ADR 0012 records as the ADR 0012
     decision.
 
     A `250` with no route evidence beside it is not an evidence set this project

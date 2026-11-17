@@ -353,7 +353,7 @@ class SubmitOutcome:
     #: `None`. Carried straight from `VerificationOutcome.scheduling_key` and
     #: never re-derived; it decides nothing here either. A caller submitting
     #: many checks uses it to order the *next* ones fairly across destinations,
-    #: which is what `docs/adr/0018-controlled-batch-execution.md` asks for and what no caller can
+    #: which is what ADR 0018 asks for and what no caller can
     #: learn
     #: without resolving DNS through a second, unreviewed path.
     scheduling_key: str | None = None

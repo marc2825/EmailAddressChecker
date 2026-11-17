@@ -114,7 +114,7 @@ def test_the_builder_still_exposes_no_seam_for_a_clock_or_a_limiter() -> None:
     ],
 )
 def test_every_process_local_table_has_a_finite_bound(name: str, bound_is_finite: bool) -> None:
-    """The table `docs/adr/0016-abuse-controls-privacy-and-observability.md` publishes, asserted
+    """The table ADR 0016 publishes, asserted
     rather than
     described. Each of these is a structure an unauthenticated or authenticated
     caller can cause entries in, so each needs a ceiling that does not depend on

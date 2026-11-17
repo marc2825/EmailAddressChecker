@@ -182,7 +182,7 @@ class VerificationOutcome:
     #: so that a caller ordering many verifications can group them by the
     #: destination they will actually reach, without resolving DNS a second time
     #: through a path that has none of Phase 2's caching, ordering, or
-    #: destination policy. `docs/adr/0018-controlled-batch-execution.md` asks for *fair scheduling
+    #: destination policy. ADR 0018 asks for *fair scheduling
     #: by
     #: target domain and MX*, and this is the only honest way for anything above
     #: `AddressVerificationService` to learn the second half.

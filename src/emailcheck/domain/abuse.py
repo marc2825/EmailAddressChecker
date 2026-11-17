@@ -97,7 +97,7 @@ class BudgetLayer(StrEnum):
     #: One recipient domain, for Phase 9's accept-all experiment **only**.
     #:
     #: Separate from `TARGET_DOMAIN` on purpose, and the separation is the
-    #: requirement: `docs/adr/0017-accept-all-control-experiment.md` and `docs/requirements.md`
+    #: requirement: ADR 0017 and `docs/requirements.md`
     #: section 10 both ask for a *separate* domain budget. An experiment is
     #: additional contact with a domain nobody asked this project to contact —
     #: the caller asked about one mailbox — so it may not be paid for out of the

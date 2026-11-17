@@ -1,6 +1,6 @@
 """The batch scheduler: fair over destinations, bounded in workers, resumable, complete.
 
-`docs/adr/0018-controlled-batch-execution.md`. This is **orchestration over verifications that
+ADR 0018. This is **orchestration over verifications that
 already
 exist** — the prompt's scheduler section says *reuse all existing budgets* and
 *no increase in per-destination rate*, and the way to keep both is to own no
@@ -17,7 +17,7 @@ submissions, paced by the same limiter as ten thousand single checks. An
 inspection test pins the dependency direction.
 
 **Fairness is round-robin over exchangers, then over domains within one.**
-`docs/adr/0018-controlled-batch-execution.md`: *fair scheduling by target domain and MX*. Those are
+ADR 0018: *fair scheduling by target domain and MX*. Those are
 two
 different bounds, and a scheduler that keeps only the first satisfies the prompt
 by half: twenty domains behind one provider are twenty domain queues and one
@@ -44,7 +44,7 @@ them behind a semaphore would move the growth rather than stop it — the shape
 `application/admission.py` already refuses for its queue.
 
 **Every selected row ends in an explicit state, and the state is persisted.**
-`docs/adr/0018-controlled-batch-execution.md` asks for *resumable job state* and a *restart/resume*
+ADR 0018 asks for *resumable job state* and a *restart/resume*
 test, and an in-process registry answers neither. Row state, the child job
 identifier, and a deterministic idempotency handle go to a `BatchStore` before
 and after each submission, so a fresh service over the same store continues
@@ -271,7 +271,7 @@ def _decrement(counter: dict[str, int], key: str) -> None:
 class BatchReport:
     """One batch's outcome. Row-level, and complete.
 
-    `docs/adr/0018-controlled-batch-execution.md` Output: *row-level status/reasons/risk flags* and
+    ADR 0018 Output: *row-level status/reasons/risk flags* and
     *summary counts*. The rows are in **input order** regardless of the order
     they were submitted or completed in, because a report a submitter cannot
     line up against their own file is one they cannot act on.
@@ -378,7 +378,7 @@ class BatchService:
         **The two gates come before the file is read.** This takes bytes rather
         than a parsed input for exactly that reason: parsing is work a caller
         can ask for, and an unapproved account must not be able to ask for it.
-        `docs/adr/0018-controlled-batch-execution.md`'s preconditions are account review and a
+        ADR 0018's preconditions are account review and a
         documented lawful purpose, neither of which authentication establishes.
         """
         account = self._authorize(principal)
@@ -450,7 +450,7 @@ class BatchService:
     async def result(self, batch_id: BatchId, *, principal: Principal) -> BatchArtifact | None:
         """The expiring downloadable result, for its owner, before it expires.
 
-        `docs/adr/0018-controlled-batch-execution.md` Output. **The principal is a parameter, not a
+        ADR 0018 Output. **The principal is a parameter, not a
         token**: an anonymous download handle would be the public anonymous
         surface the prompt's non-goals name, arrived at from the other end.
         """
@@ -461,7 +461,7 @@ class BatchService:
     async def cancel(self, batch_id: BatchId, *, principal: Principal) -> bool:
         """Stop submitting new rows. Rows already handed over are the jobs' own.
 
-        `docs/adr/0018-controlled-batch-execution.md` asks for cancellation; Phase 6 owns what
+        ADR 0018 asks for cancellation; Phase 6 owns what
         happens
         to a job that is already running, and this does not invent a second
         mechanism or a forceful socket termination nothing else guarantees.
@@ -699,7 +699,7 @@ class BatchService:
 
         Duplicate detection is on the Phase 7 correlation digest, and the
         duplicate keeps its own position so the report still lines up with the
-        file. `docs/adr/0018-controlled-batch-execution.md` Input: *duplicate detection by HMAC*.
+        file. ADR 0018 Input: *duplicate detection by HMAC*.
         """
         rows: list[StoredBatchRow] = []
         seen: set[str] = set()
@@ -798,7 +798,7 @@ def _report_row(stored: StoredBatchRow, job: CheckJob | None) -> BatchReportRow:
     **A status is published only for a job that completed.** A submitted row
     whose verification is still running has no answer yet, and filling the
     status column from the passive half would export a partial result as a
-    final one — `docs/adr/0018-controlled-batch-execution.md`'s output is a deliverability report,
+    final one — ADR 0018's output is a deliverability report,
     and the column a reader acts on must not be filled in early.
 
     The submitted address is deliberately **not** carried. It is retained only

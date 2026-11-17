@@ -118,7 +118,7 @@ def test_no_batch_module_imports_a_transport_or_resolver(name: str) -> None:
 
 @pytest.mark.inspection
 def test_the_scheduler_learns_an_exchanger_and_never_resolves_one() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md` wants MX fairness; it does not want a second
+    """ADR 0018 wants MX fairness; it does not want a second
     router.
 
     A batch calling a resolver to learn where a domain's mail goes would
@@ -164,7 +164,7 @@ def test_batch_builds_no_limiter_quota_or_deployment_of_its_own() -> None:
 
 @pytest.mark.inspection
 def test_batch_keeps_no_result_cache_of_its_own() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`: *one active result cache shared with single
+    """ADR 0018: *one active result cache shared with single
     checks*.
 
     A batch-private `VerdictCache` would be a second answer to "is this address
@@ -188,7 +188,7 @@ def test_batch_keeps_no_result_cache_of_its_own() -> None:
 def test_no_batch_module_touches_the_accept_all_experiment(name: str) -> None:
     """Phase 9 is deferred and unwired, and Phase 10 does not wire it.
 
-    `docs/adr/0018-controlled-batch-execution.md` says nothing about accept-all, and a batch that
+    ADR 0018 says nothing about accept-all, and a batch that
     opportunistically enabled it would spend a budget the operator never
     authorized — for every row.
     """
@@ -261,7 +261,7 @@ def test_batch_is_disabled_and_unapproved_by_default() -> None:
 
 @pytest.mark.inspection
 def test_no_request_surface_names_the_batch_feature() -> None:
-    """`docs/adr/0018-controlled-batch-execution.md`'s non-goals begin with public anonymous
+    """ADR 0018's non-goals begin with public anonymous
     uploads.
 
     Nothing request-facing names batch at all, which is what stops a body key, a
@@ -378,7 +378,7 @@ def test_a_persisted_row_hides_its_plaintext_from_its_repr() -> None:
 def test_no_batch_module_logs_or_counts_a_target(name: str) -> None:
     """No metric label, no operator event, and no logger in the batch path.
 
-    `docs/adr/0018-controlled-batch-execution.md` needs none, and the surface it would create is a
+    ADR 0018 needs none, and the surface it would create is a
     list
     of addresses. `ports/metrics.py`'s labels are a closed enumeration, so a
     domain or an address is unrepresentable — this keeps the question from

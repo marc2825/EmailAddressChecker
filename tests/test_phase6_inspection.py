@@ -8,7 +8,7 @@ a request field, an entry point that reaches past the high-level service into
 them fails a behavioural test until the day it is wrong.
 
 So the twelve stop conditions — seven from `docs/adr/0009-smtp-dialogue-and-tls.md`, five from
-`docs/adr/0012-evidence-aggregation-and-final-status.md` — are asserted here as properties of the
+ADR 0012 — are asserted here as properties of the
 source.
 
 **Every scan reads the syntax tree with docstrings excluded.** These modules

@@ -320,22 +320,48 @@ ADR_HEADING = re.compile(r"^#\s*ADR\s*(\d{4})\b", re.MULTILINE)
 ADR_REFERENCE = re.compile(r"ADR\s+(\d{4})")
 
 
+ADR_INDEX = ADR_DIRECTORY / "README.md"
+RETIRED_ROW = re.compile(r"^\|\s*(\d{4})\s*\|", re.MULTILINE)
+
+
+def current_adrs() -> set[str]:
+    return {adr.name[:4] for adr in ADR_DIRECTORY.glob("*.md") if adr.name[:4].isdigit()}
+
+
+def retired_adrs() -> set[str]:
+    """The numbers the index lists as retired, each mapped to a current document."""
+    section = text_of(ADR_INDEX).split("## Retired ADRs", 1)[1]
+    return set(RETIRED_ROW.findall(section))
+
+
 def test_every_adr_heading_matches_its_filename() -> None:
     mismatches: list[str] = []
-    for adr in sorted(ADR_DIRECTORY.glob("*.md")):
+    for adr in sorted(ADR_DIRECTORY.glob("[0-9]*.md")):
         heading = ADR_HEADING.search(text_of(adr))
         if heading is None or not adr.name.startswith(f"{heading.group(1)}-"):
             mismatches.append(adr.name)
     assert mismatches == [], f"an ADR's number and filename disagree: {mismatches}"
 
 
+def test_the_adr_index_lists_every_current_adr_and_no_retired_file() -> None:
+    """The index is how a retired number resolves, so it has to stay exact."""
+    index = text_of(ADR_INDEX)
+    for adr in sorted(ADR_DIRECTORY.glob("[0-9]*.md")):
+        assert f"]({adr.name})" in index, f"the ADR index does not link {adr.name}"
+    assert not current_adrs() & retired_adrs(), "an ADR is both current and retired"
+
+
 def test_every_referenced_adr_exists() -> None:
-    """A reference by number is only useful while the number resolves."""
-    numbered = {adr.name[:4] for adr in ADR_DIRECTORY.glob("*.md") if adr.name[:4].isdigit()}
+    """A reference by number is only useful while the number resolves.
+
+    It resolves to a current ADR file, or to the index row that says where a
+    retired ADR's rules now live.
+    """
+    resolvable = current_adrs() | retired_adrs()
     dangling: list[str] = []
     for document in sorted(ROOT.glob("docs/**/*.md")):
         for reference in ADR_REFERENCE.findall(text_of(document)):
-            if reference not in numbered:
+            if reference not in resolvable:
                 dangling.append(f"{document.name} -> ADR {reference}")
     assert dangling == [], f"a document references an ADR that does not exist: {dangling}"
 

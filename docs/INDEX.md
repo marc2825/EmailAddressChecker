@@ -19,7 +19,7 @@ Start with the [README](../README.md) or the [日本語README](../README.ja.md).
 | [Architecture](architecture.md) | Components, dependency boundaries, and deployment profiles. |
 | [Requirements](requirements.md) | Functional scope and constraints. |
 | [Test strategy](test-strategy.md) | Fixtures, coverage goals, and safety checks. |
-| [Architecture decisions](adr/) | Reasons for lasting design choices. |
+| [Architecture decisions](adr/README.md) | The most important design decisions, and where retired ADRs now live. |
 | [Data-source policy](data-sources.md) | Provenance, licensing, and updates of classification datasets. |
 
 ## Operating and releasing

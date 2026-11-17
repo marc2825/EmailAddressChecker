@@ -341,7 +341,7 @@ Two readings of this vocabulary are forbidden, because each is the shortest plau
 
 ```python
 if reason in POSITIVE_RECIPIENT_REASONS:
-    return Status.LIKELY_DELIVERABLE   # forbidden
+    return Status.LIKELY_DELIVERABLE  # forbidden
 ```
 
 Membership says the server answered positively about the recipient at that stage. It does not make the address deliverable, and an accept-all server says `250` to everyone. Every aggregation runs the full section 4 precedence.
@@ -350,7 +350,7 @@ Membership says the server answered positively about the recipient at that stage
 
 ```python
 if evidence.strength is EvidenceStrength.STRONG:
-    return Status.INVALID              # forbidden
+    return Status.INVALID  # forbidden
 ```
 
 `invalid` needs evidence that is target-specific, not temporary, and whose reason means the address itself cannot receive mail. A reason in `NON_TARGET_SMTP_REASONS` never supports target invalidity, whatever its strength, and neither does anything marked temporary. Section 4.1 enforces both rules: the aggregator does not import `EvidenceStrength`, and positive membership is one of three conditions, not an answer.
