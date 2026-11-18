@@ -43,10 +43,15 @@ def test_every_named_path_exists(row: str) -> None:
         assert list(PACKAGE.glob(path.rstrip("/"))), f"{path} named in the table does not exist"
 
 
-def test_the_plan_is_stated_alongside_the_table() -> None:
+def test_the_plan_is_in_the_roadmap_and_linked_from_the_table() -> None:
     text = ARCHITECTURE.read_text(encoding="utf-8")
     section = text.split("### Component reachability", 1)[1].split("\n## ", 1)[0]
-    assert "**Plan for connecting them.**" in section
     assert "No public service surface is scheduled for 0.1.0" in section
+    assert "](../ROADMAP.md)" in section
+    roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
+    plan = roadmap.split("## Service components", 1)[1].split("\n## ", 1)[0]
+    for step in ("1. An HTTP binding", "2. Active jobs", "3. Active batch upload"):
+        assert step in plan, step
     status = (ROOT / "STATUS.md").read_text(encoding="utf-8")
     assert "docs/architecture.md#component-reachability" in status
+    assert "](ROADMAP.md)" in status

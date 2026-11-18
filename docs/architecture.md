@@ -35,13 +35,7 @@ Much of the code is service infrastructure that the installed `emailcheck` comma
 | Accept-all experiment | `application/accept_all.py` | Not reachable | Not composed; operator-run (see [Accept-all experiment](#accept-all-experiment)) |
 | Limited-beta harness | `application/beta.py` | Not reachable | Not composed; operator-run measurement tooling |
 
-**Plan for connecting them.** No public service surface is scheduled for 0.1.0, and configuration alone never makes anything in this table reachable from the command line. Each connection is a separate, reviewed change, in this order:
-
-1. An HTTP binding for `apps/api.py`, passive endpoint first. It adds the web framework as a production dependency with its own ADR and must meet all seven [stop conditions on the ASGI binding](#stop-conditions-on-the-asgi-binding).
-2. Active jobs behind that binding, only for a deployment that has completed the [readiness checklist](readiness-checklist.md), with persistent job and account-state stores and the operator approvals in [operations](operations.md).
-3. Active batch upload, only after step 2, for operator-approved accounts (see [Active batch](#active-batch)), with the request body bounded while it is read.
-
-The accept-all experiment and the beta harness stay operator tooling and are not planned as public endpoints. Until a step is done, its rows above stay "not reachable", and [STATUS.md](../STATUS.md) says so.
+No public service surface is scheduled for 0.1.0, and configuration alone never makes anything in this table reachable from the command line. The order and conditions for connecting these components are in [ROADMAP.md](../ROADMAP.md); until a step is done, its rows above stay "not reachable".
 
 ## 1. Dependency direction
 
@@ -201,7 +195,7 @@ Local `check` and `batch` reuse the passive verification service, keep the input
 Active batch is library-only and runs ordinary authorized jobs, never a second SMTP path.
 
 - It runs only when the feature is enabled and an operator has approved the account; authentication alone is not approval. Both checks happen before the file is read.
-- CSV input has byte and row limits checked before decoding, accepts one leading UTF-8 byte order mark, needs a fixed `email` column, and sends each cell through the ordinary address parser. An unparseable row is reported as `rejected`, never `invalid`, and the rest of the file proceeds.
+- CSV input has byte and row limits checked before decoding and accepts one leading UTF-8 byte order mark. It follows the same reading rules as the local CLI: a strict CSV reader, exactly one `email` column and no repeated column names (`address_column_index`), a row whose field count differs from the header rejected, and surrounding ASCII whitespace trimmed exactly as the address parser trims it. Each cell goes through the ordinary address parser. A malformed or unparseable row is reported as `rejected`, never `invalid`, and the rest of the file proceeds.
 - Duplicates are detected by HMAC. Bounded workers rotate fairly across exchangers and then domains, using exchangers learned from the ordinary pipeline.
 - Every row ends in an explicit state, and the report balances against the file. Report cells are escaped against spreadsheet formulas, and no raw SMTP reply can appear in a row.
 - Row state is persisted. A row is claimed before its job is submitted, so a restart presents the same idempotency handle and never starts a second verification.

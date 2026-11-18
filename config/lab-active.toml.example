@@ -13,9 +13,8 @@ port = 25
 connect_timeout_seconds = 3.0
 command_timeout_seconds = 3.0
 session_timeout_seconds = 12.0
-# `required` refuses to probe a server that advertises no STARTTLS, which is the
-# conservative default; `opportunistic` continues in plaintext when the extension
-# is absent. Neither tolerates a failed handshake.
+# `required` is the only policy: a server that advertises no STARTTLS is not
+# probed, and a failed handshake ends the session (ADR 0021).
 tls_policy = "required"
 tls_handshake_timeout_seconds = 5.0
 max_reply_line_bytes = 2048

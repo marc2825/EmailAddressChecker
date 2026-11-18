@@ -1,6 +1,6 @@
 # Contributing
 
-Contributions are welcome if they keep the project's conservative verdicts and network-safety boundaries. Please read the [README](README.md) and [project status](STATUS.md) first.
+Contributions are welcome if they keep the project's conservative verdicts and network-safety boundaries. Please read the [README](README.en.md) and [project status](STATUS.md) first.
 
 ## Setup
 

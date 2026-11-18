@@ -28,11 +28,14 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 - The service batch CSV parser accepts a leading UTF-8 byte order mark, as the local CLI already did. Spreadsheet "CSV UTF-8" exports were refused for lacking an `email` column (issue #2).
 - The DNS cache locks each key separately instead of using 64 shared stripes, so a slow lookup no longer delays unrelated domains. Identical concurrent lookups are still combined into one (issue #2).
 
+- The service batch CSV parser follows the local CLI's reading rules: a repeated column name or broken CSV syntax refuses the file, a row with the wrong number of fields is rejected, and only ASCII whitespace around an address is trimmed, as the address parser does.
+
 ### Documentation and tests
 
 - Single-label (`user@localhost`) and unbracketed numeric (`user@192.0.2.1`) domains are documented as DNS names, judged by DNS and the destination policy and never read as address literals ([ADR 0005](docs/adr/0005-idna-uts46-domain-encoding.md), judgment 11).
 - The [architecture](docs/architecture.md#component-reachability) lists which service components are library-only and the order for connecting them.
 - Specification tests and structural tests are separated by the `inspection` and `docs_contract` markers (`make test-spec`, `make test-structure`), and CI runs them as separate steps.
+- Planned work is listed in [ROADMAP.md](ROADMAP.md).
 - The documentation is rewritten for readability, without changing documented behavior. Current behavior is described in the main documents; ADRs are kept only for the most important decisions, and [docs/adr/README.md](docs/adr/README.md) maps each retired ADR to where its rules now live.
 
 ### Notes

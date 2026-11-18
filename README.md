@@ -1,96 +1,105 @@
 # EmailAddressChecker
 
-[English](README.md) | [日本語](README.ja.md)
+[日本語](README.md) | [English](README.en.md)
 
-EmailAddressChecker is a Python CLI and library that checks an email address's syntax, its domain's DNS mail routing, and its likely deliverability without sending any email. It reports what the evidence supports. It cannot tell you that a mailbox exists or that a message will arrive.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/teaser-dark.svg">
+    <img src="docs/assets/teaser-light.svg" width="100%" alt="EmailAddressCheckerのロゴ">
+  </picture>
+</p>
 
-Local checks never connect to SMTP servers. Active SMTP probing is a separate, restricted feature for operators.
+EmailAddressCheckerは、**実際にメールを送信することなく、メールアドレスの存在を推定する**サービスです。
 
-## Features
+具体的には、メールアドレスの構文とドメインのDNS / MXレコードから配送見込みを推定するような、Python製のCLI・ライブラリです。メールボックスの実在や、メールが実際に届くことまでは保証しません。
 
-- Passive checks of address syntax and DNS/MX records.
-- Batch checks of CSV or TXT files, with results in input order as JSON or CSV.
-- Offline expansion of `*` patterns into candidate addresses.
-- Optional active checks through a separately configured, authorized remote validator.
+※ ローカルでの検査ではSMTPサーバーに接続しません。SMTPによる検査は、別途設定して許可を得た運用環境向けの機能です。
 
-## Installation
+## 主な機能
 
-Requires Python 3.12 or later. Version 0.1.0 is not on PyPI yet, so install from the repository:
+- SMTPに接続せず、構文とDNS / MXレコードを確認する受動検査
+- CSV・TXTファイルの一括検査と、入力順を維持したJSON・CSV出力
+- `*` を指定した文字で置き換えて候補アドレスを作成する、オフラインの候補生成（ワイルドカード）
+- 明示的に設定・許可されたリモート検査サービスを使用する、限定的なSMTP検査
 
-```bash
+## インストール
+
+Python 3.12以降が必要です。
+
+~~~bash
 git clone https://github.com/marc2825/EmailAddressChecker.git
 cd EmailAddressChecker
 python -m pip install .
-```
+~~~
 
-The command and the Python package are both named `emailcheck`.
+※ 準備が整い次第、 PyPI に公開する予定です。
 
-## Quick start
+## 使い方
 
-```bash
-# Check one or more addresses (DNS only)
+コマンド名とPythonのimport名はどちらも `emailcheck` です。
+
+~~~bash
+# 1件または複数件を検査（SMTPには接続しない）
 emailcheck check alice@example.com bob@example.org
 
-# Check a CSV file with an "email" column
+# email列を持つCSVを検査
 emailcheck batch addresses.csv --output results.csv
 
-# Check a TXT file with one address per line
+# 1行1アドレスのTXTを検査
 emailcheck batch addresses.txt --format txt --output results.json
 
-# Skip repeated addresses and show progress
+# 重複をスキップし、進捗を表示
 emailcheck batch addresses.csv --duplicates skip --progress --output results.json
 
-# Generate candidates offline
+# 候補アドレスをオフラインで生成
 emailcheck expand 'a**ce@example.com' --chars abc --output candidates.csv
 
-# Show only the maximum number of candidates
+# 生成される候補数の上限のみを確認
 emailcheck expand 'a**ce@example.com' --charset lower --dry-run
-```
+~~~
 
-The original single-address form still works: `emailcheck alice@example.com --json`.
+従来の単一アドレス指定（`emailcheck alice@example.com --json`）も引き続き使用できます。
 
-### Input and output
+### 入出力と制限
 
-CSV input is UTF-8 with an `email` column. A leading byte order mark, which spreadsheet exports add, is accepted. TXT input has one address per line. Results keep the input order. Output is JSON unless you pass `--output-format csv` or an output file name ending in `.csv`.
+- CSVはUTF-8（BOM付きも可）で、`email` 列が1つ必要です。TXTは1行に1アドレスです。
+- 結果は入力の順に、既定ではJSONで出力します。`--output-format csv` を付けるか、出力ファイル名を `.csv` にするとCSVになります。
+- 元のメールアドレスは、`--include-address` を付けたときだけ結果に含めます。
+- 一括処理は既定で10,000行までですが、受動検査のクォータは既定でキーごとに1時間1,000件です。大きなファイルでは一部の行が拒否されることがあるので、[config/budgets.toml](config/budgets.toml) で調整してください。
+- 制限はプロセスごとにかかり、複数のプロセスの間では共有しません。
 
-Results leave out the input addresses unless you pass `--include-address`. Keep input and output files that contain addresses private, and pass sensitive addresses in a file rather than as arguments, which can remain in shell history.
-
-A batch may hold 10,000 rows by default, but the default passive quota is 1,000 checks per hour per key, so a larger run may return refused rows unless you raise the quota in [config/budgets.toml](config/budgets.toml):
-
-```bash
+~~~bash
 emailcheck batch addresses.csv --config config/budgets.toml --output results.csv
-```
+~~~
 
-Limits and quotas apply within one process and are not shared between processes. See the [configuration reference](config/README.md).
+入力と出力のファイルには個人情報が含まれ得るので、取り扱いに注意してください。機密性の高いアドレスは、シェル履歴に残るコマンド引数ではなくファイルで渡してください。詳しくは[利用ガイド](docs/usage-ja.md)と[設定ファイルの説明](config/README.md)を参照してください。
 
-## Results
+## 判定結果の見方
 
-| Status | Meaning |
+| ステータス | 意味 |
 | --- | --- |
-| `likely_deliverable` | There is positive delivery evidence. The mailbox is still not guaranteed to exist. |
-| `invalid` | Syntax or mail routing definitely fails, or there is authoritative negative evidence. |
-| `temporary_unknown` | A temporary problem prevented a reliable conclusion. |
-| `unknown` | The evidence is insufficient or ambiguous, or the address form is unsupported. |
+| `likely_deliverable` | 配送できることを示す根拠がある。実在は保証しない。 |
+| `invalid` | 構文や配送経路に明らかな不備があるか、配送できないことを示す権威ある根拠がある。 |
+| `temporary_unknown` | 一時的な問題で判定できない。 |
+| `unknown` | 根拠が足りないか曖昧、または非対応の形式で判定できない。 |
 
-`confidence` is a category, not a probability. Working MX records do not prove that any particular mailbox exists. Processing states such as `refused` and `failed` are reported separately from these statuses. The [status model](docs/status-model.md) gives the evidence rules and reason codes.
+ローカルの検査（構文とDNSのみ）では `likely_deliverable` にはなりません。DNS/MXが正常でも、特定のメールボックスがあるとは限らないためです。`confidence` は段階で表した信頼度で、確率ではありません。`refused` や `failed` などの処理状態は、判定とは別に出力します。詳しくは[ステータス仕様](docs/status-model.md)を参照してください。
 
-## Scope and safety
+## 機能の範囲と安全性
 
-The active path is off by default. It needs an authorized deployment with authentication, destination controls, rate limits, and an explicit decision by the operator. It never sends a message, and it is not an unrestricted bulk SMTP checker. Use it only on systems and addresses you own or are expressly authorized to test; see [SECURITY.md](SECURITY.md) and the [deployment checklist](docs/readiness-checklist.md).
+- SMTPによる検査は初期状態で無効です。使うには、認証、宛先の制限、レート制限、運用者の明示的な許可を備えた別の環境が必要で、対象は自分が所有するか許可を得たものに限ります（[セキュリティポリシー](SECURITY.md)、[運用前チェックリスト](docs/readiness-checklist.md)）。
+- メール本文を送る機能や、無制限にSMTPで一括検査する機能はありません。
+- SMTP検査では、証明書とホスト名を検証するTLSが必須です。`--remote` もHTTPSが必須で、開発用のHTTPは `127.0.0.1` と `[::1]` だけを許可します（[ADR 0021](docs/adr/0021-required-encryption-at-network-boundaries.md)）。
+- 使い捨てメール、フリーメール、プロバイダーの分類データは未収録です。フラグが付かなくても安全とは限りません。ロールアドレス（役割アドレス）の分類は使えます（[データセットの状態](src/emailcheck/data/passive/README.md)）。
+- APIキー認証、HTTPリクエストの処理、ジョブの保存、SMTPの一括検査などのサービス向け部品は、ライブラリとしてだけ提供しています。HTTPサーバーは同梱しておらず、`emailcheck` コマンドからは使いません（[コンポーネントの到達範囲](docs/architecture.md#component-reachability)、[今後の計画](ROADMAP.md)）。
 
-The legacy `--remote` client requires HTTPS. For local development it accepts HTTP only for the exact addresses `127.0.0.1` and `[::1]`; `localhost` is not accepted. It follows no redirects and ignores proxy environment variables. Active SMTP requires verified TLS in both the production composition and the library dialogue; the former `OPPORTUNISTIC` policy has been removed. See [ADR 0021](docs/adr/0021-required-encryption-at-network-boundaries.md) for migration details.
+## 開発
 
-The disposable-domain, free-mail, and provider datasets are empty for now, so a missing flag does not mean the address is clean. Role-address classification is included. See the [dataset status](src/emailcheck/data/passive/README.md).
-
-The repository also contains service components (API-key authentication, an HTTP request handler, job and verdict stores, active batch) that are available only as a library. No HTTP server ships, and the installed command does not use them. See [component reachability and roadmap](docs/architecture.md#component-reachability).
-
-## Development
-
-```bash
+~~~bash
 python -m pip install -e '.[dev,release]'
 python -m pytest
-```
+~~~
 
-Start from the [documentation index](docs/INDEX.md) for architecture, testing, and releases, and see [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
+設計、テスト、公開の手順は[ドキュメント一覧](docs/INDEX.md)を、コントリビューションの方法は[CONTRIBUTING.md](CONTRIBUTING.md)を参照してください。
 
-Licensed under [Apache 2.0](LICENSE).
+ライセンスは [Apache 2.0](LICENSE) です。

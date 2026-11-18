@@ -1,6 +1,6 @@
 # Documentation
 
-Start with the [README](../README.md) or the [日本語README](../README.ja.md). Current capabilities and limitations are in [Project status](../STATUS.md).
+Start with the [README](../README.md) (Japanese) or the [English README](../README.en.md). Current capabilities and limitations are in [Project status](../STATUS.md). Planned work is in the [roadmap](../ROADMAP.md).
 
 ## Using EmailAddressChecker
 

@@ -54,7 +54,7 @@ Changelog = "https://github.com/marc2825/EmailAddressChecker/blob/main/CHANGELOG
 path = "src/emailcheck/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/scripts", "/docs", "/config", "/README.md", "/CHANGELOG.md", "/LICENSE", "/SECURITY.md", "/CONTRIBUTING.md", "/STATUS.md", "/Makefile"]
+include = ["/src", "/tests", "/scripts", "/docs", "/config", "/README.md", "/README.en.md", "/CHANGELOG.md", "/LICENSE", "/SECURITY.md", "/CONTRIBUTING.md", "/STATUS.md", "/ROADMAP.md", "/Makefile"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/emailcheck"]

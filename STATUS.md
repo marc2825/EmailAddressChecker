@@ -14,15 +14,9 @@ EmailAddressChecker estimates email deliverability conservatively. It does not v
 | Service components | Library only | API-key auth, the HTTP request handler, job/verdict/account stores, the executor, retention, active batch, the accept-all experiment, and the beta harness are tested but not reachable from the CLI. No HTTP server ships. See [component reachability](docs/architecture.md#component-reachability). |
 | Package release | Pending | 0.1.0 is unreleased; packaging and publishing workflows are ready. |
 
-## Roadmap for service components
+## Roadmap
 
-Nothing in 0.1.0 exposes a public service. Each step below is a separate, reviewed change, in this order:
-
-1. An HTTP binding for the existing request handler, passive endpoint first, with a dependency ADR and the documented binding stop conditions.
-2. Active jobs behind it, only for a deployment that has completed the readiness checklist.
-3. Active batch upload for operator-approved accounts.
-
-The accept-all experiment and the beta harness stay operator tooling. Configuration alone never makes any of these reachable from the CLI. Details are in the [architecture](docs/architecture.md#component-reachability).
+Planned work, including the order for connecting the service components, is in [ROADMAP.md](ROADMAP.md).
 
 ## Limitations
 
@@ -32,7 +26,7 @@ The accept-all experiment and the beta harness stay operator tooling. Configurat
 - Local quota and rate-limit state belongs to one process. Separate processes or replicas do not share a budget.
 - Empty classification datasets give no evidence either way.
 
-Usage and result meanings are in the [README](README.md), the [Japanese CLI reference](docs/usage-ja.md), and the [status model](docs/status-model.md).
+Usage and result meanings are in the [README](README.en.md), the [Japanese CLI reference](docs/usage-ja.md), and the [status model](docs/status-model.md).
 
 ## Active deployment
 
