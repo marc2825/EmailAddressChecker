@@ -235,17 +235,69 @@ def test_an_unparseable_row_does_not_fail_the_file() -> None:
     assert parsed.rows[1].rejection is not None
 
 
-def test_a_whitespace_row_is_counted_rather_than_dropped() -> None:
-    """A row that held only spaces is skipped **and counted**.
+def test_a_whitespace_row_is_counted_and_a_blank_line_is_rejected() -> None:
+    """An address cell holding only spaces is skipped and counted.
 
-    A truly empty line never reaches this code — `csv.DictReader` drops it — so
-    the count is of rows the reader produced and this rejected, which is what
-    makes the report balance against what was read.
+    A blank line has no fields at all, so its field count differs from the
+    header and it is a rejected row, as in the local CLI. Nothing is dropped
+    silently, so the report balances against the file.
     """
     parsed = parse_batch_csv(b"email\nuser@example.test\n\n   \n")
 
-    assert len(parsed) == 1
+    assert [(row.number, row.parsed, row.malformed) for row in parsed.rows] == [
+        (1, True, False),
+        (2, False, True),
+    ]
     assert parsed.skipped == 1
+
+
+# --- one reading rule for the service and the local CLI (audit 2026-11-17) ---
+
+
+@pytest.mark.parametrize(
+    "header",
+    [b"email,email", b"Email, email ", b"email,name,name"],
+    ids=["duplicate-email", "duplicate-after-normalization", "duplicate-other"],
+)
+def test_a_repeated_column_name_is_refused(header: bytes) -> None:
+    """A dict-based reader kept the last `email` cell; both paths now refuse."""
+    content = header + b"\nalice@example.test,bob@example.test,x\n"
+
+    with pytest.raises(BatchError, match="repeat"):
+        parse_batch_csv(content)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [b"short@example.test", b"long@example.test,A,extra"],
+    ids=["too-few-fields", "too-many-fields"],
+)
+def test_a_row_with_the_wrong_field_count_is_rejected(line: bytes) -> None:
+    parsed = parse_batch_csv(b"email,name\n" + line + b"\nok@example.test,B\n")
+
+    assert parsed.rows[0].malformed is True
+    assert parsed.rows[0].parsed is False
+    assert parsed.rows[0].submitted == ""
+    assert parsed.rows[1].parsed is True
+
+
+def test_broken_csv_syntax_refuses_the_file() -> None:
+    """A strict reader, as in the local CLI; the error names no content."""
+    with pytest.raises(BatchError, match="well-formed CSV") as raised:
+        parse_batch_csv(b'email\n"user@example.test\n')
+
+    assert "user@example.test" not in str(raised.value)
+
+
+def test_only_ascii_whitespace_is_trimmed_as_in_the_parser() -> None:
+    """`str.strip()` removed U+00A0 too, so the CSV accepted what the parser refuses."""
+    nbsp = b"\xc2\xa0user@example.test\xc2\xa0"  # U+00A0 on both sides
+    parsed = parse_batch_csv(b"email\n \tuser@example.test \n" + nbsp + b"\n\xc2\xa0\n")
+
+    assert parsed.rows[0].parsed is True
+    assert parsed.rows[0].submitted == "user@example.test"
+    assert [row.parsed for row in parsed.rows[1:]] == [False, False]
+    assert parsed.skipped == 0
 
 
 def test_a_domain_literal_reaches_phase_ones_rejection_through_the_csv() -> None:

@@ -159,6 +159,16 @@ def _is_control_character(char: str) -> bool:
     return code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F
 
 
+def strip_interface_whitespace(text: str) -> str:
+    """Remove surrounding ASCII whitespace, exactly as `parse_address` does.
+
+    Only space, tab, CR, LF, VT, and FF count as user-interface framing. Other
+    Unicode spaces, such as U+00A0, are kept so the parser rejects them, and any
+    caller that trims before parsing must use this rather than `str.strip()`.
+    """
+    return text.strip(_UI_WHITESPACE)
+
+
 def has_control_character(text: str) -> bool:
     """Report CR, LF, NUL, and other C0/C1 control characters anywhere in `text`."""
     return any(_is_control_character(char) for char in text)
@@ -413,7 +423,7 @@ def parse_address(raw: RawAddressInput) -> AddressParseResult:
     aggregation precedence in `docs/status-model.md`.
     """
     redacted = raw.redacted
-    text = raw.value.strip(_UI_WHITESPACE)
+    text = strip_interface_whitespace(raw.value)
 
     if not text:
         return _reject(AddressSyntaxIssue.EMPTY_INPUT, redacted)

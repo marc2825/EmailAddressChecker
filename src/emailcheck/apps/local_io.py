@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TextIO
 
 from emailcheck.application.local_batch import InputRow
-from emailcheck.domain.batch import BatchLimits
+from emailcheck.domain.batch import BatchLimits, address_column_index
 
 
 def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRow]:
@@ -38,10 +38,9 @@ def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRo
         else:
             reader = csv.reader(source, strict=True)
             header = next(reader, [])
-            normalized = [name.strip().lower() for name in header]
-            if normalized.count("email") != 1 or len(set(normalized)) != len(normalized):
-                raise ValueError("CSV needs exactly one email header and unique column names")
-            index = normalized.index("email")
+            # Shared with the service batch parser, so both accept and refuse
+            # the same headers. `BatchError` is a `ValueError`.
+            index = address_column_index(header)
             for number, row in enumerate(reader, 1):
                 if number > limits.max_rows:
                     raise ValueError("input exceeds the row limit")

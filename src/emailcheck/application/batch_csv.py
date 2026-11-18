@@ -36,8 +36,14 @@ from emailcheck.domain.address import (
     AddressRejected,
     RawAddressInput,
     parse_address,
+    strip_interface_whitespace,
 )
-from emailcheck.domain.batch import ADDRESS_COLUMN, BatchError, BatchLimits, BatchRowState
+from emailcheck.domain.batch import (
+    BatchError,
+    BatchLimits,
+    BatchRowState,
+    address_column_index,
+)
 
 __all__ = [
     "FORMULA_PREFIXES",
@@ -110,13 +116,16 @@ class BatchInputRow:
     #: file the submitter still has. ADR 0018's output is
     #: row-level.
     number: int
-    #: Exactly what the cell contained. Bounded by the parser's own input limit
-    #: and never used as an address unless `address` is set.
+    #: The cell with surrounding ASCII whitespace removed, as the address
+    #: parser removes it. Never used as an address unless `address` is set.
     submitted: str
     #: The normalized address, when the row parsed. `None` when it did not.
     address: AddressAccepted | None = None
     #: Phase 1's rejection, when it did not. Carried rather than re-derived.
     rejection: AddressRejected | None = None
+    #: The row had a different number of fields from the header, so no cell
+    #: was read as an address. Reported as `rejected`, like the local CLI does.
+    malformed: bool = False
 
     @property
     def parsed(self) -> bool:
@@ -135,9 +144,8 @@ class BatchInput:
     """
 
     rows: tuple[BatchInputRow, ...]
-    #: Rows the file held that were not accepted as rows at all — a blank line,
-    #: a row with no address cell. Counted so the report balances against the
-    #: file rather than against what survived.
+    #: Well-formed rows whose address cell was empty after the parser's own
+    #: whitespace trimming. Counted so the report balances against the file.
     skipped: int = 0
 
     def __len__(self) -> int:
@@ -181,31 +189,32 @@ def parse_batch_csv(content: bytes, *, limits: BatchLimits | None = None) -> Bat
     if "\x00" in text:
         raise BatchError("a batch input carries a NUL")
 
-    reader = csv.DictReader(io.StringIO(text, newline=""))
-    if reader.fieldnames is None:
-        raise BatchError("a batch input needs a header row")
-    header = [name.strip().lower() for name in reader.fieldnames]
-    if ADDRESS_COLUMN not in header:
-        raise BatchError(f"a batch input needs an {ADDRESS_COLUMN!r} column")
+    # The same reading rules as the local CLI (`apps/local_io.py`): a strict
+    # reader, one shared header check, and a row whose field count differs
+    # from the header is rejected rather than read by column name.
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    try:
+        header = next(reader, None)
+        if header is None:
+            raise BatchError("a batch input needs a header row")
+        index = address_column_index(header)
 
-    rows: list[BatchInputRow] = []
-    skipped = 0
-    for number, record in enumerate(reader, start=1):
-        if len(rows) >= bounds.max_rows:
-            raise BatchError(f"a batch input may hold at most {bounds.max_rows} rows")
-        cell = _cell(record, header)
-        if cell is None or not cell.strip():
-            skipped += 1
-            continue
-        rows.append(_row(number, cell))
+        rows: list[BatchInputRow] = []
+        skipped = 0
+        for number, record in enumerate(reader, start=1):
+            if len(rows) >= bounds.max_rows:
+                raise BatchError(f"a batch input may hold at most {bounds.max_rows} rows")
+            if len(record) != len(header):
+                rows.append(BatchInputRow(number=number, submitted="", malformed=True))
+                continue
+            cell = strip_interface_whitespace(record[index])
+            if not cell:
+                skipped += 1
+                continue
+            rows.append(_row(number, cell))
+    except csv.Error:
+        raise BatchError("a batch input must be well-formed CSV") from None
     return BatchInput(rows=tuple(rows), skipped=skipped)
-
-
-def _cell(record: dict[str | None, str | None], header: list[str]) -> str | None:
-    for key, value in record.items():
-        if isinstance(key, str) and key.strip().lower() == ADDRESS_COLUMN:
-            return value if isinstance(value, str) else None
-    return None
 
 
 def _row(number: int, cell: str) -> BatchInputRow:
@@ -213,12 +222,13 @@ def _row(number: int, cell: str) -> BatchInputRow:
 
     `RawAddressInput` is the only door — it holds the submitted text and its
     redacted display form, and it has no SMTP target, so nothing here can hand
-    raw input to an I/O port.
+    raw input to an I/O port. `cell` is already trimmed exactly as the parser
+    trims, so other Unicode spaces reach the parser and are judged by it.
     """
-    parsed = parse_address(RawAddressInput(cell.strip()))
+    parsed = parse_address(RawAddressInput(cell))
     if isinstance(parsed, AddressAccepted):
-        return BatchInputRow(number=number, submitted=cell.strip(), address=parsed)
-    return BatchInputRow(number=number, submitted=cell.strip(), rejection=parsed)
+        return BatchInputRow(number=number, submitted=cell, address=parsed)
+    return BatchInputRow(number=number, submitted=cell, rejection=parsed)
 
 
 @dataclass(frozen=True, slots=True)

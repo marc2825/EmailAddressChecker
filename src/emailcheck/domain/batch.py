@@ -27,6 +27,7 @@ aggregator produced for that address. This module names no `Status`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
@@ -45,6 +46,7 @@ __all__ = [
     "BatchLimits",
     "BatchRowState",
     "BatchSettings",
+    "address_column_index",
 ]
 
 #: The one column ADR 0018 names: *one address column*.
@@ -80,6 +82,23 @@ RESULT_MEDIA_TYPE: Final = "text/csv; charset=utf-8"
 
 class BatchError(ValueError):
     """A batch this project may not accept or construct."""
+
+
+def address_column_index(header: Sequence[str]) -> int:
+    """The position of the address column, for every CSV reader in this project.
+
+    The local CLI and the service batch parser both call this, so one file is
+    accepted or refused the same way by both. Names are compared after trimming
+    and lowercasing. The header must name `email` exactly once and repeat no
+    name: with a repeated name a dict-based reader silently keeps the last cell,
+    so which value counts as the address would depend on the reader.
+    """
+    names = [name.strip().lower() for name in header]
+    if len(set(names)) != len(names):
+        raise BatchError("a CSV header may not repeat a column name")
+    if names.count(ADDRESS_COLUMN) != 1:
+        raise BatchError(f"a CSV header needs exactly one {ADDRESS_COLUMN!r} column")
+    return names.index(ADDRESS_COLUMN)
 
 
 @dataclass(frozen=True, slots=True)

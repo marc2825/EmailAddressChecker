@@ -235,6 +235,38 @@ def test_local_input_accepts_one_leading_byte_order_mark(
     assert all(row.error is None for row in rows)
 
 
+@pytest.mark.parametrize(
+    "header", ["email,email", "Email, email ", "email,name,name", "name,phone", ""]
+)
+def test_local_and_service_csv_readers_refuse_the_same_headers(tmp_path: Path, header: str) -> None:
+    """One header rule (`address_column_index`) for both readers (audit 2026-11-17)."""
+    from emailcheck.application.batch_csv import parse_batch_csv
+    from emailcheck.domain.batch import BatchError
+
+    content = f"{header}\nalice@example.com,bob@example.com,x\n".encode()
+    source = tmp_path / "input.csv"
+    source.write_bytes(content)
+
+    with pytest.raises(ValueError):
+        list(read_rows(source, "csv", BatchLimits()))
+    with pytest.raises(BatchError):
+        parse_batch_csv(content)
+
+
+def test_local_and_service_csv_readers_reject_the_same_rows(tmp_path: Path) -> None:
+    from emailcheck.application.batch_csv import parse_batch_csv
+
+    content = b"email,name\nok@example.com,A\nshort@example.com\nlong@example.com,B,C\n\n"
+    source = tmp_path / "input.csv"
+    source.write_bytes(content)
+
+    local = [row.error for row in read_rows(source, "csv", BatchLimits())]
+    service = [row.malformed for row in parse_batch_csv(content).rows]
+
+    assert local == [None, "malformed_row", "malformed_row", "malformed_row"]
+    assert service == [False, True, True, True]
+
+
 def test_bounds_and_atomic_output(tmp_path: Path) -> None:
     source = tmp_path / "input.txt"
     source.write_text("x\nx\nx\n")
