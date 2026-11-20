@@ -146,6 +146,40 @@ def test_the_logging_sink_writes_published_vocabulary_and_no_address(
     assert "emailcheck.operator" in rendered
 
 
+def test_the_logging_sink_renders_the_event_in_the_message() -> None:
+    """Issue #3: with a plain formatter only the logger name used to appear.
+
+    The fields must be in the message itself, because the CLI configures no
+    handler that would print `extra`.
+    """
+    import io
+    import logging
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = logging.getLogger("emailcheck.operator.test-render")
+    logger.addHandler(handler)
+    logger.propagate = False
+    try:
+        LoggingOperatorSink(logger=logger).record(
+            OperatorEvent(
+                kind=OperatorEventKind.INTERNAL_ERROR,
+                reason=ReasonCode.INTERNAL_ERROR,
+                domain="example.test",
+                detail="smtp stage",
+            )
+        )
+    finally:
+        logger.removeHandler(handler)
+
+    line = stream.getvalue().strip()
+    assert line == (
+        "emailcheck.operator event=internal_error reason=internal_error "
+        "domain=example.test detail='smtp stage'"
+    )
+
+
 def test_a_broken_logging_handler_does_not_become_a_request_failure() -> None:
     """`record` is called from a failure path; it must not raise a second one."""
 

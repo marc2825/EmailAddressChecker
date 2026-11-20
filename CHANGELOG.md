@@ -25,6 +25,11 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 
 ### Fixed
 
+- A domain containing a character that UTS-46 would delete (such as U+200B or U+00AD) is invalid instead of being checked as a different domain ([ADR 0005](docs/adr/0005-idna-uts46-domain-encoding.md), judgment 12; issue #3).
+- Operator log lines show the event, reason, domain, and detail, and one abuse refusal is logged once (issue #3).
+- Ctrl-C works while batch input is being read, and batch input must be a regular file (issue #3).
+- `expand` writes nothing when any candidate fails (issue #3).
+- Both CSV readers skip blank lines, reject an empty address cell as empty input, and refuse a file containing NUL (issue #3).
 - The service batch CSV parser accepts a leading UTF-8 byte order mark, as the local CLI already did. Spreadsheet "CSV UTF-8" exports were refused for lacking an `email` column (issue #2).
 - The DNS cache locks each key separately instead of using 64 shared stripes, so a slow lookup no longer delays unrelated domains. Identical concurrent lookups are still combined into one (issue #2).
 

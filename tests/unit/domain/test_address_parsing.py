@@ -13,6 +13,7 @@ from emailcheck.domain.address import (
     RawAddressInput,
     RejectionKind,
     ascii_domain_issue,
+    encode_domain_ascii,
     parse_address,
 )
 from emailcheck.domain.reasons import ReasonCode
@@ -312,6 +313,48 @@ def test_invisible_and_separator_characters_are_invalid_not_unsupported(
         AddressSyntaxIssue.LOCAL_PART_DISALLOWED_UNICODE,
         AddressSyntaxIssue.CONTROL_CHARACTER,
     }, name
+
+
+IGNORED_BY_UTS46 = [
+    ("zero width space U+200B", chr(0x200B)),
+    ("soft hyphen U+00AD", chr(0x00AD)),
+    ("byte order mark U+FEFF", chr(0xFEFF)),
+    ("word joiner U+2060", chr(0x2060)),
+    ("mongolian vowel separator U+180E", chr(0x180E)),
+    ("combining grapheme joiner U+034F", chr(0x034F)),
+    ("variation selector U+FE0F", chr(0xFE0F)),
+]
+
+
+@pytest.mark.parametrize(("name", "char"), IGNORED_BY_UTS46)
+def test_a_character_uts46_would_delete_makes_the_domain_invalid(name: str, char: str) -> None:
+    """Issue #3: UTS-46 maps these to nothing, so `exam?ple.com` became `example.com`.
+
+    A different domain would be looked up than the one submitted, the failure
+    ADR 0005 rejected IDNA 2003 for. The local part already treats invisible
+    characters as invalid (judgment 9); the domain now does too (judgment 12).
+    """
+    result = rejected(f"user@exam{char}ple.com")
+    assert result.kind is RejectionKind.INVALID, name
+    assert result.reason is ReasonCode.INVALID_SYNTAX, name
+    assert result.issue is AddressSyntaxIssue.DOMAIN_INVALID_CHARACTER, name
+    assert encode_domain_ascii(f"exam{char}ple.com") is None, name
+
+
+@pytest.mark.parametrize(("name", "char"), IGNORED_BY_UTS46)
+def test_operator_host_names_refuse_the_same_characters(name: str, char: str) -> None:
+    """Blocks and allowlists share the encoder, so they cannot match a lookalike."""
+    from emailcheck.domain.dns import HostName
+
+    with pytest.raises(ValueError):
+        HostName.canonical(f"exam{char}ple.com")
+
+
+def test_uts46_mappings_that_keep_a_character_still_apply() -> None:
+    """Only deletion is refused; documented mappings such as U+3002 stay (ADR 0005)."""
+    ideographic_full_stop, fullwidth_e = chr(0x3002), chr(0xFF45)
+    assert encode_domain_ascii(f"example{ideographic_full_stop}com") == "example.com"
+    assert encode_domain_ascii(f"{fullwidth_e}xample.com") == "example.com"
 
 
 @pytest.mark.parametrize("local", ["usér", "日本語", "μμ", "Ωmega", "naïve.user", "café+tag"])

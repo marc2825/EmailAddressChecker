@@ -46,7 +46,9 @@ __all__ = [
     "BatchLimits",
     "BatchRowState",
     "BatchSettings",
+    "CsvRecordKind",
     "address_column_index",
+    "classify_csv_record",
 ]
 
 #: The one column ADR 0018 names: *one address column*.
@@ -82,6 +84,27 @@ RESULT_MEDIA_TYPE: Final = "text/csv; charset=utf-8"
 
 class BatchError(ValueError):
     """A batch this project may not accept or construct."""
+
+
+class CsvRecordKind(StrEnum):
+    """How every CSV reader in this project treats one data record."""
+
+    #: A blank line: no fields at all. Skipped, so a trailing empty line in a
+    #: spreadsheet export is not reported as a broken row.
+    BLANK = "blank"
+    #: A different number of fields from the header. Rejected; no cell is read.
+    MALFORMED = "malformed"
+    #: A well-formed row. Its address cell is parsed, even when empty.
+    ROW = "row"
+
+
+def classify_csv_record(record: Sequence[str], width: int) -> CsvRecordKind:
+    """Shared by the local CLI and the service batch parser, like the header rule."""
+    if not record:
+        return CsvRecordKind.BLANK
+    if len(record) != width:
+        return CsvRecordKind.MALFORMED
+    return CsvRecordKind.ROW
 
 
 def address_column_index(header: Sequence[str]) -> int:

@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import TextIO
 
 from emailcheck.application.local_batch import InputRow
-from emailcheck.domain.batch import BatchLimits, address_column_index
+from emailcheck.domain.batch import (
+    BatchLimits,
+    CsvRecordKind,
+    address_column_index,
+    classify_csv_record,
+)
 
 
 def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRow]:
@@ -26,7 +31,11 @@ def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRo
                 total += len(raw)
                 if total > limits.max_input_bytes:
                     raise ValueError("input exceeds the file size limit")
-                yield raw.decode("utf-8-sig" if total == len(raw) else "utf-8")
+                line = raw.decode("utf-8-sig" if total == len(raw) else "utf-8")
+                if "\x00" in line:
+                    # The service batch parser refuses a NUL too.
+                    raise ValueError("input carries a NUL")
+                yield line
 
     source = lines()
     try:
@@ -44,7 +53,10 @@ def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRo
             for number, row in enumerate(reader, 1):
                 if number > limits.max_rows:
                     raise ValueError("input exceeds the row limit")
-                if len(row) != len(header):
+                kind = classify_csv_record(row, len(header))
+                if kind is CsvRecordKind.BLANK:
+                    continue
+                if kind is CsvRecordKind.MALFORMED:
                     yield InputRow(number, "", "malformed_row")
                 else:
                     yield InputRow(number, row[index])

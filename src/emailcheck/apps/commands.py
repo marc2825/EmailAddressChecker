@@ -68,6 +68,10 @@ def run(argv: Sequence[str]) -> int:
             return 0
         if args.command == "expand":
             return expand(args, settings)
+        if args.command == "batch":
+            # Read and validate the whole input before the event loop starts.
+            # Inside `asyncio.run` a blocking read held off Ctrl-C (issue #3).
+            _validate_batch_input(args, settings)
         return asyncio.run(check(args, settings))
     except KeyboardInterrupt:
         print("emailcheck: cancelled; destination file unchanged", file=sys.stderr)
@@ -128,6 +132,12 @@ def expand(args: argparse.Namespace, settings: Settings) -> int:
     if args.dry_run:
         print(json.dumps({"candidate_count_upper_bound": plan.count, "max_candidates": maximum}))
         return 0
+    # Every candidate is checked before anything is written, so a later
+    # invalid or formula-like candidate leaves stdout empty, not half written
+    # (issue #3). The plan is bounded and can be iterated twice.
+    for address in plan:
+        if args.output_format == "csv" and csv_cell(address) != address:
+            raise ValueError("formula-like address requires TXT output")
     count = 0
     with output_file(args.output) as handle:
         writer = csv.writer(handle, lineterminator="\n")
@@ -135,8 +145,6 @@ def expand(args: argparse.Namespace, settings: Settings) -> int:
             writer.writerow(["email"])
         for count, address in enumerate(plan, 1):
             if args.output_format == "csv":
-                if csv_cell(address) != address:
-                    raise ValueError("formula-like address requires TXT output")
                 writer.writerow([address])
             else:
                 handle.write(address + "\n")
@@ -147,19 +155,33 @@ def expand(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def _batch_format(args: argparse.Namespace) -> str:
+    return str(args.format or ("txt" if args.input.suffix.lower() == ".txt" else "csv"))
+
+
+def _validate_batch_input(args: argparse.Namespace, settings: Settings) -> None:
+    """Check the batch arguments and read the whole input once, synchronously.
+
+    The input is read twice (here, then while checking), so it must be a
+    regular file: a pipe or FIFO would be empty on the second read, and opening
+    one can block.
+    """
+    if args.start_row < 1:
+        raise ValueError("starting row must be positive")
+    if not args.input.is_file():
+        raise ValueError("batch input must be a regular file")
+    if args.output and args.input.resolve() == args.output.resolve():
+        raise ValueError("input and output must differ")
+    for _ in read_rows(args.input, _batch_format(args), settings.batch):
+        pass
+
+
 async def check(args: argparse.Namespace, settings: Settings) -> int:
     from emailcheck import __version__
     from emailcheck.apps.cli import _LOCAL_KEY, _local_deployment
 
     if args.command == "batch":
-        if args.start_row < 1:
-            raise ValueError("starting row must be positive")
-        if args.output and args.input.resolve() == args.output.resolve():
-            raise ValueError("input and output must differ")
-        format = args.format or ("txt" if args.input.suffix.lower() == ".txt" else "csv")
-        for _ in read_rows(args.input, format, settings.batch):
-            pass
-        rows = read_rows(args.input, format, settings.batch)
+        rows = read_rows(args.input, _batch_format(args), settings.batch)
     else:
         if len(args.addresses) > settings.batch.max_rows:
             raise ValueError("too many addresses")

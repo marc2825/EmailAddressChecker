@@ -235,20 +235,21 @@ def test_an_unparseable_row_does_not_fail_the_file() -> None:
     assert parsed.rows[1].rejection is not None
 
 
-def test_a_whitespace_row_is_counted_and_a_blank_line_is_rejected() -> None:
-    """An address cell holding only spaces is skipped and counted.
+def test_a_blank_line_is_skipped_and_an_empty_cell_is_rejected() -> None:
+    """Issue #3: the same rules as the local CLI.
 
-    A blank line has no fields at all, so its field count differs from the
-    header and it is a rejected row, as in the local CLI. Nothing is dropped
-    silently, so the report balances against the file.
+    A blank line has no fields and is skipped (counted, so the report balances
+    against the file). A well-formed row whose address cell is empty or only
+    spaces is parsed like any other cell and rejected as empty input.
     """
-    parsed = parse_batch_csv(b"email\nuser@example.test\n\n   \n")
+    parsed = parse_batch_csv(b"email\nuser@example.test\n\n   \n\n")
 
     assert [(row.number, row.parsed, row.malformed) for row in parsed.rows] == [
         (1, True, False),
-        (2, False, True),
+        (3, False, False),
     ]
-    assert parsed.skipped == 1
+    assert parsed.rows[1].rejection is not None
+    assert parsed.skipped == 2
 
 
 # --- one reading rule for the service and the local CLI (audit 2026-11-17) ---

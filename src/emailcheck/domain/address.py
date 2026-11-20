@@ -403,6 +403,12 @@ def _encode_domain(domain: str) -> tuple[str, AddressSyntaxIssue | None]:
     stable machine-readable code.
     """
     if any(ord(char) > 0x7F for char in domain):
+        # UTS-46 maps some characters to nothing ("ignored": U+200B, U+00AD,
+        # U+FEFF, U+2060, U+034F, variation selectors, ...). Encoding would
+        # delete them silently and look up a different domain from the one
+        # submitted, so such a domain is refused instead (ADR 0005 judgment 12).
+        if any(_deleted_by_uts46(char) for char in domain if ord(char) > 0x7F):
+            return "", AddressSyntaxIssue.DOMAIN_INVALID_CHARACTER
         try:
             encoded = idna.encode(domain, uts46=True, transitional=False)
         except UnicodeError:
@@ -411,6 +417,18 @@ def _encode_domain(domain: str) -> tuple[str, AddressSyntaxIssue | None]:
             return "", AddressSyntaxIssue.DOMAIN_IDNA_FAILURE
         return encoded.decode("ascii"), None
     return domain.lower(), None
+
+
+def _deleted_by_uts46(char: str) -> bool:
+    """Whether UTS-46 mapping removes `char` entirely.
+
+    A character UTS-46 disallows raises here; it is not "deleted", and the full
+    encode reports it as `domain_idna_failure`.
+    """
+    try:
+        return idna.uts46_remap(char, std3_rules=True, transitional=False) == ""
+    except UnicodeError:
+        return False
 
 
 def parse_address(raw: RawAddressInput) -> AddressParseResult:

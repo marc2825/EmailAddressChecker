@@ -42,7 +42,9 @@ from emailcheck.domain.batch import (
     BatchError,
     BatchLimits,
     BatchRowState,
+    CsvRecordKind,
     address_column_index,
+    classify_csv_record,
 )
 
 __all__ = [
@@ -144,8 +146,8 @@ class BatchInput:
     """
 
     rows: tuple[BatchInputRow, ...]
-    #: Well-formed rows whose address cell was empty after the parser's own
-    #: whitespace trimming. Counted so the report balances against the file.
+    #: Blank lines (records with no fields). Counted so the report balances
+    #: against the file.
     skipped: int = 0
 
     def __len__(self) -> int:
@@ -204,14 +206,16 @@ def parse_batch_csv(content: bytes, *, limits: BatchLimits | None = None) -> Bat
         for number, record in enumerate(reader, start=1):
             if len(rows) >= bounds.max_rows:
                 raise BatchError(f"a batch input may hold at most {bounds.max_rows} rows")
-            if len(record) != len(header):
-                rows.append(BatchInputRow(number=number, submitted="", malformed=True))
-                continue
-            cell = strip_interface_whitespace(record[index])
-            if not cell:
+            kind = classify_csv_record(record, len(header))
+            if kind is CsvRecordKind.BLANK:
                 skipped += 1
                 continue
-            rows.append(_row(number, cell))
+            if kind is CsvRecordKind.MALFORMED:
+                rows.append(BatchInputRow(number=number, submitted="", malformed=True))
+                continue
+            # An empty cell is parsed too, as the local CLI does, and is
+            # rejected as empty input.
+            rows.append(_row(number, strip_interface_whitespace(record[index])))
     except csv.Error:
         raise BatchError("a batch input must be well-formed CSV") from None
     return BatchInput(rows=tuple(rows), skipped=skipped)

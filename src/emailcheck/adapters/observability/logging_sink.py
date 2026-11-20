@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 from dataclasses import dataclass, field
 
 from emailcheck.ports.observability import OperatorEvent
@@ -26,6 +27,16 @@ from emailcheck.ports.observability import OperatorEvent
 #: A named logger, so a deployment can route operational events separately from
 #: anything else this process writes.
 LOGGER_NAME = "emailcheck.operator"
+
+#: A value printed as it is. Anything else is printed with `repr`, so a space,
+#: quote, or line break inside a field cannot break or forge a log line.
+_TOKEN = re.compile(r"[A-Za-z0-9._:/+-]+")
+
+
+def _field(value: str | None) -> str:
+    if value is None:
+        return "-"
+    return value if _TOKEN.fullmatch(value) else repr(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +61,13 @@ class LoggingOperatorSink:
         # failure. There is nothing useful to do about it and nowhere left to
         # report it to, so it is suppressed rather than logged.
         with contextlib.suppress(Exception):  # pragma: no cover - handler's own failure
-            self.logger.warning("emailcheck.operator", extra={"emailcheck": payload})
+            # The fields go into the message itself: a plain formatter prints
+            # only the message, and `extra` is kept for structured handlers.
+            self.logger.warning(
+                "emailcheck.operator event=%s reason=%s domain=%s detail=%s",
+                *(_field(payload[key]) for key in ("event", "reason", "domain", "detail")),
+                extra={"emailcheck": payload},
+            )
 
 
 @dataclass(slots=True)

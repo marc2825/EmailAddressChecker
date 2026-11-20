@@ -24,7 +24,7 @@ Depend on `idna>=3.10,<4` in production and encode with `idna.encode(domain, uts
 - Only domains with non-ASCII characters go through the library. An ASCII domain is lowercased directly, so this project reports its own specific cause, such as an underscore.
 - Library exception text is never exposed. Failures become the issue `domain_idna_failure` with the public reason `invalid_syntax`.
 - The encoded ASCII form is checked again against letter-digit-hyphen, label-length, and total-length rules before a `DomainName` can exist.
-- UTS-46 maps its defined label separators (`。`, `．`, `｡`) to a dot and fullwidth Latin to ASCII, as mail clients and browsers do. Look-alike characters it does not define are rejected, not converted: `exam․ple.com` with U+2024 is `domain_idna_failure`. Detecting look-alike domains in general is out of scope.
+- UTS-46 maps its defined label separators (`。`, `．`, `｡`) to a dot and fullwidth Latin to ASCII, as mail clients and browsers do. Characters it maps to nothing are refused (judgment 12), and look-alike characters it does not define are rejected, not converted: `exam․ple.com` with U+2024 is `domain_idna_failure`. Detecting look-alike domains in general is out of scope.
 - The parser is domain logic, not a port. It does no I/O, and having one construction path is what guarantees that only validated text becomes a `NormalizedAddress`.
 
 The dependency is pure Python, does no I/O, and ships type information.
@@ -44,6 +44,8 @@ These settle cases `docs/requirements.md` section 6 does not name. Reversing one
 9. An invisible or separator character in the local part (Unicode categories `Cc`, `Cf`, `Zs`, `Zl`, `Zp`) is invalid (`local_part_disallowed_unicode`, public reason `invalid_syntax`), not unsupported, because it is never part of a mailbox name. Ordinary non-ASCII letters stay unsupported: `usér@example.com` is `unsupported_smtputf8`.
 10. A domain literal is recognized only when bracketed on both sides. `user@[192.0.2.1]` is an unsupported address literal; a single stray bracket is an invalid character, so a typo stays `invalid` instead of becoming `unknown`.
 11. An unbracketed numeric domain such as `user@192.0.2.1` or `user@example.123` is a DNS name, accepted by the grammar like judgment 4. That a top-level label is never all-numeric is a fact about the root zone, which DNS reports as NXDOMAIN (`domain_nxdomain`). The parser never rewrites it into the literal `[192.0.2.1]` (judgment 10), which would bypass DNS, and connection targets come only from DNS answers screened by the destination policy, so neither form can direct a connection to an arbitrary IP. Pinned by `test_single_label_and_numeric_domains_stay_dns_names` and the mail-route tests.
+
+12. A domain containing a character that UTS-46 maps to nothing is invalid (`domain_invalid_character`). Encoding would silently delete such characters (U+200B, U+00AD, U+FEFF, U+2060, U+180E, U+034F, variation selectors) and look up a different domain from the one submitted, which is what this ADR rejected IDNA 2003 for; the local part already treats invisible characters as invalid (judgment 9). The check is in the shared encoder, so operator blocks and lab allowlists refuse such names too. Mappings that keep a character, such as U+3002 to a dot, still apply. Added after issue #3; pinned by `test_a_character_uts46_would_delete_makes_the_domain_invalid`.
 
 ## Consequences
 

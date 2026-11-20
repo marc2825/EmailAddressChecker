@@ -86,7 +86,7 @@ Alert on:
 - a remote abuse complaint;
 - an attempt to resolve an unsafe destination.
 
-Metric labels are closed enumerations, so there are no per-domain metric series. Analyse per-domain rates from the redacted operator events instead.
+Operator events go to the `emailcheck.operator` logger, one line per event: `emailcheck.operator event=<kind> reason=<code> domain=<domain> detail=<category>`, with `-` for an empty field. Metric labels are closed enumerations, so there are no per-domain metric series; analyse per-domain rates from these events instead.
 
 ## 4. Runbooks
 

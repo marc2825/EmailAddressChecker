@@ -324,14 +324,12 @@ class AddressVerificationService:
                 )
             )
             raise VerificationRefused("the verification deadline") from None
-        except AbuseRefused as refusal:
+        except AbuseRefused:
             # An abuse control refused. Local and operational, exactly like
             # capacity: no `Evidence`, no `Verdict`, and a category the operator
-            # sees rather than the caller — which of nine budgets was reached is
-            # information about this deployment, not about the address.
-            self.operator.record(
-                OperatorEvent(kind=OperatorEventKind.RATE_LIMITED, detail=refusal.category)
-            )
+            # sees rather than the caller. `AbuseGuard` has already reported
+            # the refusal with its category; recording it here as well logged
+            # every refusal twice (issue #3).
             raise VerificationRefused("an abuse control") from None
 
     def _check_length(self, submitted: str) -> None:

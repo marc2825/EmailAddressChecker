@@ -6,6 +6,7 @@ import asyncio
 import csv
 import io
 import json
+import os
 import string
 from dataclasses import replace
 from pathlib import Path
@@ -254,17 +255,97 @@ def test_local_and_service_csv_readers_refuse_the_same_headers(tmp_path: Path, h
 
 
 def test_local_and_service_csv_readers_reject_the_same_rows(tmp_path: Path) -> None:
+    """Issue #3: blank lines, empty cells, and wrong field counts, row by row."""
     from emailcheck.application.batch_csv import parse_batch_csv
 
-    content = b"email,name\nok@example.com,A\nshort@example.com\nlong@example.com,B,C\n\n"
+    content = (
+        b"email,name\nok@example.com,A\nshort@example.com\n"
+        b"long@example.com,B,C\n\n,D\nlast@example.com,E\n\n"
+    )
     source = tmp_path / "input.csv"
     source.write_bytes(content)
 
-    local = [row.error for row in read_rows(source, "csv", BatchLimits())]
-    service = [row.malformed for row in parse_batch_csv(content).rows]
+    local = [
+        (row.number, row.address, row.error) for row in read_rows(source, "csv", BatchLimits())
+    ]
+    parsed = parse_batch_csv(content)
+    service = [(row.number, row.submitted, row.malformed) for row in parsed.rows]
 
-    assert local == [None, "malformed_row", "malformed_row", "malformed_row"]
-    assert service == [False, True, True, True]
+    assert local == [
+        (1, "ok@example.com", None),
+        (2, "", "malformed_row"),
+        (3, "", "malformed_row"),
+        (5, "", None),
+        (6, "last@example.com", None),
+    ]
+    assert service == [
+        (1, "ok@example.com", False),
+        (2, "", True),
+        (3, "", True),
+        (5, "", False),
+        (6, "last@example.com", False),
+    ]
+    assert parsed.rows[3].rejection is not None
+    assert parsed.skipped == 2
+
+
+@pytest.mark.parametrize("format", ["csv", "txt"])
+def test_a_nul_refuses_the_whole_file_in_both_readers(tmp_path: Path, format: str) -> None:
+    """Issue #3: the service refused a NUL while the local CLI read it as a row."""
+    from emailcheck.application.batch_csv import parse_batch_csv
+    from emailcheck.domain.batch import BatchError
+
+    content = b"email\nuser\x00@example.com\n"
+    source = tmp_path / f"input.{format}"
+    source.write_bytes(content)
+
+    with pytest.raises(ValueError, match="NUL"):
+        list(read_rows(source, format, BatchLimits()))
+    with pytest.raises(BatchError, match="NUL"):
+        parse_batch_csv(content)
+
+
+def test_ctrl_c_while_reading_batch_input_exits_130_before_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #3: the pre-read ran inside `asyncio.run`, which held off SIGINT."""
+    from emailcheck.apps import commands
+
+    source = tmp_path / "input.csv"
+    source.write_text("email\na@example.com\n", encoding="utf-8")
+
+    def interrupted(*args: object, **kwargs: object) -> object:
+        raise KeyboardInterrupt
+
+    def no_loop(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the input must be read before the event loop starts")
+
+    monkeypatch.setattr(commands, "read_rows", interrupted)
+    monkeypatch.setattr(commands.asyncio, "run", no_loop)
+
+    assert cli.main(["batch", str(source)]) == 130
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a FIFO")
+def test_batch_input_must_be_a_regular_file(tmp_path: Path) -> None:
+    """It is read twice, so a FIFO would block or be empty the second time."""
+    fifo = tmp_path / "input.csv"
+    os.mkfifo(fifo)
+
+    assert cli.main(["batch", str(fifo)]) == 2
+
+
+@pytest.mark.parametrize(
+    ("pattern", "later"),
+    [("a*@example.com", " "), ("*x@example.com", "=")],
+    ids=["later-invalid", "formula-like"],
+)
+def test_expand_writes_nothing_when_a_later_candidate_fails(
+    capsys: pytest.CaptureFixture[str], pattern: str, later: str
+) -> None:
+    """Issue #3: stdout used to receive the header and earlier rows first."""
+    assert cli.main(["expand", pattern, "--candidate", "b", "--candidate", later]) == 2
+    assert capsys.readouterr().out == ""
 
 
 def test_bounds_and_atomic_output(tmp_path: Path) -> None:
@@ -380,6 +461,31 @@ async def test_passive_budget_observes_current_account_suspension(fake_dns: list
     with pytest.raises(VerificationRefused):
         await stack.verification.verify("a@example.com", principal=principal, active=False)
     assert fake_dns == []
+
+
+@pytest.mark.asyncio
+async def test_one_quota_refusal_is_one_operator_event(fake_dns: list[str]) -> None:
+    """Issue #3: the abuse guard and the verification service both recorded it."""
+    from emailcheck.application.verification import VerificationRefused
+    from emailcheck.domain.abuse import QuotaSettings
+    from emailcheck.ports.observability import OperatorEventKind
+    from phase7_fixtures import RecordingOperator
+
+    operator = RecordingOperator()
+    deployment = replace(
+        load_settings().apply(cli._local_deployment()),
+        passive_quotas=QuotaSettings(per_api_key=1),
+    )
+    stack = build_verification_stack(deployment, operator=operator)
+    principal = stack.authenticator.authenticate(cli._LOCAL_KEY)
+    assert principal is not None
+
+    await stack.verification.verify("a@example.com", principal=principal, active=False)
+    with pytest.raises(VerificationRefused):
+        await stack.verification.verify("b@example.com", principal=principal, active=False)
+
+    limited = [e for e in operator.events if e.kind is OperatorEventKind.RATE_LIMITED]
+    assert [event.detail for event in limited] == ["api_key"]
 
 
 @pytest.mark.asyncio
