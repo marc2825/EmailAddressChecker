@@ -14,11 +14,21 @@ from typing import TextIO
 
 from emailcheck.application.local_batch import InputRow
 from emailcheck.domain.batch import (
+    BatchError,
     BatchLimits,
     CsvRecordKind,
     address_column_index,
     classify_csv_record,
 )
+
+
+class InputRefused(ValueError):
+    """The whole input is refused. `key` names the message the CLI shows."""
+
+    def __init__(self, message: str, key: str, **values: object) -> None:
+        super().__init__(message)
+        self.key = key
+        self.values = values
 
 
 def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRow]:
@@ -30,11 +40,15 @@ def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRo
             while raw := handle.readline(limits.max_input_bytes + 1):
                 total += len(raw)
                 if total > limits.max_input_bytes:
-                    raise ValueError("input exceeds the file size limit")
+                    raise InputRefused(
+                        "input exceeds the file size limit",
+                        "error.size_limit",
+                        limit=f"{limits.max_input_bytes:,}",
+                    )
                 line = raw.decode("utf-8-sig" if total == len(raw) else "utf-8")
                 if "\x00" in line:
                     # The service batch parser refuses a NUL too.
-                    raise ValueError("input carries a NUL")
+                    raise InputRefused("input carries a NUL", "error.nul")
                 yield line
 
     source = lines()
@@ -42,17 +56,24 @@ def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRo
         if format == "txt":
             for number, line in enumerate(source, 1):
                 if number > limits.max_rows:
-                    raise ValueError("input exceeds the row limit")
+                    raise _row_limit(limits)
                 yield InputRow(number, line.rstrip("\r\n"))
         else:
             reader = csv.reader(source, strict=True)
             header = next(reader, [])
             # Shared with the service batch parser, so both accept and refuse
-            # the same headers. `BatchError` is a `ValueError`.
-            index = address_column_index(header)
+            # the same headers.
+            try:
+                index = address_column_index(header)
+            except BatchError as refusal:
+                names = [name.strip().lower() for name in header]
+                key = (
+                    "error.header_repeat" if len(set(names)) != len(names) else "error.header_email"
+                )
+                raise InputRefused(str(refusal), key) from None
             for number, row in enumerate(reader, 1):
                 if number > limits.max_rows:
-                    raise ValueError("input exceeds the row limit")
+                    raise _row_limit(limits)
                 kind = classify_csv_record(row, len(header))
                 if kind is CsvRecordKind.BLANK:
                     continue
@@ -61,9 +82,15 @@ def read_rows(path: Path, format: str, limits: BatchLimits) -> Generator[InputRo
                 else:
                     yield InputRow(number, row[index])
     except (UnicodeError, csv.Error):
-        raise ValueError("input must be well-formed UTF-8 text/CSV") from None
+        raise InputRefused("input must be well-formed UTF-8 text/CSV", "error.encoding") from None
     finally:
         source.close()
+
+
+def _row_limit(limits: BatchLimits) -> InputRefused:
+    return InputRefused(
+        "input exceeds the row limit", "error.row_limit", limit=f"{limits.max_rows:,}"
+    )
 
 
 def csv_cell(value: object) -> str:
@@ -126,11 +153,7 @@ class ResultWriter:
     def write(self, row: dict[str, object]) -> None:
         if self.format == "csv":
             self.csv.writerow(
-                csv_cell(
-                    json.dumps(value, ensure_ascii=False)
-                    if isinstance(value, dict | list | tuple)
-                    else value
-                )
+                csv_cell(_csv_value(value))
                 for value in (row.get(name, "") for name in self.columns)
             )
         else:
@@ -140,3 +163,16 @@ class ResultWriter:
     def finish(self) -> None:
         if self.format == "json":
             self.handle.write("\n]\n")
+
+
+def _csv_value(value: object) -> object:
+    """JSON spellings for the values JSON has: `true`, `false`, and nested JSON.
+
+    Python's `str(True)` is `True`, which no JSON or spreadsheet reader expects
+    and which differed from the JSON output of the same result.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, dict | list | tuple):
+        return json.dumps(value, ensure_ascii=False)
+    return value

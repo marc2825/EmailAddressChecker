@@ -112,6 +112,11 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
+# User-facing Japanese text uses full-width punctuation on purpose.
+"src/emailcheck/apps/commands.py" = ["RUF001"]
+"src/emailcheck/apps/messages.py" = ["RUF001"]
+"src/emailcheck/apps/vocabulary.py" = ["RUF001"]
+"tests/unit/apps/test_cli_design.py" = ["S101", "S105", "S106", "RUF001"]
 
 [tool.mypy]
 python_version = "3.12"

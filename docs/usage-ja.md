@@ -19,9 +19,40 @@ emailcheck batch addresses.txt --format txt --output results.json
 
 # 重複のスキップと進捗の表示
 emailcheck batch addresses.csv --duplicates skip --progress --output results.json
+
+# 判定・理由コード・注意フラグの意味
+emailcheck explain
+emailcheck explain null_mx
 ```
 
-`check` と `batch` は受動検査だけを行います。`--mode` に指定できるのは `passive` だけです。
+`check` と `batch` は受動検査だけを行います。Active検査に切り替えるオプションはありません。
+
+### 画面の表示
+
+標準出力が端末で `--output` がないときは、人が読む形で表示します。
+
+- 1件のときは「証拠のはしご」を表示します。判定と信頼度、理由コードの意味を1文、構文・DNS・メールボックスの各段階で分かったこと、注意フラグ（判定とは別）、推定である旨の順です。
+- 2件以上のときは1行に1件（行、判定、信頼度、理由、アドレス、注意フラグ）を並べ、最後に件数の内訳を表示します。判定のない行（`duplicate`、`rejected`、`refused`、`failed`）には、その理由を添えます。
+
+パイプやファイルへの出力は、従来どおりJSONかCSVです。`--output-format text|json|csv` で明示でき、`text` は画面専用なので `--output` と同時には使えません。
+
+アドレスは、ログと同じ伏せ字（`a***@example.com`）で表示します。構文として解析できない入力は、一部も表示しません。`--include-address` を付けたときだけアドレス全体を表示し、端末を操作できる制御文字は `\x1b` のようにエスケープします。
+
+表示の言語は `LC_ALL`、`LC_MESSAGES`、`LANG` の順に見て、`ja` で始まれば日本語、それ以外は英語です（`LANG=C` なら英語）。判定、理由コード、オプション名は翻訳しません。色は端末のときだけ使い、`NO_COLOR` を設定するか `TERM=dumb` のときは使いません。色は判定の語を強調するだけで、意味は文字で表します。これらの環境変数は表示にだけ使い、検査の内容や制限には影響しません。
+
+`--output` に保存したときは、件数と内訳を標準エラー出力に表示します（標準エラー出力が端末のとき、または `--progress` を付けたとき）。
+
+### エラー
+
+エラーは、何が問題でどう直せばよいかを1行で示し、続けてヘルプの場所を示します。
+
+```text
+$ emailcheck batch addresses.csv
+emailcheck batch: CSVのヘッダーには email 列がちょうど1つ必要です。1行1アドレスのファイルなら、拡張子を .txt にするか --format txt を付けてください。
+詳しくは: emailcheck batch --help
+```
+
+`emailcheck chek ...` のようにコマンド名に近い語は、アドレスとして検査せずに正しいコマンドを示します。
 
 ### 入力形式
 
@@ -43,11 +74,11 @@ BOMとして扱うのはファイル先頭の1つだけです。ほかの位置�
 | オプション | 動作 |
 | --- | --- |
 | `--output PATH` | 結果をファイルに保存する。指定しなければ標準出力に出す。 |
-| `--output-format json\|csv` | 出力形式。既定はJSON。出力ファイル名が `.csv` ならCSVになる。 |
-| `--json` | JSONで出力する。 |
-| `--include-address` | 結果に元のメールアドレスを含める（既定では含めない）。 |
+| `--output-format text\|json\|csv` | 出力形式。既定は画面なら `text`、パイプやファイルなら `json`。出力ファイル名が `.csv` ならCSVになる。 |
+| `--json` | `--output-format json` と同じ。 |
+| `--include-address` | アドレス全体を表示・保存する（既定では画面は伏せ字、ファイルには含めない）。 |
 | `--duplicates keep\|skip` | 重複した行を検査するか、最初に出た行への参照を付けてスキップするか。既定は `keep`。 |
-| `--progress` | 件数だけの進捗を標準エラー出力に表示する。 |
+| `--progress` | 進捗（100件ごと）と最後の要約を標準エラー出力に表示する。 |
 | `--start-row N` | `batch` 専用。N行目から新しく受動検査する。 |
 | `--config PATH` | 検査と処理の予算を書いたTOMLを読み込む。 |
 
@@ -55,7 +86,7 @@ BOMとして扱うのはファイル先頭の1つだけです。ほかの位置�
 
 ### 出力と終了コード
 
-`check` と `batch` は入力の順に結果を出力します。JSONは配列、CSVは1行1結果で、配列やオブジェクトの列はJSON文字列として入ります。
+`check` と `batch` は入力の順に結果を出力します。JSONは配列、CSVは1行1結果で、配列やオブジェクトの列はJSON文字列、真偽値は `true` / `false` として入ります。
 
 - `status`（判定）: `likely_deliverable`、`invalid`、`temporary_unknown`、`unknown` のいずれか。配送についての判定です。
 - `state`（処理状態）: `completed`、`duplicate`、`rejected`、`refused`、`failed` のいずれか。`refused` や `failed` のように検査できなかった行には、配送の判定を付けません。
@@ -132,10 +163,13 @@ CLIの設定ファイルで読み込めるセクションは `[batch]`、`[rate_
 
 ```bash
 emailcheck --version
-emailcheck --report-versions
-emailcheck --check-deployment
+emailcheck versions      # --report-versions と同じ
+emailcheck deployment    # --check-deployment と同じ
+emailcheck explain [CODE]
 ```
 
-`--report-versions` は、パッケージ、判定ルール、データセットのバージョンを表示します。使い捨てメール、フリーメール、プロバイダーの分類データは現時点では収録していないので、フラグが付かなくても「該当しない」という意味にはなりません。`--check-deployment` はActive環境の準備状況を参考として表示します。外部への接続も運用の承認もせず、終了コードは常に0です。
+`versions` は、パッケージ、判定ルール、データセットのバージョンを表示します。使い捨てメール、フリーメール、プロバイダーの分類データは現時点では収録していないので、フラグが付かなくても「該当しない」という意味にはなりません。`deployment` はActive環境の準備状況を参考として表示します。外部への接続も運用の承認もせず、終了コードは常に0です。どちらも `--json` でJSONになり、内容は英語だけです。
+
+`explain` は、判定、信頼度、理由コード、注意フラグ、行の処理状態の意味を表示します。コードを省略すると一覧を、近い綴りのコードを指定すると候補を示します。
 
 従来形式の `emailcheck ADDRESS --remote URL --remote-key-file PATH [--wait]` は、別に構築して許可を得たActive検査サービスに接続するためのものです。リモート接続にはHTTPSが必要です。開発用のHTTPは `127.0.0.1` と `[::1]` だけを許可し、`localhost`、リダイレクト、環境変数のプロキシは使いません。使うには、対象の所有または許可、認証、レート制限、TLS、運用の準備が必要です。通常の `check` と `batch` には、Active検査に切り替える機能はありません。詳しくは[運用ガイド](operations.md)と[セキュリティポリシー](../SECURITY.md)を参照してください。

@@ -71,6 +71,18 @@ async def _refuse_async(name: str) -> Any:
 
 
 @pytest.fixture(autouse=True)
+def english_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the CLI to English, so a developer's Japanese locale changes no assertion.
+
+    `apps/messages.py` reads `LC_ALL`, `LC_MESSAGES`, and `LANG`. Tests of the
+    Japanese text set them explicitly.
+    """
+    monkeypatch.setenv("LANG", "C.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def block_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Fail any attempt to resolve a name, open a connection, or send a packet."""
     # Name resolution.

@@ -24,7 +24,7 @@ Addresses and domain names may be personal data. HMAC identifiers, redaction, an
 - Public results contain approved statuses, reason codes, and safe summaries, never raw SMTP transcripts or untrusted server messages.
 - Ordinary logs and metrics never contain complete email addresses, raw credentials, or network-library exception text.
 - Raw diagnostic replies are not kept at all. Bounded, sanitized diagnostics are kept, and they are not anonymized.
-- Local output leaves out addresses unless the user passes `--include-address`, and CSV cells are escaped against spreadsheet formulas.
+- Local output files leave out addresses unless the user passes `--include-address`, and CSV cells are escaped against spreadsheet formulas. In the text view, a parsed address is shown in the redacted log form (`a***@example.com`) and an unparseable input not at all; `--include-address` shows it in full, with terminal control characters escaped.
 - Addresses passed as shell arguments can remain in shell history or process listings; use files for sensitive input.
 
 ## 3. Retention defaults

@@ -108,7 +108,7 @@ Controls:
 
 - `TLSPolicy.REQUIRED` is the only policy. A server that advertises no `STARTTLS` ends the probe as a non-target `TLS_ERROR`.
 - Certificate and hostname verification are always on and cannot be switched off. The one seam can add a trust anchor, never remove one.
-- A trust anchor comes from operator configuration only. `TLSTrust` can widen what is trusted, so request, user, or API input must never supply a CA file, PEM body, trust anchor, or verification override. An inspection test refuses a `TLSTrust` built anywhere in `src/` except next to the system-trust default, and refuses production modules that read the environment.
+- A trust anchor comes from operator configuration only. `TLSTrust` can widen what is trusted, so request, user, or API input must never supply a CA file, PEM body, trust anchor, or verification override. An inspection test refuses a `TLSTrust` built anywhere in `src/` except next to the system-trust default, and refuses production modules that read the environment. The only environment read is the CLI's language and colour (ADR 0009).
 - A `TLSUpgradeRequest` is valid for one connection: its peer is compared with the endpoint actually reached before any handshake byte is sent. This check and the `getpeername()` re-read each have their own test.
 - No plaintext fallback after a failed handshake, and no state-machine transition back to plaintext.
 - The upgrade is refused if any bytes are already buffered, because they could be injected plaintext (CVE-2011-0411).

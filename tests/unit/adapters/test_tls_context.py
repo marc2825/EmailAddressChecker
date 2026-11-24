@@ -129,11 +129,22 @@ def test_a_trust_anchor_comes_from_operator_configuration_only() -> None:
     """
     root = Path(__file__).resolve().parents[3] / "src" / "emailcheck"
     definition = root / "adapters" / "smtp" / "tls.py"
+    presentation = root / "apps" / "messages.py"
 
     constructions: list[str] = []
     environment: list[str] = []
     for module in sorted(root.rglob("*.py")):
         tree = ast.parse(module.read_text(encoding="utf-8"))
+        if module == presentation:
+            # The one exception: the CLI's language and colour. Its function
+            # body is checked separately below and skipped here.
+            tree.body = [
+                node
+                for node in tree.body
+                if not (
+                    isinstance(node, ast.FunctionDef) and node.name == "presentation_environment"
+                )
+            ]
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
@@ -150,6 +161,28 @@ def test_a_trust_anchor_comes_from_operator_configuration_only() -> None:
                 environment.append(f"{module.relative_to(root)}:{node.lineno} {node.attr}")
     assert constructions == [], f"a trust anchor is built outside its module: {constructions}"
     assert environment == [], f"production reads the environment: {environment}"
+
+    # The exception reads five named presentation variables and nothing else:
+    # the list, the function's exact body, and who calls it are all pinned.
+    from emailcheck.apps.messages import PRESENTATION_VARIABLES
+
+    assert PRESENTATION_VARIABLES == ("LC_ALL", "LC_MESSAGES", "LANG", "NO_COLOR", "TERM")
+    function = next(
+        node
+        for node in ast.parse(presentation.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.FunctionDef) and node.name == "presentation_environment"
+    )
+    expected = ast.parse(
+        'import os\nreturn {name: os.environ.get(name, "") for name in PRESENTATION_VARIABLES}\n'
+    ).body
+    body = function.body[1:]  # after the docstring
+    assert [ast.dump(node) for node in body] == [ast.dump(node) for node in expected]
+    callers = sorted(
+        str(module.relative_to(root))
+        for module in root.rglob("*.py")
+        if "presentation_environment" in module.read_text(encoding="utf-8")
+    )
+    assert callers == ["apps/cli.py", "apps/commands.py", "apps/messages.py"]
 
     # The one seam is a keyword-only file path with a safe default. Nothing in
     # the signature could carry a PEM body, a context, or a verify mode.

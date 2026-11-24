@@ -47,6 +47,17 @@ from emailcheck.application.public_job import PublicJob
 from emailcheck.application.public_result import PublicResult, public_result
 from emailcheck.application.readiness import report_versions, validate_deployment
 from emailcheck.application.verification import SubmittedInputTooLong, VerificationRefused
+from emailcheck.apps.commands import COMMANDS, CliParser
+from emailcheck.apps.messages import (
+    Lang,
+    detect_language,
+    presentation_environment,
+    printable,
+    suggest,
+    text,
+    top_help,
+)
+from emailcheck.apps.render import Style, display_target, ladder, pad, width
 from emailcheck.classification.repository import load_shipped_datasets
 from emailcheck.composition import Deployment, build_verification_stack
 from emailcheck.domain.job import TERMINAL_STATES, JobState
@@ -81,16 +92,36 @@ EXIT_REFUSED: Final = 3
 EXIT_INCOMPLETE: Final = 4
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="emailcheck",
-        description=(
-            "Estimate whether one address is currently deliverable, without "
-            "transmitting any message content. A local check performs no SMTP."
-        ),
-        epilog="Commands: check ADDRESS..., batch FILE, expand PATTERN, config show.",
-    )
-    parser.add_argument("address", nargs="?", help="the address to check; omitted prints this help")
+class _TopHelp(argparse.Action):
+    """`-h`/`--help` prints the command overview, not this parser's options."""
+
+    def __init__(self, option_strings: Sequence[str], dest: str, **kwargs: object) -> None:
+        super().__init__(option_strings, dest, nargs=0, help="show the command overview")
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        print(top_help(_language(), __version__), end="")
+        parser.exit()
+
+
+def _language() -> Lang:
+    return detect_language(presentation_environment())
+
+
+def build_parser(lang: Lang = "en") -> argparse.ArgumentParser:
+    """The single-address form. `emailcheck --help` prints `top_help` instead.
+
+    The help strings below document the options for readers of this file; what
+    a person sees is the overview, because the subcommands are the main way in.
+    """
+    parser = CliParser(prog="emailcheck", lang=lang)
+    parser.add_argument("-h", "--help", action=_TopHelp)
+    parser.add_argument("address", nargs="?", help="the address to check; omitted prints help")
     parser.add_argument("--version", action="store_true", help="print the package version")
     parser.add_argument(
         "--check-deployment",
@@ -132,12 +163,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     actual = list(sys.argv[1:] if argv is None else argv)
-    if actual and actual[0] in {"check", "batch", "expand", "config"}:
+    lang = _language()
+    if actual and actual[0] in COMMANDS:
         from emailcheck.apps.commands import run
 
         return run(actual)
-    parser = build_parser()
-    arguments = parser.parse_args(argv)
+    if not actual or actual[0] in {"help", "-h", "--help"}:
+        print(top_help(lang, __version__), end="")
+        return EXIT_OK
+    if actual and not actual[0].startswith("-") and "@" not in actual[0]:
+        # `emailcheck chek a@example.com` would otherwise check "chek" as an
+        # address and report it invalid. A word close to a command is a typo.
+        guess = suggest(actual[0], COMMANDS)
+        if guess is not None:
+            print(
+                f"emailcheck: {text('error.unknown_command', lang, word=printable(actual[0]))}\n"
+                f"{text('error.did_you_mean', lang, suggestion=guess)}\n"
+                f"{text('error.help', lang, prog='emailcheck')}",
+                file=sys.stderr,
+            )
+            return EXIT_INVALID_INPUT
+    parser = build_parser(lang)
+    arguments = parser.parse_args(actual)
     if arguments.version:
         print(__version__)
         return EXIT_OK
@@ -146,7 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.report_versions:
         return _print_version_report(arguments)
     if arguments.address is None:
-        parser.print_help()
+        print(top_help(lang, __version__), end="")
         return EXIT_OK
     if arguments.remote is not None:
         if arguments.config is not None:
@@ -248,10 +295,11 @@ def _print_version_report(arguments: argparse.Namespace) -> int:
 async def _run_local(arguments: argparse.Namespace) -> int:
     from emailcheck.settings import load_settings
 
+    lang = _language()
     try:
         deployment = load_settings(arguments.config).apply(_local_deployment())
     except ValueError:
-        print("emailcheck: invalid configuration", file=sys.stderr)
+        print(f"emailcheck: {text('error.invalid_config', lang)}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     stack = build_verification_stack(deployment)
     principal = stack.authenticator.authenticate(_LOCAL_KEY)
@@ -264,17 +312,18 @@ async def _run_local(arguments: argparse.Namespace) -> int:
             arguments.address, principal=principal, active=False
         )
     except SubmittedInputTooLong:
-        print("emailcheck: the address is too long to check", file=sys.stderr)
+        print(f"emailcheck: {text('error.too_long', lang)}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     except VerificationRefused as refusal:
-        print(f"emailcheck: {refusal.scope} refused this check", file=sys.stderr)
+        print(f"emailcheck: {text('error.refused', lang, scope=refusal.scope)}", file=sys.stderr)
         return EXIT_REFUSED
 
     result = public_result(outcome.verdict)
     if arguments.json:
         print(json.dumps(result.as_json_object(), indent=2, sort_keys=True))
     else:
-        print(_render(result, verbose=arguments.verbose))
+        target = display_target(arguments.address, include_address=False)
+        print(_render(result, verbose=arguments.verbose, target=target))
     return EXIT_OK
 
 
@@ -444,7 +493,9 @@ async def run_remote_check(
     if as_json:
         print(json.dumps(job.as_json_object(), indent=2, sort_keys=True))
     else:
-        print(_render_job(job, verbose=verbose))
+        print(
+            _render_job(job, verbose=verbose, target=display_target(address, include_address=False))
+        )
     return EXIT_OK if job.state == JobState.COMPLETED.value else EXIT_INCOMPLETE
 
 
@@ -476,64 +527,57 @@ async def poll_until_finished(
 # --- rendering --------------------------------------------------------------
 
 
-def _render(result: PublicResult, *, verbose: bool) -> str:
-    """The human format. Published vocabulary, and a caveat that is not optional.
+def _render(
+    result: PublicResult,
+    *,
+    verbose: bool,
+    target: str | None = None,
+    local: bool = True,
+    lang: Lang | None = None,
+    style: Style | None = None,
+) -> str:
+    """The human format: the evidence ladder from `apps/render.py`.
 
     The caveat is printed on every result rather than only on a positive one:
     `docs/requirements.md` section 1 says this system does not prove mailbox
     existence, and a line that appears only sometimes is a line people learn to
     read as a hedge on the doubtful cases.
+
+    **The safety line states only what the result states.** It used to be an
+    unconditional string literal, so this build printed "No message content was
+    sent." over a result whose `no_message_data_sent` was `False`: a promise
+    about somebody else's mail server that the result itself contradicted,
+    reachable through `--remote`, and found by the final system audit. Now the
+    affirmative line appears only when the result makes it, and a warning
+    appears otherwise, so the statement is never merely missing and left to be
+    assumed. Neither branch names the remote host, the reply, or the address.
     """
-    lines = [
-        f"status     : {result.status}",
-        f"confidence : {result.confidence}",
-        f"reason     : {result.primary_reason or '-'}",
-    ]
-    if result.risk_flags:
-        lines.append(f"risk       : {', '.join(result.risk_flags)}")
-    if verbose and result.reasons:
-        lines.append(f"reasons    : {', '.join(result.reasons)}")
-        for name, check in result.checks.items():
-            lines.append(f"  {name:<22}: {check.result}")
-    lines.append("")
-    lines.append("This is an estimate. It does not prove that a mailbox exists or is in use.")
-    lines.append(_message_data_line(result))
-    return "\n".join(lines)
+    return ladder(
+        result,
+        lang=_language() if lang is None else lang,
+        style=Style.for_stream(sys.stdout, presentation_environment()) if style is None else style,
+        target=target,
+        local=local,
+        verbose=verbose,
+    )
 
 
-def _message_data_line(result: PublicResult) -> str:
-    """The safety statement, printed only when the result actually makes it.
-
-    **It used to be an unconditional string literal**, so this build printed
-    "No message content was sent." over a result whose `no_message_data_sent`
-    was `False` — a promise about somebody else's mail server that the result
-    itself contradicted. Reachable through `--remote`, where the result comes
-    from another instance rather than from this process's own dialogue, and the
-    final system audit found it.
-
-    The line is still unconditional in the sense that matters: something is
-    always printed, so the affirmative statement is never merely missing and
-    left to be assumed. The negative case says what is true instead. Neither
-    branch names the remote host, the reply, or the address.
-    """
-    if result.no_message_data_sent:
-        return "No message content was sent."
-    return "WARNING: this result does not assert that no message content was sent."
-
-
-def _render_job(job: PublicJob, *, verbose: bool) -> str:
+def _render_job(job: PublicJob, *, verbose: bool, target: str | None = None) -> str:
     """A job, and its result only when there is one.
 
     A job that has not finished prints its state and stops. There is no line
     here that could be read as an answer about the address before one exists.
     """
-    lines = [f"job        : {job.id}", f"state      : {job.state}"]
+    lang = _language()
+    labels = [text("job.id", lang), text("job.state", lang), text("job.failure", lang)]
+    cells = max(width(label) for label in labels) + 2
+    lines = [f"{pad(labels[0], cells)}{job.id}", f"{pad(labels[1], cells)}{job.state}"]
     if job.failure is not None:
-        lines.append(f"failure    : {job.failure}")
+        lines.append(f"{pad(labels[2], cells)}{job.failure}")
     if job.result is None:
         lines.append("")
-        lines.append("No result yet. This job has not produced a verdict.")
+        lines.append(text("job.no_result", lang))
         return "\n".join(lines)
     lines.append("")
-    lines.append(_render(job.result, verbose=verbose))
+    lines.append(_render(job.result, verbose=verbose, target=target, local=False, lang=lang))
     return "\n".join(lines)

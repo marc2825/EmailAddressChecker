@@ -56,15 +56,34 @@ emailcheck expand 'a**ce@example.com' --chars abc --output candidates.csv
 
 # 生成される候補数の上限のみを確認
 emailcheck expand 'a**ce@example.com' --charset lower --dry-run
+
+# 判定や理由コードの意味を確認
+emailcheck explain mx_available
 ~~~
 
-従来の単一アドレス指定（`emailcheck alice@example.com --json`）も引き続き使用できます。
+画面に1件を表示すると、どの段階で何が分かったかを示します。
+
+~~~text
+$ emailcheck check alice@example.com
+a***@example.com
+invalid  無効です（信頼度 高）
+このドメインは、メールを受け取らないとDNSで宣言しています（RFC 7505）。
+
+  ✓ 構文            形式は正しい
+  ✗ DNS・MX         受信しない宣言（null MX）  null_mx
+  – メールボックス  ここまで進んでいません
+
+推定です。メールボックスの実在や利用を証明するものではありません。
+メッセージの内容は送信していません。
+~~~
+
+2件以上は1行に1件ずつ並べ、最後に件数をまとめます。表示は `LC_ALL`、`LC_MESSAGES`、`LANG` の言語設定に合わせて日本語か英語になり（`LANG=C` なら英語）、`NO_COLOR` を設定すると色を使いません。従来の単一アドレス指定（`emailcheck alice@example.com --json`）も引き続き使用できます。
 
 ### 入出力と制限
 
 - CSVはUTF-8（BOM付きも可）で、`email` 列が1つ必要です。TXTは1行に1アドレスです。
-- 結果は入力の順に、既定ではJSONで出力します。`--output-format csv` を付けるか、出力ファイル名を `.csv` にするとCSVになります。
-- 元のメールアドレスは、`--include-address` を付けたときだけ結果に含めます。
+- 画面には読みやすい形で表示し、パイプやファイルには入力の順にJSONで出力します。`--output-format csv` を付けるか、出力ファイル名を `.csv` にするとCSVになります。
+- 画面ではアドレスを伏せ字（`a***@example.com`）で表示し、ファイルには含めません。全体を表示・保存するのは `--include-address` を付けたときだけです。
 - 一括処理は既定で10,000行までですが、受動検査のクォータは既定でキーごとに1時間1,000件です。大きなファイルでは一部の行が拒否されることがあるので、[config/budgets.toml](config/budgets.toml) で調整してください。
 - 制限はプロセスごとにかかり、複数のプロセスの間では共有しません。
 
@@ -83,7 +102,7 @@ emailcheck batch addresses.csv --config config/budgets.toml --output results.csv
 | `temporary_unknown` | 一時的な問題で判定できない。 |
 | `unknown` | 根拠が足りないか曖昧、または非対応の形式で判定できない。 |
 
-ローカルの検査（構文とDNSのみ）では `likely_deliverable` にはなりません。DNS/MXが正常でも、特定のメールボックスがあるとは限らないためです。`confidence` は段階で表した信頼度で、確率ではありません。`refused` や `failed` などの処理状態は、判定とは別に出力します。詳しくは[ステータス仕様](docs/status-model.md)を参照してください。
+ローカルの検査（構文とDNSのみ）では `likely_deliverable` にはなりません。DNS/MXが正常でも、特定のメールボックスがあるとは限らないためです。`confidence` は段階で表した信頼度で、確率ではありません。`refused` や `failed` などの処理状態は、判定とは別に出力します。各コードの意味は `emailcheck explain <コード>` で確認できます。詳しくは[ステータス仕様](docs/status-model.md)を参照してください。
 
 ## 機能の範囲と安全性
 

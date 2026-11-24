@@ -159,7 +159,7 @@ def test_generation_to_batch_and_privacy(
     assert len(fake_dns) == 1
     assert sum(r["dns_cache_used"] for r in results) == 3
     assert "example.com" not in output.read_text()
-    assert "completed=4" in capsys.readouterr().err
+    assert f"Checked 4 rows → {output}" in capsys.readouterr().err
 
 
 def test_bad_rows_and_duplicate_policy(tmp_path: Path, fake_dns: list[str]) -> None:

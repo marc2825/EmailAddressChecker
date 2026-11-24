@@ -22,6 +22,16 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 - Offline wildcard expansion with configurable candidate sets and generation limits.
 - Validated TOML budget configuration, and reports of versions and datasets.
 - The `email-address-checker` package distribution; the CLI and import name stay `emailcheck`.
+- `emailcheck explain [CODE]` describes every status, confidence level, reason code, risk flag, and row state; `emailcheck versions` and `emailcheck deployment` are the subcommand forms of `--report-versions` and `--check-deployment`.
+
+### Changed
+
+- On a terminal, `check` and `batch` print a readable view: for one address, what each step (syntax, DNS, mailbox) found, with risk flags shown apart; for several, one line per row and a summary. Pipes and files still get JSON or CSV, and `--output-format text|json|csv` chooses explicitly.
+- CLI messages are in Japanese or English, following `LC_ALL`, `LC_MESSAGES`, and `LANG`. Colour is used only on a terminal and never with `NO_COLOR` or `TERM=dumb`. These are the only environment variables read ([ADR 0009](docs/adr/0009-smtp-dialogue-and-tls.md)).
+- The screen shows addresses in the redacted log form (`a***@example.com`); `--include-address` shows them in full, with terminal control characters escaped.
+- Errors say what went wrong and how to fix it, instead of one generic refusal, and a mistyped command is no longer checked as an address.
+- `--progress` counts against the total, and a saved batch ends with a summary on stderr when stderr is a terminal or `--progress` is given.
+- CSV output writes booleans as `true` and `false`, like the JSON output.
 
 ### Fixed
 

@@ -24,7 +24,7 @@ Much of the code is service infrastructure that the installed `emailcheck` comma
 | Passive verification: syntax, DNS, classification, aggregation | `domain/`, `application/verification.py`, `adapters/dns/` | Used by `check`, `batch`, legacy `ADDRESS` | Always composed |
 | API-key authentication | `adapters/auth/api_keys.py` | Internal only: one random per-process key accounts local quota; no key management | Composed from `Deployment.api_keys` |
 | Admission, pacing, quotas, abuse guard, admin switches | `application/admission.py`, `adapters/system/`, `application/abuse.py`, `application/admin.py` | In-process passive quota and budgets | Composed |
-| Version and readiness reports | `application/readiness.py` | `--report-versions`, `--check-deployment` | Callable |
+| Version and readiness reports | `application/readiness.py` | `emailcheck versions`, `emailcheck deployment` (also `--report-versions`, `--check-deployment`) | Callable |
 | Remote active-check client | `adapters/http/urllib_client.py` | Legacy `--remote` client; needs a server this project does not ship | — |
 | HTTP request handler and schema | `apps/api.py`, `apps/schema.py` | Not reachable; no HTTP server is bundled | A plain function, `handle`, with no transport binding |
 | Active SMTP | `application/smtp_*.py`, `adapters/smtp/` | Not reachable: the local stack contains no SMTP object | Only with `active_probing=True` and a sender identity, in the lab-active or service-active profile |

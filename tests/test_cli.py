@@ -42,7 +42,9 @@ def test_an_address_now_produces_a_local_passive_result(
     """
     monkeypatch.setattr("sys.argv", ["emailcheck", "not-an-address"])
     assert main() == 0
-    assert "status" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "invalid" in out
+    assert "does not prove that a mailbox exists" in out
 
 
 def test_the_entry_point_is_the_cli_rather_than_a_second_parser() -> None:

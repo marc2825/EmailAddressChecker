@@ -75,7 +75,29 @@ To see the **upper bound** on candidate count without writing a file:
 emailcheck expand 'a**ce@example.com' --charset lower --dry-run
 ```
 
-The original single-address form, `emailcheck alice@example.com --json`, remains available. For full command options, see the [Japanese CLI reference](docs/usage-ja.md).
+**Look up what a status or reason code means:**
+
+```bash
+emailcheck explain mx_available
+```
+
+On a terminal, one address shows what each step found:
+
+```text
+$ emailcheck check alice@example.com
+a***@example.com
+invalid  Invalid (confidence high)
+The domain declares in DNS that it accepts no mail (RFC 7505).
+
+  ✓ Syntax    valid form
+  ✗ DNS / MX  domain accepts no mail (null MX)  null_mx
+  – Mailbox   not reached
+
+This is an estimate. It does not prove that a mailbox exists or is in use.
+No message content was sent.
+```
+
+Two or more addresses print one line each, then a summary. Messages are in Japanese or English, following `LC_ALL`, `LC_MESSAGES`, and `LANG` (`LANG=C` gives English); `NO_COLOR` turns colour off. The original single-address form, `emailcheck alice@example.com --json`, remains available. For full command options, see the [Japanese CLI reference](docs/usage-ja.md).
 
 ## Understanding results
 
@@ -88,12 +110,13 @@ The original single-address form, `emailcheck alice@example.com --json`, remains
 
 **DNS/MX records do not prove that a mailbox exists.** In particular, local DNS-only checks cannot establish `likely_deliverable` from mail routing alone. Positive recipient-specific evidence requires a separately authorized active check.
 
-`confidence` is a category, not a probability. Operational states such as `refused` and `failed` are separate from delivery statuses. See the [status and evidence model](docs/status-model.md).
+`confidence` is a category, not a probability. Operational states such as `refused` and `failed` are separate from delivery statuses. `emailcheck explain <code>` describes any of these values. See the [status and evidence model](docs/status-model.md).
 
 ## Input, output, and limits
 
 - CSV must be UTF-8 (a leading BOM is supported) with exactly one `email` header; TXT uses one address per line.
-- Results preserve input order and omit submitted addresses by default. Add `--include-address` only when needed.
+- A terminal gets a readable view; a pipe or file gets JSON in input order, or CSV with `--output-format csv` or a `.csv` output name.
+- The screen shows addresses redacted (`a***@example.com`) and files omit them. Add `--include-address` only when the full address is needed.
 - The default batch limits are **10,000 rows** and **4 MiB**. The default passive quota is **1,000 checks per hour per key**; a large batch may therefore contain refused rows.
 - Local limits and quotas apply **per process**, not across multiple CLI invocations or workers.
 - There is no checkpoint-based resume. `--start-row` starts a new passive run from the specified row.

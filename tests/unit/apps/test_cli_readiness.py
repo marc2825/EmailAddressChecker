@@ -187,5 +187,6 @@ def test_the_help_text_says_the_command_is_advisory(
     code, out = run(capsys=capsys)
 
     assert code == EXIT_OK
-    assert "--check-deployment" in out
-    assert "--report-versions" in out
+    assert "deployment" in out
+    assert "(advisory)" in out
+    assert "versions" in out
