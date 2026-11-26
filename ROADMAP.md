@@ -6,9 +6,8 @@ Planned work after 0.1.0, roughly in priority order. Nothing here is a release c
 
 Owner actions before 0.1.0 ([release procedure](docs/releasing.md)):
 
-- Create the `testpypi` and `pypi` Environments, protect `v*` tags, register the Trusted Publishers, and set `PUBLISH_ENABLED`.
+- Register the Trusted Publishers on TestPyPI and PyPI and set `PUBLISH_ENABLED`. The Environments, the release-tag ruleset, and the required checks on `main` are configured.
 - Publish to TestPyPI from the tag, check the install, then publish to PyPI by the confirmed manual run.
-- Tidy the required checks on `main`: list `check (3.12)` once, bound to GitHub Actions, and add the `distribution` jobs. Private vulnerability reporting is already enabled.
 
 After 0.1.0:
 

@@ -20,17 +20,18 @@ Every run first runs the full CI, rebuilds the distributions, requires the tag t
 
 ## Owner configuration
 
-Observed on 2026-11-26: the repository is public; it has no Environments and no variables; private vulnerability reporting is enabled.
+The project has one maintainer, who approves releases alone (chosen on 2026-11-26). The human decisions are the tag push, the manual PyPI run with the tag typed again, and each Environment approval, all recorded in Actions. This is weaker than two-person approval, because one account decides alone; add a second reviewer and turn on "Prevent self-reviews" if a second maintainer joins.
+
+Configured on 2026-11-26:
+
+- Environments `testpypi` and `pypi`: required reviewer `marc2825`, self-review allowed, administrator bypass disabled, deployments only from tags matching `v*`.
+- Tag ruleset "release tags" on `refs/tags/v*`: creation, update, and deletion are restricted; only the repository admin role may bypass.
+
+Still to do:
 
 1. **Review** the source, the [release report](release-report.md), dataset limitations, the licence, and the history scan. A secret scan cannot prove that no confidential prose remains, so review new history too. The test TLS keys are intentional public fixtures.
-2. **Create the Environments** `testpypi` and `pypi`. For each, allow deployments only from tags matching `v*`, add a required reviewer, and disable administrator bypass. Choose how approval works:
-   - **Two people (stronger).** Add a second trusted reviewer and turn on "Prevent self-reviews".
-   - **One maintainer.** Make yourself the required reviewer and leave self-review allowed. The human decisions are the manual run with the typed tag and the approval click, both recorded in Actions. This is weaker than two people, because one account decides alone.
-
-   If neither is acceptable, do not set `PUBLISH_ENABLED`.
-3. **Protect release tags** with a tag ruleset on `refs/tags/v*` that restricts creation, update, and deletion, with only the repository admin role as a bypass actor.
-4. **Register pending Trusted Publishers** on TestPyPI and on PyPI: project `email-address-checker`, owner `marc2825`, repository `EmailAddressChecker`, workflow `release.yml`, and the matching environment (`testpypi` or `pypi`). No long-lived API token is used.
-5. **Set** the repository variable `PUBLISH_ENABLED=true`.
+2. **Register pending Trusted Publishers** on TestPyPI and on PyPI: project `email-address-checker`, owner `marc2825`, repository `EmailAddressChecker`, workflow `release.yml`, and the matching environment (`testpypi` or `pypi`). No long-lived API token is used.
+3. **Set** the repository variable `PUBLISH_ENABLED=true` once both publishers are registered.
 
 ## Publishing 0.1.0
 
@@ -49,12 +50,9 @@ Observed on 2026-11-26: the repository is public; it has no Environments and no 
 
 ## Repository protection
 
-Observed on 2026-11-26 in the ruleset "main protection": deletion and non-fast-forward pushes are blocked, and the required checks are `check (3.12)`, `check (3.13)`, `check (3.14)`, and `security`. `check (3.12)` is listed twice, once without an app, and that entry accepts a status with the same name from any source. The `distribution` jobs are not required.
+The ruleset "main protection" blocks deletion and non-fast-forward pushes and requires, each once and only from GitHub Actions: `check (3.12)`, `check (3.13)`, `check (3.14)`, `security`, and the nine `distribution` jobs (Linux, Windows, and macOS on Python 3.12 to 3.14). Until 2026-11-26 `check (3.12)` was also listed without an app, which any source could satisfy, and the `distribution` jobs were not required.
 
-Proposed, for the owner to apply:
-
-- Keep each required check once, bound to GitHub Actions, and add the `distribution` jobs, so an install failure on Windows or macOS blocks a merge.
-- Do not require a pull-request review while there is one maintainer: GitHub does not let an author approve their own pull request, so every merge would need a bypass.
+No pull-request review is required: with one maintainer, GitHub does not let an author approve their own pull request, so every merge would need a bypass. Changes go through a pull request so CI runs, then `main` is fast-forwarded.
 
 ## Local commands
 
