@@ -65,9 +65,43 @@ def smoke(dist: Path, extras: str = "") -> None:
                 [python, "-m", "emailcheck", "expand", "m**rc@example.com", "--dry-run"], root
             )
             assert "676" in generated
+            # Active Mode from the installed package, up to its gate: the
+            # example configuration is not acknowledged, so the command prints
+            # the notice and stops before any DNS or SMTP use.
+            example = run([python, "-m", "emailcheck", "config", "example"], root)
+            configuration = root / "emailcheck.toml"
+            configuration.write_text(example, encoding="utf-8")
+            gated = subprocess.run(  # noqa: S603 - explicit argv, never shell text
+                [
+                    python,
+                    "-m",
+                    "emailcheck",
+                    "check",
+                    "probe@example.com",
+                    "--mode",
+                    "active",
+                    "--config",
+                    str(configuration),
+                ],
+                cwd=root,
+                env={
+                    **{
+                        key: value
+                        for key, value in os.environ.items()
+                        if key not in {"PYTHONPATH", "LC_ALL", "LC_MESSAGES"}
+                    },
+                    "LANG": "C.UTF-8",
+                },
+                text=True,
+                capture_output=True,
+            )
+            assert gated.returncode == 2, gated
+            assert "acknowledged = true" in gated.stderr
+            assert "It never sends a message" in gated.stderr
             print(
                 f"{artifact.name}: isolated install, metadata, datasets, CLI/module, "
-                f"passive syntax and offline generation OK ({extras or 'base'})"
+                f"passive syntax, offline generation, and the Active Mode gate OK "
+                f"({extras or 'base'})"
             )
 
 
