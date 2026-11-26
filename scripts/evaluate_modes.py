@@ -89,9 +89,11 @@ class Scenario:
 
 
 SCENARIOS: Final = (
+    # An accept-all server with an existing mailbox answers exactly like this
+    # one, so it is not listed twice; the absent case below is the one that
+    # shows what accept-all does to the result.
     Scenario("server accepts the recipient (250)", "exists"),
     Scenario("server says no such user (550 5.1.1)", "absent", rcpt=RCPT_NO_SUCH_USER),
-    Scenario("accept-all server, mailbox exists (250)", "exists"),
     Scenario("accept-all server, mailbox absent (250)", "absent"),
     Scenario("greylisting (451 4.7.1)", "exists", rcpt=RCPT_GREYLISTED),
     Scenario("policy refusal (550 5.7.1)", "undecidable", rcpt=RCPT_POLICY),
@@ -138,9 +140,15 @@ def _offline() -> Iterator[None]:
 
     with (
         mock.patch.object(socket, "getaddrinfo", refuse),
+        mock.patch.object(socket, "gethostbyname", refuse),
+        mock.patch.object(socket, "gethostbyname_ex", refuse),
         mock.patch.object(socket, "create_connection", refuse),
         mock.patch.object(socket.socket, "connect", refuse),
+        mock.patch.object(socket.socket, "connect_ex", refuse),
         mock.patch.object(socket.socket, "sendto", refuse),
+        mock.patch.object(socket.socket, "sendmsg", refuse),
+        mock.patch.object(asyncio.BaseEventLoop, "create_connection", refuse),
+        mock.patch.object(asyncio.BaseEventLoop, "create_datagram_endpoint", refuse),
     ):
         yield
 

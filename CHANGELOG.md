@@ -49,7 +49,7 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 
 - `emailcheck check ADDRESS --mode active --config FILE` checks one address over SMTP from the user's own machine, with no server, account, or API key. It sends EHLO, STARTTLS, MAIL FROM, one RCPT TO, and RSET or QUIT, and never a message.
 - It needs an `[smtp]` section (`ehlo_hostname`, `envelope_sender`, `acknowledged`); `emailcheck config example` prints one. Until `acknowledged = true`, it prints what a probe reveals and requires, and contacts nothing.
-- The evidence ladder separates "SMTP not run", "tried without an answer", and the server's answer, and gives a hint for a blocked port 25, a TLS failure, or a policy refusal. Rows report `smtp_executed`, and refused rows add `refusal` (`deadline`, `limit`, or `capacity`).
+- The evidence ladder separates "SMTP not run", "tried without an answer", and the server's answer, and gives a hint for a blocked port 25, a TLS failure, or a policy refusal. Rows report `smtp_executed` (whether the SMTP step ran), and refused rows add `refusal` (`deadline`, `limit`, or `capacity`).
 - `batch` stays passive only. The `local-active` profile reuses the existing SMTP pipeline and adds no job, store, or service component.
 - `docs/evaluation.md` compares the two modes on scripted servers, and `docs/comparison.md` compares other tools and lists the limits of SMTP checks.
 

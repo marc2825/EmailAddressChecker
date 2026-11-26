@@ -1,12 +1,13 @@
 """Active Mode in the local CLI: `emailcheck check ADDRESS --mode active` (ADR 0022).
 
-Every test runs the real production pipeline — composition, the guard, the
-route, the destination policy, pacing, the SMTP dialogue, reply parsing,
-evidence, and aggregation — with two replacements and nothing else: the
-dnspython resolver answers from a script, and the socket transport is the
-scripted peer from `tests/fake_smtp_server.py`. The suite-wide network guard
-still refuses every real socket, so passing here also shows nothing left the
-machine.
+Every test runs the production pipeline — composition, the guard, the route,
+the destination policy, pacing, the SMTP dialogue with its TLS requirement,
+reply parsing, evidence, and aggregation — with two replacements: the dnspython
+resolver answers from a script, and the socket transport is the scripted peer
+from `tests/fake_smtp_server.py`. Certificate verification, per-socket
+timeouts, and socket release are therefore not exercised here; the adapter
+tests in `tests/unit/adapters/` and `tests/integration/` cover them. The
+suite-wide network guard still refuses every real socket.
 
 What a review should check:
 
@@ -489,3 +490,27 @@ def test_only_check_accepts_active() -> None:
                 if option.dest == "mode":
                     modes[name] = tuple(option.choices)
     assert modes == {"check": ("passive", "active"), "batch": ("passive",)}
+
+
+# --- privacy of the output (security review B1) ------------------------------------
+
+
+def test_json_and_files_omit_the_address_unless_asked(
+    monkeypatch: pytest.MonkeyPatch,
+    network: Network,
+    config: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    serve(monkeypatch, network)
+    _, row = run_json(active(config), capsys)
+    assert "email" not in row
+
+    for name in ("out.json", "out.csv"):
+        output = tmp_path / name
+        assert commands.run([*active(config), "--output", str(output)]) == 0
+        assert "probe.target" not in output.read_text(encoding="utf-8")
+    capsys.readouterr()
+
+    _, row = run_json([*active(config), "--include-address"], capsys)
+    assert row["email"] == ADDRESS

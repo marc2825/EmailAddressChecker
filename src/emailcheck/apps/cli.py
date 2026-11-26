@@ -7,9 +7,9 @@ locally, and it is not merely configured not to probe — the stack it builds ha
 cannot.
 
 `--remote URL` submits an active job to another instance and, with `--wait`,
-polls it. There is no unrestricted local active flag and no direct-active mode:
-section 12 allows one only for the lab profile behind an explicit destination
-allowlist, which is a deployment concern rather than a command-line one.
+polls it. This single-address form has no active flag. The one local active
+path is `emailcheck check ADDRESS --mode active` in `apps/commands.py`, which
+builds the `local-active` profile for one acknowledged check (ADR 0022).
 
 **The remote key comes from a file, not from a flag and not from the
 environment.** A secret in `--remote-key` is a secret in `ps` output and in the

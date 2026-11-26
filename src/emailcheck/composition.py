@@ -125,6 +125,12 @@ class DeploymentProfile(StrEnum):
     SERVICE_ACTIVE = "service-active"
 
 
+#: Admission for local-active: one check in flight and nothing queued, so the
+#: profile itself refuses to run checks side by side, whatever calls it.
+LOCAL_ACTIVE_ADMISSION: Final = AdmissionSettings(
+    max_in_flight=1, max_waiting=1, max_per_principal=1
+)
+
 #: The profiles that run in the CLI's own process, answer synchronously, and
 #: own no job, queue, worker, store, or retention daemon.
 LOCAL_PROFILES: Final = frozenset({DeploymentProfile.LOCAL_PASSIVE, DeploymentProfile.LOCAL_ACTIVE})
@@ -251,6 +257,8 @@ class Deployment:
             # command is built to honour.
             if not self.active_probing:
                 raise ValueError("the local-active profile exists to probe; use local-passive")
+            if self.admission != LOCAL_ACTIVE_ADMISSION:
+                raise ValueError("the local-active profile runs one check at a time")
             if (
                 self.store_path is not None
                 or self.job_store_path is not None

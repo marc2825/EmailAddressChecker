@@ -67,8 +67,8 @@ _TEXT: Final[dict[str, tuple[str, str]]] = {
         "検査しません（Passive Mode。SMTPで確かめるには --mode active）",
     ),
     "step.smtp_no_result": (
-        "SMTP tried, but no answer was obtained",
-        "SMTPで試みましたが、結果を得られませんでした",
+        "SMTP step ran, but no answer was obtained",
+        "SMTPの手順に進みましたが、結果を得られませんでした",
     ),
     "step.smtp_skipped": (
         "SMTP not run: there is nowhere to connect",
@@ -80,8 +80,10 @@ _TEXT: Final[dict[str, tuple[str, str]]] = {
     "refusal.capacity": ("too many checks were running", "同時に実行できる数を超えました"),
     # --- Active Mode -----------------------------------------------------------
     "active.running": (
-        "Active Mode: connecting over SMTP to the mail server for {domain}. No message is sent.",
-        "Active Mode: {domain} のメールサーバーにSMTPで接続します。メール本文は送信しません。",
+        "Active Mode: connecting over SMTP to the mail server for {domain}. No message "
+        "is sent. Check only addresses you own or are allowed to check.",
+        "Active Mode: {domain} のメールサーバーにSMTPで接続します。メール本文は送信しません。"
+        "検査してよいのは、自分が管理するか許可を得たアドレスだけです。",
     ),
     "active.notice": (
         """Active Mode connects to the mail server of the address's domain and names

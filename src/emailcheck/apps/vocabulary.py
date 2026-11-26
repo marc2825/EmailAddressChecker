@@ -641,8 +641,10 @@ HINTS: Final[dict[str, tuple[str, str]]] = {
         "ポリシーによる拒否からは、受信者の有無は分かりません。",
     ),
     "smtp_temporary_failure": (
-        "Some servers defer unknown senders at first (greylisting).",
-        "知らない送信元を最初は一時的に断るサーバーもあります（グレイリスティング）。",
+        "Some servers defer unknown senders at first (greylisting). Asking again and "
+        "again can make a server treat you as a harvester.",
+        "知らない送信元を最初は一時的に断るサーバーもあります（グレイリスティング）。"
+        "何度も問い合わせると、アドレスを集めていると見なされることがあります。",
     ),
 }
 

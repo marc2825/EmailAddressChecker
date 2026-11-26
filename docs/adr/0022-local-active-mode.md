@@ -28,7 +28,7 @@ Combine A and C.
 - The CLI builds a `local-active` deployment through `composition.py`. It is local-passive plus the existing SMTP service: no jobs, no executor, no store, no retention daemon, and no service component. The profile refuses a store and refuses to exist without probing.
 - The user's configuration file has an `[smtp]` section: `ehlo_hostname`, `envelope_sender`, and `acknowledged`. The sender identity goes through `load_sender_identity`, which refuses the null sender and an EHLO name unrelated to the sender's domain. Until `acknowledged = true`, the CLI prints what a probe reveals and requires, and stops before any DNS or SMTP use.
 - Every existing protection applies unchanged: the six-command vocabulary with no DATA, BDAT, VRFY, EXPN, or AUTH; at most one `RCPT TO` per check (ADR 0019) and the attempt cap; the destination policy and peer check; required TLS with certificate and host-name verification; rate-limit permission before a socket; per-stage timeouts and the 30-second total deadline; and the aggregation rules, so an acceptance is at most `likely_deliverable` at medium confidence.
-- The output says whether SMTP ran (`smtp_executed`), shows the SMTP step in the evidence ladder, separates "not run" from "tried and failed", and gives a hint for a blocked port, a TLS failure, or a policy refusal.
+- The output says whether the SMTP step ran (`smtp_executed`, also true when pacing stopped it before a connection), shows the SMTP step in the evidence ladder, separates "not run" from "tried and failed", and gives a hint for a blocked port, a TLS failure, or a policy refusal.
 
 ## What is and is not enforced
 

@@ -54,7 +54,11 @@ from emailcheck.apps.render import (
     rows_footer,
 )
 from emailcheck.apps.vocabulary import DATASET_OF, TABLES, every_code, lookup
-from emailcheck.composition import DeploymentProfile, build_verification_stack
+from emailcheck.composition import (
+    LOCAL_ACTIVE_ADMISSION,
+    DeploymentProfile,
+    build_verification_stack,
+)
 from emailcheck.domain.address import AddressAccepted, RawAddressInput, parse_address
 from emailcheck.domain.principal import Principal
 from emailcheck.settings import Settings, load_settings
@@ -145,8 +149,10 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
         "check",
         lang=lang,
         description=say(
-            "Check addresses by syntax and DNS. Nothing connects to SMTP.",
-            "アドレスを構文とDNSで検査します。SMTPには接続しません。",
+            "Check addresses by syntax and DNS. With --mode active, also check one "
+            "address over SMTP without sending mail.",
+            "アドレスを構文とDNSで検査します。"
+            "--mode active では、1件だけメールを送らずにSMTPでも確かめます。",
         ),
         epilog=_examples(
             say,
@@ -430,8 +436,10 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
             type=Path,
             metavar="PATH",
             help=say(
-                "a TOML file of limits (see config/budgets.toml)",
-                "上限を書いたTOMLファイル（config/budgets.toml を参照）",
+                "a TOML configuration: limits, and [smtp] for Active Mode "
+                "(see: emailcheck config example)",
+                "TOMLの設定ファイル。上限と、Active Mode 用の [smtp]"
+                "（例: emailcheck config example）",
             ),
         )
     return root
@@ -811,6 +819,7 @@ async def check(args: argparse.Namespace, settings: Settings, job: _Job) -> int:
             deployment,
             profile=DeploymentProfile.LOCAL_ACTIVE,
             active_probing=True,
+            admission=LOCAL_ACTIVE_ADMISSION,
             sender_identity=settings.smtp.sender_identity(),
         )
     versions = report_versions(
@@ -840,7 +849,14 @@ async def check(args: argparse.Namespace, settings: Settings, job: _Job) -> int:
             if as_text and not single:
                 print(layout.header_line(screen))
             stream = (
-                _active_rows(rows, stack.verification, principal, include=True)
+                _active_rows(
+                    rows,
+                    stack.verification,
+                    principal,
+                    # As for passive rows: the full address reaches a record
+                    # only for the screen (which redacts it) or on request.
+                    include=args.include_address or as_text,
+                )
                 if job.active
                 else passive_rows(
                     rows,
