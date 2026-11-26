@@ -26,7 +26,7 @@ Active SMTP probing touches infrastructure you do not own. If you enable it:
 - Do not bypass the destination controls, rate limits, or safety checks. They keep the traffic distinguishable from address harvesting.
 - Do not use this project to enumerate addresses, harass anyone, or build address lists without consent.
 
-Active probing is not authorized by default, and publishing this source does not authorize it. An operator must first complete the per-deployment checks in [docs/readiness-checklist.md](docs/readiness-checklist.md); the operator controls are in [docs/operations.md](docs/operations.md).
+Active probing is off by default, and publishing this source does not authorize anyone to probe anything. Local Active Mode (`check --mode active`, [ADR 0022](docs/adr/0022-local-active-mode.md)) needs no service, but it is for addresses you own or are allowed to check, and the receiving server sees your IP address and configured identity. Its limits apply to one process and are no protection against misuse by whoever runs it. A service deployment must first complete the per-deployment checks in [docs/readiness-checklist.md](docs/readiness-checklist.md); the operator controls are in [docs/operations.md](docs/operations.md).
 
 ## Safety boundary
 

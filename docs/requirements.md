@@ -253,7 +253,13 @@ emailcheck user@example.com --remote https://validator.example
 
 Remote validators require HTTPS. For local development HTTP is allowed only for the exact IP literals `127.0.0.1` and `::1`; `localhost`, DNS-derived exceptions, and other spellings of an IP are refused. Redirects are not followed, and proxy environment variables do not route these credential-bearing requests. See ADR 0021.
 
-A direct active mode exists only for the lab profile, with an explicit destination allowlist. It must not become a convenient, unrestricted flag.
+Local Active Mode (ADR 0022):
+
+```bash
+emailcheck check user@example.com --mode active --config emailcheck.toml
+```
+
+It checks exactly one address, from the user's own machine, through the `local-active` profile. It needs an `[smtp]` section with the sender identity and `acknowledged = true`; until then the CLI prints what a probe reveals and stops before any network use. It is not an unrestricted flag: `batch` and `expand` cannot reach it, and every SMTP rule in sections 2, 7, 9, and 14 applies unchanged. Its quotas and pacing are per process and can be bypassed by whoever runs it, which the documentation states.
 
 ## 13. Cache defaults
 
@@ -295,6 +301,14 @@ A process restart is not a retry and does not resume interrupted work; see secti
 - memory or SQLite cache;
 - no service authentication requirement;
 - safe for a developer laptop.
+
+### local-active
+
+- one explicitly requested address from `check --mode active`;
+- a sender identity and acknowledgement in the user's configuration file;
+- the destination policy, required TLS, pacing, and in-process quotas;
+- no jobs, stores, worker, retention daemon, or service component;
+- for addresses the user owns or may check (ADR 0022).
 
 ### lab-active
 

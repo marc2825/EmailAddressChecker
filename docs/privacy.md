@@ -20,7 +20,7 @@ Addresses and domain names may be personal data. HMAC identifiers, redaction, an
 
 ## 2. Data minimization
 
-- Local checks use DNS and never contact SMTP. The domain of each checked address is sent to the configured DNS resolver. Offline candidate expansion uses neither DNS nor SMTP, and is for addresses the user owns or may work with, never for guessing other people's addresses.
+- Passive checks use DNS and never contact SMTP. Active Mode (one address, `check --mode active`) also connects to the address's mail server, which learns the address, the user's IP address, and the configured EHLO name and sender, and may log them; nothing is sent to this project. The domain of each checked address is sent to the configured DNS resolver. Offline candidate expansion uses neither DNS nor SMTP, and is for addresses the user owns or may work with, never for guessing other people's addresses.
 - Public results contain approved statuses, reason codes, and safe summaries, never raw SMTP transcripts or untrusted server messages.
 - Ordinary logs and metrics never contain complete email addresses, raw credentials, or network-library exception text.
 - Raw diagnostic replies are not kept at all. Bounded, sanitized diagnostics are kept, and they are not anonymized.

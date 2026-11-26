@@ -17,7 +17,7 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 
 ### Added
 
-- Conservative email checks from syntax and DNS/MX evidence, with a separate, explicitly authorized active SMTP capability.
+- Conservative email checks from syntax and DNS/MX evidence, and an opt-in single-address SMTP check.
 - Passive CSV/TXT batch processing: JSON/CSV results in input order, duplicate handling, progress reporting, bounded work, and atomic file output.
 - Offline wildcard expansion with configurable candidate sets and generation limits.
 - Validated TOML budget configuration, and reports of versions and datasets.
@@ -45,6 +45,14 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 
 - The service batch CSV parser follows the local CLI's reading rules: a repeated column name or broken CSV syntax refuses the file, a row with the wrong number of fields is rejected, and only ASCII whitespace around an address is trimmed, as the address parser does.
 
+### Local Active Mode (ADR 0022)
+
+- `emailcheck check ADDRESS --mode active --config FILE` checks one address over SMTP from the user's own machine, with no server, account, or API key. It sends EHLO, STARTTLS, MAIL FROM, one RCPT TO, and RSET or QUIT, and never a message.
+- It needs an `[smtp]` section (`ehlo_hostname`, `envelope_sender`, `acknowledged`); `emailcheck config example` prints one. Until `acknowledged = true`, it prints what a probe reveals and requires, and contacts nothing.
+- The evidence ladder separates "SMTP not run", "tried without an answer", and the server's answer, and gives a hint for a blocked port 25, a TLS failure, or a policy refusal. Rows report `smtp_executed`, and refused rows add `refusal` (`deadline`, `limit`, or `capacity`).
+- `batch` stays passive only. The `local-active` profile reuses the existing SMTP pipeline and adds no job, store, or service component.
+- `docs/evaluation.md` compares the two modes on scripted servers, and `docs/comparison.md` compares other tools and lists the limits of SMTP checks.
+
 ### Release preparation (issue #7)
 
 - The PyPI page is `docs/pypi.md`, with absolute links pinned to the version tag; the repository README files keep their relative links.
@@ -64,5 +72,5 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 
 - Neither a mail route nor an SMTP acceptance proves that a mailbox exists.
 - The disposable-domain, free-mail, and provider datasets are empty; the role-account list is included.
-- Active batch processing is internal and not exposed through the CLI or an API. Active SMTP requires a separately authorized deployment.
+- Active batch processing is internal and not exposed through the CLI or an API. Local Active Mode checks one address per command; a service deployment still needs the readiness checklist.
 - Packaging and publishing workflows are ready, but 0.1.0 has not been published to PyPI.

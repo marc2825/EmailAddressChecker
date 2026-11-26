@@ -25,7 +25,39 @@ emailcheck explain
 emailcheck explain null_mx
 ```
 
-`check` と `batch` は受動検査だけを行います。Active検査に切り替えるオプションはありません。
+`check` と `batch` は既定で受動検査（Passive Mode）を行い、SMTPには接続しません。1件だけをSMTPでも確かめるには、次の Active Mode を使います。
+
+### Active Mode（SMTP検査）
+
+```bash
+emailcheck config example > emailcheck.toml   # 設定ファイルの例を作る
+emailcheck check alice@example.org --mode active --config emailcheck.toml
+```
+
+宛先のメールサーバーに接続し、EHLO、STARTTLS、EHLO、MAIL FROM、RCPT TO（1回）のあと、RSET または QUIT で終了します。メールは送りません（DATA、BDAT、VRFY、EXPN、AUTH は実装していません）。専用のサーバー、アカウント、APIキーは要りません。
+
+設定ファイルの `[smtp]` セクション:
+
+| 項目 | 内容 |
+| --- | --- |
+| `ehlo_hostname` | EHLOで名乗るホスト名。自分が管理するドメインの完全なホスト名。 |
+| `envelope_sender` | MAIL FROM に使う送信者。`ehlo_hostname` と同じドメインか、どちらかがもう一方のサブドメインであること。空の送信者（`<>`）は使えません。 |
+| `acknowledged` | 注意事項を読んだら `true` にする。`false` や未設定のときは注意事項を表示して終了し、DNSにもSMTPにも接続しません。 |
+
+制約:
+
+- 指定できるアドレスは1件だけです。`batch` は `--mode passive` だけを受け付け、`expand` の候補を自動でSMTP検査する機能はありません。
+- 証明書とホスト名を検証できるTLSが必須です。接続先がプライベートアドレス、ループバック、クラウドのメタデータなどを指すときは接続しません。
+- 全体の上限は30秒です。各段階にもタイムアウトがあります。Ctrl-C で中断すると、接続を閉じて終了コード130で終わります。
+- 件数と間隔の制限は1つのプロセスの中だけで働きます。コマンドを繰り返せば回避できるので、悪用への耐性はサービス運用と同じではありません。
+
+結果の読み方:
+
+- 画面の「メールボックス」の段は、SMTPの結果、試みたが結果を得られなかったこと、接続先がなく実施しなかったことを区別して表示します。JSONとCSVの `smtp_executed` は、SMTPの対話を試みたかどうかです。
+- 受信者が受け付けられると `likely_deliverable`（信頼度「中」）になりますが、実在の証明ではありません。受信者不存在の明示（5.1.1）は `invalid` です。ポリシーによる拒否、理由のない550、252、TLSの失敗は `unknown`、接続できないときや一時的なエラーは `temporary_unknown` です。
+- 接続できない、TLSに失敗した、ポリシーで拒否されたときは、考えられる原因を「ヒント」として表示します。
+
+検査してよいのは、自分が管理するか、検査の許可を得たアドレスだけです。接続先のサーバーには、アドレス、あなたのIPアドレス、EHLO名と送信者が伝わり、記録されることがあります。比較の結果は[評価](evaluation.md)を参照してください。
 
 ### 画面の表示
 
@@ -157,7 +189,7 @@ emailcheck config show --config config/budgets.toml
 emailcheck batch addresses.csv --config config/budgets.toml --output results.csv
 ```
 
-CLIの設定ファイルで読み込めるセクションは `[batch]`、`[rate_limit]`、`[quota]`、`[passive_quota]` です。設定の例は [budgets.toml](../config/budgets.toml) にあります。TLS、認証情報、宛先の許可などは、この設定ファイルでは変えられません。`config/local-passive.toml` などのデプロイ例は、CLIの設定ファイルではありません。
+CLIの設定ファイルで読み込めるセクションは `[batch]`、`[rate_limit]`、`[quota]`、`[passive_quota]` と、Active Mode 用の `[smtp]` です。`[quota]` と `[rate_limit]` は Active Mode の件数と間隔の制限です。設定の例は [budgets.toml](../config/budgets.toml) にあります。TLS、認証情報、宛先の許可などは、この設定ファイルでは変えられません。`config/local-passive.toml` などのデプロイ例は、CLIの設定ファイルではありません。
 
 制限はプロセスごとに管理し、複数のプロセスやレプリカの間では共有しません。設定ファイルの区別は [config/README.md](../config/README.md) を参照してください。
 
@@ -174,7 +206,7 @@ emailcheck explain [CODE]
 
 `explain` は、判定、信頼度、理由コード、注意フラグ、行の処理状態の意味を表示します。コードを省略すると一覧を、近い綴りのコードを指定すると候補を示します。
 
-従来形式の `emailcheck ADDRESS --remote URL --remote-key-file PATH [--wait]` は、別に構築して許可を得たActive検査サービスに接続するためのものです。リモート接続にはHTTPSが必要です。開発用のHTTPは `127.0.0.1` と `[::1]` だけを許可し、`localhost`、リダイレクト、環境変数のプロキシは使いません。使うには、対象の所有または許可、認証、レート制限、TLS、運用の準備が必要です。通常の `check` と `batch` には、Active検査に切り替える機能はありません。詳しくは[運用ガイド](operations.md)と[セキュリティポリシー](../SECURITY.md)を参照してください。
+従来形式の `emailcheck ADDRESS --remote URL --remote-key-file PATH [--wait]` は、別に構築して許可を得たActive検査サービスに接続するためのものです。リモート接続にはHTTPSが必要です。開発用のHTTPは `127.0.0.1` と `[::1]` だけを許可し、`localhost`、リダイレクト、環境変数のプロキシは使いません。使うには、対象の所有または許可、認証、レート制限、TLS、運用の準備が必要です。自分のPCから1件をSMTPで確かめるだけなら、上の Active Mode を使います。詳しくは[運用ガイド](operations.md)と[セキュリティポリシー](../SECURITY.md)を参照してください。
 
 リモートの各通信には個別のタイムアウトがありますが、ジョブの送信から結果の取得までの全体には期限がありません。少しずつ応答を返し続けるサーバーに対しては、待ち時間が長くなる場合があります（[今後の計画](../ROADMAP.md)）。
 
@@ -182,7 +214,7 @@ emailcheck explain [CODE]
 
 0.1.xの間、次の形を保ちます。
 
-- 主な使い方はサブコマンド（`check`、`batch`、`expand`、`explain`、`config`、`versions`、`deployment`）です。
+- 主な使い方はサブコマンド（`check`、`batch`、`expand`、`explain`、`config`、`versions`、`deployment`）です。`check --mode passive|active` は ADR 0022 で追加しました。
 - `emailcheck ADDRESS` も残します。`--remote` を使えるのはこの形だけです。`--json` の出力は1件の結果のオブジェクトで、APIの結果と同じ形です。`check --json` は行の配列で、行番号や処理状態を含みます。どちらも変えません。
 - `--report-versions` と `--check-deployment` は、`versions` と `deployment` の別名として残します。`--json` は `--output-format json` の短縮形として残します。
 - CSVの配列・オブジェクトの列はJSON文字列のままです。`dataset_versions` と `ruleset` は全行に入ります。

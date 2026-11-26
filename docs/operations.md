@@ -60,7 +60,7 @@ Abuse indicators only report. Suspending a caller is an operator decision throug
 
 ### Retention
 
-`VerificationStack.start` starts a `RetentionScheduler` for every profile that keeps persistent service state; local-passive gets none, because it accepts no job and owns no batch. `aclose` stops it, and `VerificationStack.run_retention` runs the same sweep on demand.
+`VerificationStack.start` starts a `RetentionScheduler` for every profile that keeps persistent service state; the local profiles (local-passive and local-active) get none, because they accept no job and own no batch. `aclose` stops it, and `VerificationStack.run_retention` runs the same sweep on demand.
 
 `RetentionSettings.interval_seconds` defaults to fifteen minutes, must be between one minute and one day, and cannot be changed by any request, flag, or admin call. Data is deleted at most one interval after its retention cutoff.
 

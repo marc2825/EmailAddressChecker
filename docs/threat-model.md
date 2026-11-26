@@ -17,6 +17,7 @@
 - API to queue;
 - worker to DNS;
 - worker to remote SMTP;
+- the local CLI to remote SMTP (local-active, ADR 0022);
 - service to datasets;
 - service to persistence;
 - administrator access.
@@ -38,6 +39,14 @@ Controls:
 - New-account quotas, sequence and dictionary-pattern detection, and domain ownership verification for elevated use.
 - Suspension and audit.
 - No provider account APIs, no `VRFY` or `EXPN`, and no bulk before abuse controls exist.
+
+### Local Active Mode (ADR 0022)
+
+Threat: someone uses `check --mode active` on their own machine to find out whether other people's addresses are live.
+
+Controls that apply: one address per command; no SMTP from `batch`, `expand`, or the legacy form; at most one `RCPT TO` per check; required TLS; the destination policy and peer check; pacing before the socket; the 30-second total deadline; a sender identity the user must configure, which `load_sender_identity` refuses if it is the null sender or unrelated to the EHLO name; and a printed notice that must be acknowledged in the configuration file before anything connects.
+
+Controls that do not apply: there is no authentication, account, or audit trail; quotas and pacing live in one process and reset with each run; and nothing can verify that the user owns the EHLO domain or may check the address. A determined user can script repeated runs or change the source. The mode is therefore no stronger against misuse than any other SMTP client, and the documentation says so. What it adds is a conservative reading of the answer and no path to bulk or to sending mail.
 
 ### Sender reputation damage
 
@@ -227,4 +236,4 @@ No abuse threshold, budget, indicator, or administrative default depends on a pr
 
 ## 6. Residual risk
 
-Even a carefully limited service may be treated as a harvesting source by remote operators. Active probing must stay optional, rate limited, monitored, and easy to disable.
+Even a carefully limited service may be treated as a harvesting source by remote operators. Active probing must stay optional, rate limited, monitored, and easy to disable. A user of local Active Mode carries that risk personally: their IP address and domain are what a receiving site may block.

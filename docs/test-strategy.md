@@ -51,7 +51,7 @@ Integration with real infrastructure needs a separately authorized environment, 
 | Property / fuzz | Invariants across many inputs | CR/LF injection, malformed strings, order-independent aggregation, bounded encoders |
 | Adapter | I/O boundaries | DNS resolver mapping, SMTP transport, TLS, SQLite, HTTP client, timeouts |
 | Application | Orchestration across ports | Recipient-contact budget, bounded fallback, quotas, retry, cancellation, cache, deletion |
-| Composition / CLI | Public behavior and wiring | No local SMTP component, CLI formats, auth, process limits, package smoke |
+| Composition / CLI | Public behavior and wiring | No SMTP component in Passive Mode, Active Mode through scripted DNS and SMTP (`tests/unit/apps/test_local_active_mode.py`), CLI formats, auth, process limits, package smoke |
 | Contract / inspection | Invariants examples cannot show | Forbidden SMTP verbs, dependency direction, reason-code/document sync, public field allowlists |
 
 Add tests at the layer closest to an interface change, plus one composition-level regression test where safety depends on wiring. A test must fail on the unsafe behavior it guards; an assertion that only restates a mock's configured return value is not enough.

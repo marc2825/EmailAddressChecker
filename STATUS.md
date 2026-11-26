@@ -6,11 +6,11 @@ EmailAddressChecker estimates email deliverability conservatively. It does not v
 
 | Component | Status | Scope |
 | --- | --- | --- |
-| Syntax and DNS/MX checks | Available | Local checks do not contact SMTP servers. |
+| Syntax and DNS/MX checks | Available | Passive Mode, the default, does not contact SMTP servers. |
 | Local batch checks | Available | CSV/TXT input, JSON/CSV output in input order, bounded concurrency, duplicate handling. |
 | Candidate expansion | Available | Offline wildcard expansion with configurable substitutions and output limits. |
 | Risk classification | Partial | Role-address data is included; the disposable-domain, free-mail, and provider datasets are empty. |
-| Active SMTP checks | Restricted | Requires a separately configured, explicitly authorized deployment. |
+| Active SMTP checks | Available, one address | `check --mode active` after the user configures and acknowledges `[smtp]` (ADR 0022). Service deployments still need the readiness checklist. |
 | Service components | Library only | API-key auth, the HTTP request handler, job/verdict/account stores, the executor, retention, active batch, the accept-all experiment, and the beta harness are tested but not reachable from the CLI. No HTTP server ships. See [component reachability](docs/architecture.md#component-reachability). |
 | Package release | Pending | 0.1.0 is unreleased. The package, the PyPI page, and the TestPyPI-first workflow are ready; the owner steps are in [docs/releasing.md](docs/releasing.md). |
 
@@ -30,7 +30,7 @@ Usage and result meanings are in the [README](README.en.md), the [Japanese CLI r
 
 ## Active deployment
 
-Active probing is off by default. It must be explicitly authorized, and only for targets the operator owns or has permission to test. The deployment is responsible for authentication, sender identity, destination controls, rate limits, TLS, monitoring, and incident procedures.
+Active probing is off by default. Local Active Mode checks one address per command, only after the user acknowledges its notice, and only for addresses the user owns or may check. For a service deployment, probing must be explicitly authorized, and only for targets the operator owns or has permission to test. The deployment is responsible for authentication, sender identity, destination controls, rate limits, TLS, monitoring, and incident procedures.
 
 Before enabling it, complete the [readiness checklist](docs/readiness-checklist.md) and follow the [operations guide](docs/operations.md). `emailcheck deployment` only reports on configuration. It is not an approval or a connectivity test, and it always exits with 0.
 

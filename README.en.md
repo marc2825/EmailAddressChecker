@@ -9,11 +9,12 @@
   </picture>
 </p>
 
-A Python CLI that checks email addresses **conservatively** from their syntax and their domain's DNS/MX records, **without sending any email**.
+A Python CLI that estimates, **without sending any email**, whether an address can receive mail, and says how sure it is.
 
-- Local checks never connect to SMTP servers. They cannot establish that a particular mailbox exists or that a message will be delivered.
-- When the evidence is not decisive, the answer is `unknown`, which does not mean invalid.
-- No HTTP server ships. SMTP checks are for separately configured, authorized deployments.
+- The default **Passive Mode** checks syntax and the domain's DNS/MX records and never connects to an SMTP server.
+- **Active Mode** (`--mode active`, one address at a time) asks the recipient's mail server whether it accepts the recipient. It never sends a message.
+- Neither mode can establish that a mailbox exists or that a message will be delivered. When the evidence is not decisive, the answer is `unknown`, which does not mean invalid.
+- Everything runs on your own computer. No dedicated server, account, or API key is needed.
 
 ## When to use it
 
@@ -27,6 +28,10 @@ It is for checking and cleaning lists of addresses from the command line:
 
 To validate syntax inside a Python program, a syntax-validation library such as [email-validator](https://pypi.org/project/email-validator/) is a better fit.
 
+### How it differs from other tools
+
+Several tools check recipients over SMTP. What differs here is the combination: local with no external API or account; SMTP off by default and one address per command, with no path from a file or from candidate generation; verified TLS with no plaintext fallback; evidence shown step by step with conservative statuses and categorical confidence, never a score; passive batches with machine-readable output and private defaults; Japanese and English; and a reproducible evaluation with open safety tests. It does not detect catch-all servers, and its TLS requirement means it finishes on fewer servers than most tools. The [comparison](docs/comparison.md) has the details and the limits of SMTP checks (as of 2026-11-26).
+
 > **Release status:** v0.1.0 is not yet published to PyPI. The supported local CLI is available from the repository; the service components are not a ready-to-deploy HTTP service.
 
 ## Features
@@ -37,7 +42,7 @@ To validate syntax inside a Python program, a syntax-validation library such as 
 | Batch processing | UTF-8 CSV/TXT input, ordered JSON/CSV output, duplicate handling, and bounded concurrency |
 | Candidate generation | Offline expansion of `*` patterns with configurable substitutions and output limits |
 | Risk indicators | Role-address classification; other classification datasets are currently unavailable |
-| Active SMTP checks | Restricted library components for separately authorized deployments; not part of local `check` or `batch` |
+| Active SMTP check | One address at a time with `check --mode active`; no message is sent; never from `batch` or `expand` |
 
 ## Installation
 
@@ -123,6 +128,35 @@ No message content was sent.
 
 Two or more addresses print one line each, then a summary. Messages are in Japanese or English, following `LC_ALL`, `LC_MESSAGES`, and `LANG` (`LANG=C` gives English); `NO_COLOR` turns colour off. The original single-address form, `emailcheck alice@example.com --json`, remains available. For full command options, see the [Japanese CLI reference](docs/usage-ja.md).
 
+## Passive Mode and Active Mode
+
+| | Passive Mode (default) | Active Mode |
+| --- | --- | --- |
+| How | nothing to add | `emailcheck check ADDRESS --mode active --config FILE` |
+| Checks | syntax, DNS/MX | syntax, DNS/MX, and the server's answer to `RCPT TO` |
+| Scope | one address to a CSV/TXT batch | exactly one address |
+| Contacts the recipient's server | no | yes, without sending mail |
+| Possible results | `invalid`, `unknown`, `temporary_unknown` | also `likely_deliverable`, and `invalid` from an explicit "no such user" |
+
+First-time setup for Active Mode:
+
+```bash
+emailcheck config example > emailcheck.toml
+# edit emailcheck.toml: an EHLO name and sender on a domain you manage
+emailcheck check alice@example.org --mode active --config emailcheck.toml
+# read the notice it prints, set acknowledged = true, and run it again
+```
+
+What to know before using it:
+
+- Check only addresses you own or are allowed to check.
+- The receiving server learns the address you check, your IP address, and the EHLO name and sender you configured, and may log them.
+- The only commands sent are EHLO, STARTTLS, MAIL FROM, one RCPT TO, RSET, and QUIT. DATA, BDAT, VRFY, and EXPN are not implemented.
+- TLS with a valid certificate is required; a server that cannot provide it is not checked.
+- Many ISPs and cloud providers block outbound port 25; then the result is `temporary_unknown`. Many servers also refuse connections from home or cloud IP addresses.
+- An accepted recipient is not proof. A server that accepts every address makes an absent mailbox look `likely_deliverable` ([evaluation](docs/evaluation.md)).
+- The rate and quota limits live in one process; running the command again resets them. They are not a licence to check other people's addresses.
+
 ## Understanding results
 
 | `status` | Meaning |
@@ -132,7 +166,7 @@ Two or more addresses print one line each, then a summary. Messages are in Japan
 | `temporary_unknown` | A temporary failure prevents a reliable conclusion. |
 | `likely_deliverable` | Qualified, recipient-specific positive evidence was obtained; delivery is **not** guaranteed. |
 
-**DNS/MX records do not prove that a mailbox exists.** In particular, local DNS-only checks cannot establish `likely_deliverable` from mail routing alone. Positive recipient-specific evidence requires a separately authorized active check.
+**DNS/MX records do not prove that a mailbox exists.** Passive Mode never gives `likely_deliverable`. Active Mode gives it, at medium confidence, only when the server accepts the recipient.
 
 `confidence` is a category, not a probability. Operational states such as `refused` and `failed` are separate from delivery statuses. `emailcheck explain <code>` describes any of these values. See the [status and evidence model](docs/status-model.md).
 
@@ -165,15 +199,15 @@ In 0.1.0 the supported Python surface is the syntax parser (`emailcheck.parse_ad
 
 ## Scope and safety
 
-The local CLI provides passive syntax/DNS checks and offline candidate generation. The repository also includes **library-only** authentication, HTTP handlers, job stores, and restricted SMTP-verification components. **No HTTP server ships**, and those service components are not available from the installed local commands.
+The local CLI provides Passive and Active Mode checks and offline candidate generation. The repository also includes **library-only** authentication, HTTP handlers, job stores, and active batch components. **No HTTP server ships**, and Active Mode uses none of those service components ([ADR 0022](docs/adr/0022-local-active-mode.md)).
 
-Active SMTP probing is disabled by default. It requires explicit authorization, verified TLS, sender identity, destination controls, authentication, rate limits, and a separately configured deployment. The legacy `--remote` client requires HTTPS, except for HTTP to the exact loopback IP literals `127.0.0.1` and `[::1]` during local development; it rejects redirects and does not use environment proxies.
+SMTP is off by default. Active Mode runs one address per command, only after the user records in the configuration file that they read its notice, with verified TLS, the destination policy, and pacing. The legacy `--remote` client requires HTTPS, except for HTTP to the exact loopback IP literals `127.0.0.1` and `[::1]` during local development; it rejects redirects and does not use environment proxies.
 
 Only probe addresses and systems you own or have explicit permission to test. See [Security](SECURITY.md), [architecture and component reachability](docs/architecture.md#component-reachability), and the [deployment checklist](docs/readiness-checklist.md).
 
 ### Known limitations
 
-- Mailbox existence and successful delivery cannot be guaranteed, even after an authorized SMTP check.
+- Mailbox existence and successful delivery cannot be guaranteed, even after an SMTP check.
 - Some valid address forms, including quoted local parts and SMTPUTF8 local parts, are unsupported and return `unknown` rather than a false `invalid`.
 - Disposable-domain, free-mail, and provider-classification datasets are currently empty; an absent risk flag does **not** mean an address is safe.
 - Active batch processing, the accept-all experiment, and other service components are not exposed through the local CLI.

@@ -15,6 +15,7 @@ Current behavior is described in the main documents ([requirements](../requireme
 | [0009](0009-smtp-dialogue-and-tls.md) | `WireCommand` as the write capability, and required TLS |
 | [0019](0019-operation-recipient-budget-and-atomic-job-identity.md) | One recipient touch per operation, atomic job identity, crash semantics |
 | [0021](0021-required-encryption-at-network-boundaries.md) | HTTPS for remote validators and TLS for SMTP, with migration notes |
+| [0022](0022-local-active-mode.md) | Local Active Mode: one SMTP check from the user's machine, no service |
 
 A new ADR is needed for a new production dependency, a new SMTP command, or a change to any decision above.
 

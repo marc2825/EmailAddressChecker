@@ -1,10 +1,11 @@
 # email-address-checker
 
-A command-line tool that checks email addresses conservatively from their syntax and their domain's DNS/MX records, without sending any email.
+A command-line tool that estimates conservatively, without sending any email, whether an address can receive mail.
 
 [Source](https://github.com/marc2825/EmailAddressChecker/tree/v0.1.0) | [README (Japanese)](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/README.md) | [README (English)](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/README.en.md) | 日本語の説明は末尾にあります。
 
-- **No SMTP, no email.** A local check never connects to a mail server. It cannot show that a mailbox exists or that a message will be delivered.
+- **No email, ever.** The default Passive Mode checks syntax and DNS/MX and never connects to a mail server. The opt-in Active Mode asks the recipient's server about one address over SMTP (EHLO, STARTTLS, MAIL FROM, one RCPT TO, QUIT) and never sends a message. Neither can show that a mailbox exists or that a message will be delivered.
+- **Local.** No dedicated server, account, or API key; everything runs on your computer.
 - **Built for lists.** CSV/TXT input, results in input order, duplicate handling, bounded work, JSON or CSV output, and atomic file writes.
 - **Explains itself.** Each result names its evidence: syntax, DNS/MX, and what was not checked. `emailcheck explain <code>` describes every status and reason code.
 - **Conservative.** When the evidence is not decisive, the answer is `unknown`, which is not the same as invalid.
@@ -33,7 +34,16 @@ emailcheck batch addresses.csv --output results.csv
 emailcheck explain mx_available
 ```
 
-On a terminal you get a readable view; in a pipe or a file you get JSON (or CSV). Statuses are `invalid`, `unknown`, `temporary_unknown`, and `likely_deliverable`. A local check never gives `likely_deliverable`, because a mail route says nothing about one recipient. `confidence` is a category, not a probability.
+On a terminal you get a readable view; in a pipe or a file you get JSON (or CSV). Statuses are `invalid`, `unknown`, `temporary_unknown`, and `likely_deliverable`. Passive Mode never gives `likely_deliverable`, because a mail route says nothing about one recipient. `confidence` is a category, not a probability.
+
+Active Mode, for one address you own or are allowed to check:
+
+```bash
+emailcheck config example > emailcheck.toml   # set an EHLO name and sender on your domain
+emailcheck check alice@example.org --mode active --config emailcheck.toml
+```
+
+It prints a notice and stops until you set `acknowledged = true`. The receiving server learns the address, your IP address, and your EHLO name and sender. Many networks block outbound port 25, TLS with a valid certificate is required, and a server that accepts every address makes an absent mailbox look accepted, so many checks end as `unknown` or `temporary_unknown`.
 
 The domains you check are sent to your DNS resolver. Addresses typed on the command line can stay in your shell history; use a file for sensitive lists. Use candidate generation (`emailcheck expand`) only for addresses you own or are allowed to work with, never to guess or enumerate other people's addresses.
 
@@ -45,7 +55,7 @@ Licence: Apache-2.0.
 
 ## 日本語
 
-メールを送らずに、メールアドレスの構文とドメインのDNS / MXレコードから、配送経路があるかを保守的に判定するコマンドラインツールです。SMTPには接続せず、メールボックスの実在やメールの到達は証明しません。判定できないときは `unknown` になり、これは「無効」という意味ではありません。
+メールを送らずに、メールアドレスへ届く見込みを保守的に判定するコマンドラインツールです。既定の Passive Mode は構文とDNS / MXだけを調べ、SMTPには接続しません。Active Mode（`--mode active`、1件ずつ）は宛先のサーバーにSMTPで受信者を確かめますが、メールは送りません。どちらもメールボックスの実在やメールの到達は証明しません。判定できないときは `unknown` になり、これは「無効」という意味ではありません。
 
 CSV / TXTの一括検査、入力順のままのJSON / CSV出力、重複の処理、判定根拠の表示（`emailcheck explain`）、日本語と英語の表示に対応しています。
 

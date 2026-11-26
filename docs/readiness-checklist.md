@@ -1,6 +1,6 @@
 # Operational readiness checklist
 
-One row for each deployment gate in `docs/operations.md` section 1, in the same order, with space to record who verified it and when.
+One row for each deployment gate in `docs/operations.md` section 1, in the same order, with space to record who verified it and when. These gates are for a service deployment; local Active Mode on a user's own machine is covered by ADR 0022 instead.
 
 A beta starts only from a signed copy of this checklist, after a human has verified every gate. Phase 8 is ready for manual gate, not production approved. Until this document is filled in and the incident owner agrees, `external_probing_authorized` stays `False` and the harness probes nothing.
 

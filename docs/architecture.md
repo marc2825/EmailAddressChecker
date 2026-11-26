@@ -11,9 +11,10 @@ This page describes the component boundaries and runtime behavior. The precise r
 | Passive single-address check | `emailcheck ADDRESS` or `emailcheck check ADDRESS...` | DNS only; no SMTP | Available |
 | Passive file processing | `emailcheck batch FILE` | DNS only; no SMTP | Available |
 | Candidate expansion | `emailcheck expand PATTERN` | None | Available |
-| Active check | A separately configured service; the legacy CLI `--remote` client | Controlled SMTP | Operator-gated |
+| Local Active Mode | `emailcheck check ADDRESS --mode active --config FILE` | Controlled SMTP, one address | Available after the user's `[smtp]` acknowledgement (ADR 0022) |
+| Active check through a service | A separately configured service; the legacy CLI `--remote` client | Controlled SMTP | Operator-gated |
 
-The active path requires authentication, explicit authorization, destination controls, TLS, pacing, and a deployment the operator has approved. The default local stack contains no SMTP component at all, so there is no flag that could turn one on. See [readiness](readiness-checklist.md) and [operations](operations.md).
+The default local stack (`local-passive`) contains no SMTP component at all. `check --mode active` builds the `local-active` profile instead: the same restricted SMTP service, destination policy, TLS, pacing, and in-process quotas, for one address, with no job, store, or service component. A service's active path also requires authentication and a deployment the operator has approved; see [readiness](readiness-checklist.md) and [operations](operations.md).
 
 ### Component reachability
 
@@ -27,8 +28,8 @@ Much of the code is service infrastructure that the installed `emailcheck` comma
 | Version and readiness reports | `application/readiness.py` | `emailcheck versions`, `emailcheck deployment` (also `--report-versions`, `--check-deployment`) | Callable |
 | Remote active-check client | `adapters/http/urllib_client.py` | Legacy `--remote` client; needs a server this project does not ship | — |
 | HTTP request handler and schema | `apps/api.py`, `apps/schema.py` | Not reachable; no HTTP server is bundled | A plain function, `handle`, with no transport binding |
-| Active SMTP | `application/smtp_*.py`, `adapters/smtp/` | Not reachable: the local stack contains no SMTP object | Only with `active_probing=True` and a sender identity, in the lab-active or service-active profile |
-| Job service and executor | `application/jobs.py`, `adapters/execution/` | Not reachable: the local-passive profile accepts no job | Only in the lab-active or service-active profile |
+| Active SMTP | `application/smtp_*.py`, `adapters/smtp/` | `check --mode active`, one address, through the `local-active` profile | With `active_probing=True` and a sender identity, in the local-active, lab-active, or service-active profile |
+| Job service and executor | `application/jobs.py`, `adapters/execution/` | Not reachable: the local profiles accept no job | Only in the lab-active or service-active profile |
 | Persistent verdict cache, job and account-state stores | `adapters/storage/sqlite_store.py`, `adapters/storage/sqlite_job_store.py`, `adapters/storage/sqlite_account_state.py`, `application/verdict_cache.py` | Not reachable: the local stack persists nothing | Only when the corresponding store path is configured |
 | Retention and account deletion | `application/retention.py`, `application/account_deletion.py` | Not reachable | Services always composed over whatever stores exist; the background retention scheduler only in the lab-active or service-active profile |
 | Active batch | `application/batch.py`, `adapters/storage/sqlite_batch_store.py` | Not reachable | Not composed; an operator constructs `BatchService` (see [Active batch](#active-batch)) |
@@ -237,7 +238,7 @@ Adding replicas takes more than starting workers: globally shared, atomic destin
 
 ## Deployment boundary
 
-Active probing is off by default. Approval is per deployment and requires an authorized target scope, a configured sender identity, destination controls, authentication, TLS, a tested kill switch and rate limits, suitable network egress, monitoring, and an incident owner. `emailcheck --check-deployment` only reports; it neither tests external connectivity nor grants approval. These application handlers provide no publicly writable administrative or account-deletion interface.
+Active probing is off by default. Local Active Mode is the user's own decision for one address at a time (ADR 0022); for a service, approval is per deployment and requires an authorized target scope, a configured sender identity, destination controls, authentication, TLS, a tested kill switch and rate limits, suitable network egress, monitoring, and an incident owner. `emailcheck --check-deployment` only reports; it neither tests external connectivity nor grants approval. These application handlers provide no publicly writable administrative or account-deletion interface.
 
 #### Stop conditions on the ASGI binding
 

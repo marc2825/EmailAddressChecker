@@ -9,6 +9,8 @@ Start with the [README](../README.md) (Japanese) or the [English README](../READ
 | [日本語CLIリファレンス](usage-ja.md) | Input formats, options, batch limits, output, and exit codes. |
 | [Configuration](../config/README.md) | Which configuration files the CLI reads, and which are only deployment examples. |
 | [Status model](status-model.md) | Verdicts, evidence, reason codes, confidence, and risk flags. |
+| [Evaluation](evaluation.md) | Passive Mode and Active Mode compared on scripted servers. |
+| [Comparison](comparison.md) | Other email-checking tools, and the limits of any SMTP check. |
 | [Classification datasets](../src/emailcheck/data/passive/README.md) | Included data and classifications not yet available. |
 
 ## Developing and maintaining

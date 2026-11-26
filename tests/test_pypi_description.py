@@ -53,7 +53,9 @@ def test_the_page_has_no_image_or_html() -> None:
 
 def test_the_page_states_the_limits() -> None:
     text = page()
-    assert "never connects to a mail server" in text
-    assert "cannot show that a mailbox exists" in text
+    assert "Passive Mode checks syntax and DNS/MX and never connects to a mail server" in text
+    assert "never sends a message" in text
+    assert "Neither can show that a mailbox exists" in text
+    assert "acknowledged = true" in text
     assert "`unknown`, which is not the same as invalid" in text
     assert "メールボックスの実在やメールの到達は証明しません" in text

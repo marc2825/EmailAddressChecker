@@ -19,6 +19,16 @@ After 0.1.0:
 - The subcommands are the main interface; the aliases kept for 0.1.x are listed in the [compatibility policy](docs/usage-ja.md#互換性の方針). Open display and output ideas are in issue #5.
 - A Python API for DNS checks is not part of 0.1.0. If there is demand, design a small passive-only API (sync and async, explicit timeouts and cleanup, the same result schema), tested against the installed package.
 
+## Local Active Mode
+
+Shipped in this release as one address per command (ADR 0022). Possible next steps, each a separate reviewed change:
+
+- A persistent local pace and quota file, so repeated runs on one machine share a budget. It would still be bypassable by the user and must not be described as abuse protection.
+- MTA-STS and DANE awareness, so a domain that publishes a policy is checked against it.
+- Clearer diagnosis of a blocked port 25 without contacting any third-party host.
+
+Not planned: Active Mode for files, a link from `expand` to SMTP, catch-all detection with a second `RCPT TO` (it would break the one-recipient bound), plaintext fallback, and sender or IP rotation.
+
 ## Service components
 
 No public service ships in 0.1.0, and configuration alone never makes a library-only component reachable from the CLI ([component reachability](docs/architecture.md#component-reachability)). Each step is a separate, reviewed change, in this order:
