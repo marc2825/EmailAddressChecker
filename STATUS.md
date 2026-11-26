@@ -12,7 +12,7 @@ EmailAddressChecker estimates email deliverability conservatively. It does not v
 | Risk classification | Partial | Role-address data is included; the disposable-domain, free-mail, and provider datasets are empty. |
 | Active SMTP checks | Restricted | Requires a separately configured, explicitly authorized deployment. |
 | Service components | Library only | API-key auth, the HTTP request handler, job/verdict/account stores, the executor, retention, active batch, the accept-all experiment, and the beta harness are tested but not reachable from the CLI. No HTTP server ships. See [component reachability](docs/architecture.md#component-reachability). |
-| Package release | Pending | 0.1.0 is unreleased; packaging and publishing workflows are ready. |
+| Package release | Pending | 0.1.0 is unreleased. The package, the PyPI page, and the TestPyPI-first workflow are ready; the owner steps are in [docs/releasing.md](docs/releasing.md). |
 
 ## Roadmap
 
@@ -32,7 +32,7 @@ Usage and result meanings are in the [README](README.en.md), the [Japanese CLI r
 
 Active probing is off by default. It must be explicitly authorized, and only for targets the operator owns or has permission to test. The deployment is responsible for authentication, sender identity, destination controls, rate limits, TLS, monitoring, and incident procedures.
 
-Before enabling it, complete the [readiness checklist](docs/readiness-checklist.md) and follow the [operations guide](docs/operations.md). `emailcheck --check-deployment` only reports on configuration. It is not an approval or a connectivity test, and it always exits with 0.
+Before enabling it, complete the [readiness checklist](docs/readiness-checklist.md) and follow the [operations guide](docs/operations.md). `emailcheck deployment` only reports on configuration. It is not an approval or a connectivity test, and it always exits with 0.
 
 Neither publishing the source nor passing CI authorizes external probing or certifies a deployment as production-ready.
 

@@ -9,9 +9,23 @@
   </picture>
 </p>
 
-A Python CLI and library for **conservative email address validation** using syntax and DNS mail-routing evidence.
+A Python CLI that checks email addresses **conservatively** from their syntax and their domain's DNS/MX records, **without sending any email**.
 
-Check individual addresses, process CSV/TXT files, or generate address candidates offline. **Local checks never connect to SMTP servers or send email.** They cannot establish that a particular mailbox exists or that a message will be delivered.
+- Local checks never connect to SMTP servers. They cannot establish that a particular mailbox exists or that a message will be delivered.
+- When the evidence is not decisive, the answer is `unknown`, which does not mean invalid.
+- No HTTP server ships. SMTP checks are for separately configured, authorized deployments.
+
+## When to use it
+
+It is for checking and cleaning lists of addresses from the command line:
+
+- CSV/TXT batches: input order kept, duplicate handling, row and size limits, and file output that is never left half written
+- machine-readable JSON/CSV with stable reason codes
+- results that explain themselves: how far syntax, DNS, and the mailbox were checked, and `emailcheck explain` for every code
+- Japanese and English messages
+- privacy by default: files omit addresses, the screen shows them redacted, and CSV cells are escaped against spreadsheet formulas
+
+To validate syntax inside a Python program, a syntax-validation library such as [email-validator](https://pypi.org/project/email-validator/) is a better fit.
 
 > **Release status:** v0.1.0 is not yet published to PyPI. The supported local CLI is available from the repository; the service components are not a ready-to-deploy HTTP service.
 
@@ -34,6 +48,16 @@ git clone https://github.com/marc2825/EmailAddressChecker.git
 cd EmailAddressChecker
 python -m pip install .
 ```
+
+Once 0.1.0 is on PyPI, any of these works:
+
+```bash
+pipx install email-address-checker
+uv tool install email-address-checker
+python -m pip install email-address-checker
+```
+
+CI installs and runs the package on Linux, Windows, and macOS; the full test suite runs on Linux.
 
 The command and importable module are both named `emailcheck`.
 
@@ -128,6 +152,16 @@ emailcheck batch addresses.csv --config config/budgets.toml --output results.csv
 ```
 
 Keep input/output files containing addresses private. Passing sensitive addresses directly as arguments may leave them in shell history. See the [configuration reference](config/README.md) and [privacy guide](docs/privacy.md).
+
+## Using it from Python
+
+In 0.1.0 the supported Python surface is the syntax parser (`emailcheck.parse_address`) and the published vocabulary (the names in `emailcheck.__all__`, such as `Status`, `ReasonCode`, and `RiskFlag`). There is no Python API for DNS checks; call the CLI and read its JSON. Other modules are internal and may change without notice.
+
+## Privacy and acceptable use
+
+- The domains you check are sent to your DNS resolver.
+- Addresses typed as arguments can stay in shell history; pass sensitive lists in a file.
+- Use candidate generation (`emailcheck expand`) only for addresses you own or are allowed to work with, never to guess or enumerate other people's addresses.
 
 ## Scope and safety
 

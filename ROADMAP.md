@@ -4,16 +4,21 @@ Planned work after 0.1.0, roughly in priority order. Nothing here is a release c
 
 ## Repository and release
 
-Owner actions:
+Owner actions before 0.1.0 ([release procedure](docs/releasing.md)):
 
-- Protect `main`: require the CI checks and a review before merging. The current ruleset only forbids deletion and force pushes.
-- Enable private vulnerability reporting.
-- Configure the PyPI and TestPyPI environments and trusted publishers, then publish 0.1.0 ([release procedure](docs/releasing.md)).
+- Create the `testpypi` and `pypi` Environments, protect `v*` tags, register the Trusted Publishers, and set `PUBLISH_ENABLED`.
+- Publish to TestPyPI from the tag, check the install, then publish to PyPI by the confirmed manual run.
+- Tidy the required checks on `main`: list `check (3.12)` once, bound to GitHub Actions, and add the `distribution` jobs. Private vulnerability reporting is already enabled.
 
-CI and packaging:
+After 0.1.0:
 
-- Enforce a minimum test coverage in CI.
 - Make the Docker build reproducible (pinned base image and dependency versions).
+- Decide whether to split the service components out of the CLI distribution, which would shrink the package and its attack surface. Today they ship as library-only code ([component reachability](docs/architecture.md#component-reachability)).
+
+## CLI and interfaces
+
+- The subcommands are the main interface; the aliases kept for 0.1.x are listed in the [compatibility policy](docs/usage-ja.md#互換性の方針). Open display and output ideas are in issue #5.
+- A Python API for DNS checks is not part of 0.1.0. If there is demand, design a small passive-only API (sync and async, explicit timeouts and cleanup, the same result schema), tested against the installed package.
 
 ## Service components
 
@@ -34,6 +39,8 @@ Running more than one worker or replica also needs shared, atomic destination pa
 - Under an authorized beta, measure the STARTTLS `not_offered` rate, per-attempt TLS outcomes, and connections per job. This needs instrumentation on the production path ([beta report template](docs/beta-report-template.md)).
 - Give the remote `--remote` client a total deadline and prompt cancellation; today it relies on per-socket timeouts in a blocking thread ([security audit](docs/security-audit.md)).
 - Add calibrated confidence scores only after a labelled, representative evaluation ([requirements](docs/requirements.md), section 17).
+- Publish a reproducible evaluation on synthetic data, public specifications, and controlled DNS fixtures: wrong rejections and acceptances, behaviour on DNS failures, the `unknown` rate, batch speed, and memory. It measures the passive checks only, never mailbox existence.
+- Compare with other tools (for example email-validator) only from their current documentation and code, and claim no feature that has not been checked.
 
 ## Not planned
 

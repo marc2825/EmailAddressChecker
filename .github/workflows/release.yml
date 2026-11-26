@@ -1,5 +1,11 @@
 name: Release distributions
 
+# A tag push publishes to TestPyPI only. PyPI is reached only by a manual run
+# on the same tag with target "pypi" and the tag typed again as confirmation,
+# so production needs a deliberate human action besides the Environment
+# approval. Both indexes stay behind vars.PUBLISH_ENABLED and their protected
+# Environments (docs/releasing.md).
+
 on:
   push:
     tags: ['v*']
@@ -11,6 +17,11 @@ on:
         required: true
         default: testpypi
         options: [testpypi, pypi]
+      confirm:
+        description: 'For pypi: type the tag being published, e.g. v0.1.0'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -40,6 +51,13 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
         run: |
           python -c 'import os; from emailcheck import __version__; assert os.environ["RELEASE_REF"] == "refs/tags/v" + __version__, "Release must run on its matching version tag"'
+      - name: Require confirmation for PyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'pypi'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          test "$CONFIRM" = "$TAG" || { echo "Type the tag ($TAG) in 'confirm' to publish to PyPI"; exit 1; }
       - run: python -m build
       - run: python -m twine check dist/*
       - run: python scripts/check_artifacts.py
@@ -57,7 +75,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
-      name: ${{ inputs.target || 'pypi' }}
+      # A tag push has no inputs and always goes to TestPyPI.
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'testpypi' }}
     permissions:
       contents: read
       id-token: write
@@ -67,10 +86,10 @@ jobs:
           name: distributions
           path: dist/
       - name: Publish to TestPyPI
-        if: inputs.target == 'testpypi'
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'testpypi'
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
       - name: Publish to PyPI
-        if: inputs.target != 'testpypi'
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'pypi'
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1

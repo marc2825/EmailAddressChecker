@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md LICENSE /app/
+COPY pyproject.toml LICENSE /app/
+COPY docs/pypi.md /app/docs/pypi.md
 COPY src /app/src
 
 RUN python -m pip install --no-cache-dir --upgrade pip \

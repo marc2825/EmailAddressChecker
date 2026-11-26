@@ -29,8 +29,9 @@ CLAUDE.local.md
 *.sqlite-wal
 *.sqlite-shm
 
-# Local environment overrides. No code reads environment variables; the CLI
-# budget configuration is `config/budgets.toml`.
+# Local environment overrides. No configuration is read from the environment
+# (only the CLI's language and colour, ADR 0009); the CLI budget configuration
+# is `config/budgets.toml`.
 .env.*
 
 # Credentials. Nothing of the sort is tracked today; these keep it that way.

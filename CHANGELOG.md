@@ -45,6 +45,13 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 
 - The service batch CSV parser follows the local CLI's reading rules: a repeated column name or broken CSV syntax refuses the file, a row with the wrong number of fields is rejected, and only ASCII whitespace around an address is trimmed, as the address parser does.
 
+### Release preparation (issue #7)
+
+- The PyPI page is `docs/pypi.md`, with absolute links pinned to the version tag; the repository README files keep their relative links.
+- A tag push publishes to TestPyPI only. PyPI needs a manual run on the tag with the tag typed again, then the `pypi` Environment approval.
+- CI fails below 93% test coverage and runs the install and smoke tests on macOS as well.
+- The README files state the scope: a CLI that checks syntax and DNS/MX without SMTP, the supported Python surface (syntax parsing and the vocabulary), the CLI compatibility policy, and privacy and acceptable-use notes.
+
 ### Documentation and tests
 
 - Single-label (`user@localhost`) and unbracketed numeric (`user@192.0.2.1`) domains are documented as DNS names, judged by DNS and the destination policy and never read as address literals ([ADR 0005](docs/adr/0005-idna-uts46-domain-encoding.md), judgment 11).

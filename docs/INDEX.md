@@ -34,6 +34,7 @@ Start with the [README](../README.md) (Japanese) or the [English README](../READ
 | [Privacy](privacy.md) | Data handling, retention, and deletion. |
 | [Runbooks](runbooks/) | Incident and operational procedures. |
 | [Release instructions](releasing.md) | Building, validating, and publishing packages. |
+| [PyPI page](pypi.md) | The package description shown on PyPI, with links pinned to the release tag. |
 
 ## Records and templates
 
