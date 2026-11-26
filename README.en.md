@@ -26,13 +26,7 @@ It is for checking and cleaning lists of addresses from the command line:
 - Japanese and English messages
 - privacy by default: files omit addresses, the screen shows them redacted, and CSV cells are escaped against spreadsheet formulas
 
-To validate syntax inside a Python program, a syntax-validation library such as [email-validator](https://pypi.org/project/email-validator/) is a better fit.
-
-### How it differs from other tools
-
-Several tools check recipients over SMTP. What differs here is the combination: local with no external API or account; SMTP off by default and one address per command, with no path from a file or from candidate generation; verified TLS with no plaintext fallback; evidence shown step by step with conservative statuses and categorical confidence, never a score; passive batches with machine-readable output and private defaults; Japanese and English; and a reproducible evaluation with open safety tests. It does not detect catch-all servers, and its TLS requirement means it finishes on fewer servers than most tools. The [comparison](docs/comparison.md) has the details and the limits of SMTP checks (as of 2026-11-26).
-
-> **Release status:** v1.0.0 is not yet published to PyPI. The supported local CLI is available from the repository; the service components are not a ready-to-deploy HTTP service.
+To validate syntax inside a Python program, a syntax-validation library such as [email-validator](https://pypi.org/project/email-validator/) is a better fit. Other tools also check recipients over SMTP; the [comparison](docs/comparison.md) covers the differences and the limits of SMTP checks.
 
 ## Features
 
@@ -147,15 +141,7 @@ emailcheck check alice@example.org --mode active --config emailcheck.toml
 # read the notice it prints, set acknowledged = true, and run it again
 ```
 
-What to know before using it:
-
-- Check only addresses you own or are allowed to check.
-- The receiving server learns the address you check, your IP address, and the EHLO name and sender you configured, and may log them.
-- The only commands sent are EHLO, STARTTLS, MAIL FROM, one RCPT TO, RSET, and QUIT. DATA, BDAT, VRFY, and EXPN are not implemented.
-- TLS with a valid certificate is required; a server that cannot provide it is not checked.
-- Many ISPs and cloud providers block outbound port 25; then the result is `temporary_unknown`. Many servers also refuse connections from home or cloud IP addresses.
-- An accepted recipient is not proof. A server that accepts every address makes an absent mailbox look `likely_deliverable` ([evaluation](docs/evaluation.md)).
-- The rate and quota limits live in one process; running the command again resets them. They are not a licence to check other people's addresses.
+Many ISPs and cloud providers block outbound port 25; then the result is `temporary_unknown`. An accepted recipient is not proof, and a server that accepts every address (catch-all) cannot be told apart ([evaluation](docs/evaluation.md)).
 
 ## Understanding results
 
@@ -196,12 +182,13 @@ In 1.x the supported Python surface is the syntax parser (`emailcheck.parse_addr
 - The domains you check are sent to your DNS resolver.
 - Addresses typed as arguments can stay in shell history; pass sensitive lists in a file.
 - Use candidate generation (`emailcheck expand`) only for addresses you own or are allowed to work with, never to guess or enumerate other people's addresses.
+- In Active Mode the receiving server learns the address you check, your IP address, and the EHLO name and sender you configured, and may log them. Check only addresses you own or are allowed to check.
 
 ## Scope and safety
 
 The local CLI provides Passive and Active Mode checks and offline candidate generation. The repository also includes **library-only** authentication, HTTP handlers, job stores, and active batch components. **No HTTP server ships**, and Active Mode uses none of those service components ([ADR 0022](docs/adr/0022-local-active-mode.md)).
 
-SMTP is off by default. Active Mode runs one address per command, only after the user records in the configuration file that they read its notice, with verified TLS, the destination policy, and pacing. The legacy `--remote` client requires HTTPS, except for HTTP to the exact loopback IP literals `127.0.0.1` and `[::1]` during local development; it rejects redirects and does not use environment proxies.
+SMTP is off by default. Active Mode runs one address per command, only after the user records in the configuration file that they read its notice, with verified TLS, the destination policy, and pacing; those limits apply within one run. It sends only EHLO, STARTTLS, MAIL FROM, one RCPT TO, RSET, and QUIT. The legacy `--remote` client requires HTTPS, except for HTTP to the exact loopback IP literals `127.0.0.1` and `[::1]` during local development; it rejects redirects and does not use environment proxies.
 
 Only probe addresses and systems you own or have explicit permission to test. See [Security](SECURITY.md), [architecture and component reachability](docs/architecture.md#component-reachability), and the [deployment checklist](docs/readiness-checklist.md).
 
