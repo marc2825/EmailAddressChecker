@@ -63,8 +63,108 @@ _TEXT: Final[dict[str, tuple[str, str]]] = {
     "step.no_result": ("no result", "結果なし"),
     "step.unrecognised": ("unrecognised result", "このビルドが知らない結果"),
     "step.no_smtp": (
-        "not checked (this check does not connect to SMTP)",
-        "検査しません（SMTPに接続しないため）",
+        "not checked (Passive Mode; --mode active checks over SMTP)",
+        "検査しません（Passive Mode。SMTPで確かめるには --mode active）",
+    ),
+    "step.smtp_no_result": (
+        "SMTP tried, but no answer was obtained",
+        "SMTPで試みましたが、結果を得られませんでした",
+    ),
+    "step.smtp_skipped": (
+        "SMTP not run: there is nowhere to connect",
+        "SMTPは実施していません（接続先がありません）",
+    ),
+    "hint.label": ("Hint", "ヒント"),
+    "refusal.deadline": ("the time limit was reached", "時間の上限に達しました"),
+    "refusal.limit": ("a rate limit or quota was reached", "件数の上限かレート制限に達しました"),
+    "refusal.capacity": ("too many checks were running", "同時に実行できる数を超えました"),
+    # --- Active Mode -----------------------------------------------------------
+    "active.running": (
+        "Active Mode: connecting over SMTP to the mail server for {domain}. No message is sent.",
+        "Active Mode: {domain} のメールサーバーにSMTPで接続します。メール本文は送信しません。",
+    ),
+    "active.notice": (
+        """Active Mode connects to the mail server of the address's domain and names
+the address in one RCPT TO command. It never sends a message: no DATA, no
+BDAT, no VRFY, no EXPN, and it ends the session with QUIT.
+
+- The receiving server learns the address you check, your IP address, and the
+  EHLO name and sender you configured, and may log and share them.
+- Check only addresses you own or are allowed to check. Probing other
+  people's addresses can get your IP address or domain blocklisted, and may
+  break the law or the terms of your network.
+- Use an EHLO name and sender on a domain you manage. Using someone else's
+  domain misrepresents you.
+- An accepted recipient is not proof that a mailbox exists or is used; many
+  servers accept every address and bounce later.
+- Many ISPs and cloud providers block outbound port 25, and this tool requires
+  TLS with a valid certificate, so a check may not be able to finish.
+- The limits in this tool apply to one process only and do not make probing
+  safe for other people's addresses.""",
+        """Active Mode は、アドレスのドメインのメールサーバーに接続し、RCPT TO コマンド
+で1回だけアドレスを伝えます。メールは送りません（DATA、BDAT、VRFY、EXPN は使わず、
+QUIT で終了します）。
+
+- 接続先のサーバーには、検査したアドレス、あなたのIPアドレス、設定したEHLO名と
+  送信者が伝わり、記録・共有されることがあります。
+- 検査してよいのは、自分が管理するか、検査の許可を得たアドレスだけです。他人の
+  アドレスを調べると、IPアドレスやドメインがブロックリストに載ったり、法律や
+  ネットワークの規約に反したりすることがあります。
+- EHLO名と送信者には、自分が管理するドメインを使ってください。他人のドメインを
+  使うと、あなたの身元を偽ることになります。
+- 受信者が受け付けられても、メールボックスの実在や利用の証明にはなりません。
+  すべてのアドレスを受け付けて後から返送するサーバーも多くあります。
+- 多くのISPやクラウドはポート25への接続を遮断しています。またこのツールは証明書を
+  検証できるTLSを必須にしているので、検査を完了できないことがあります。
+- このツールの制限は1つのプロセスの中だけで働きます。他人のアドレスを調べてよい
+  理由にはなりません。""",
+    ),
+    "config.example": (
+        """# emailcheck configuration. Use it with: emailcheck ... --config FILE
+#
+# [smtp] enables Active Mode: emailcheck check ADDRESS --mode active
+# Use host and sender names on a domain you manage. The EHLO name and the
+# sender's domain must be the same name or one a subdomain of the other.
+[smtp]
+ehlo_hostname = "mail.example.org"
+envelope_sender = "verify@example.org"
+# Set to true only after reading the notice emailcheck prints without it.
+acknowledged = false
+
+# Optional limits; the values below are the defaults. See config/budgets.toml.
+# [batch]
+# max_rows = 10000
+""",
+        """# emailcheck の設定ファイル。使い方: emailcheck ... --config FILE
+#
+# [smtp] で Active Mode を使えます: emailcheck check ADDRESS --mode active
+# ホスト名と送信者には、自分が管理するドメインを使ってください。EHLO名と送信者の
+# ドメインは、同じ名前か、一方が他方のサブドメインである必要があります。
+[smtp]
+ehlo_hostname = "mail.example.org"
+envelope_sender = "verify@example.org"
+# true にするのは、これがないときに表示される注意を読んでからにしてください。
+acknowledged = false
+
+# 上限の設定（任意）。値は既定値です。config/budgets.toml を参照。
+# [batch]
+# max_rows = 10000
+""",
+    ),
+    "error.active_one": (
+        "Active Mode checks one address at a time.",
+        "Active Mode で検査できるのは1件だけです。",
+    ),
+    "error.active_config": (
+        "Active Mode needs an [smtp] section in a --config file. "
+        "Print an example with: emailcheck config example",
+        "Active Mode には、--config で指定するファイルに [smtp] セクションが必要です。"
+        "例は emailcheck config example で表示できます。",
+    ),
+    "error.active_ack": (
+        "Read the notice above, then add acknowledged = true to the [smtp] section of {path}.",
+        "上の注意を読んだうえで、{path} の [smtp] セクションに "
+        "acknowledged = true を加えてください。",
     ),
     "confidence": ("confidence {level}", "信頼度 {level}"),
     "headline": ("{code}  {label} ({confidence})", "{code}  {label}（{confidence}）"),

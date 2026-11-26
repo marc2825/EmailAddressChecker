@@ -17,17 +17,18 @@ import csv
 import json
 import string
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, NoReturn, TextIO
 
 from emailcheck.application.aggregate import aggregate_evidence
 from emailcheck.application.expansion import MAX_POOL_BYTES, ExpansionError, plan_expansion
-from emailcheck.application.local_batch import InputRow, passive_rows
+from emailcheck.application.local_batch import InputRow, check_row, passive_rows
 from emailcheck.application.public_result import public_result_from_json_object
 from emailcheck.application.readiness import report_versions
+from emailcheck.application.verification import AddressVerificationService
 from emailcheck.apps.local_io import InputRefused, ResultWriter, csv_cell, output_file, read_rows
 from emailcheck.apps.messages import (
     CliError,
@@ -42,6 +43,7 @@ from emailcheck.apps.messages import (
 )
 from emailcheck.apps.render import (
     RowLayout,
+    SmtpStep,
     Style,
     Tally,
     batch_summary,
@@ -52,7 +54,9 @@ from emailcheck.apps.render import (
     rows_footer,
 )
 from emailcheck.apps.vocabulary import DATASET_OF, TABLES, every_code, lookup
-from emailcheck.composition import build_verification_stack
+from emailcheck.composition import DeploymentProfile, build_verification_stack
+from emailcheck.domain.address import AddressAccepted, RawAddressInput, parse_address
+from emailcheck.domain.principal import Principal
 from emailcheck.settings import Settings, load_settings
 
 #: Every subcommand. `apps/cli.py` routes an argument list to `run` when its
@@ -148,6 +152,7 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
             say,
             "emailcheck check alice@example.com",
             "emailcheck check a@example.com b@example.org --output results.csv",
+            "emailcheck check alice@example.org --mode active --config emailcheck.toml",
         ),
     )
     check_arguments, check_options = _groups(check, say)
@@ -187,6 +192,25 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
         help=say(
             "input format (default: by extension, .txt means TXT)",
             "入力形式（既定: 拡張子で判断し、.txt ならTXT）",
+        ),
+    )
+    # Batch is passive only. The option is accepted for symmetry and refuses
+    # every other value, so a file can never be checked over SMTP.
+    batch_options.add_argument(
+        "--mode", choices=("passive",), default="passive", help=argparse.SUPPRESS
+    )
+    # ADR 0022: the only way into SMTP from the CLI. One address, and only with
+    # an [smtp] section the user configured and acknowledged.
+    check_options.add_argument(
+        "--mode",
+        choices=("passive", "active"),
+        default="passive",
+        help=say(
+            "passive (default): syntax and DNS only. active: also one SMTP check of a "
+            "single address, without sending mail; needs [smtp] in --config "
+            "(see: emailcheck config example)",
+            "passive（既定）: 構文とDNSだけ。active: 1件だけ、メールを送らずにSMTPでも確かめる。"
+            "--config に [smtp] が必要（例: emailcheck config example）",
         ),
     )
     batch_options.add_argument(
@@ -237,9 +261,6 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
                 "check repeated addresses (keep) or point them to the first row (skip)",
                 "重複したアドレスを検査する（keep）か、最初の行を参照してスキップする（skip）",
             ),
-        )
-        options.add_argument(
-            "--mode", choices=("passive",), default="passive", help=argparse.SUPPRESS
         )
 
     expand = commands.add_parser(
@@ -367,7 +388,14 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
         epilog=_examples(say, "emailcheck config show --config config/budgets.toml"),
     )
     config_arguments, config_options = _groups(config, say)
-    config_arguments.add_argument("action", choices=("show",), help=say("show", "show: 表示する"))
+    config_arguments.add_argument(
+        "action",
+        choices=("show", "example"),
+        help=say(
+            "show: the settings in effect; example: a commented configuration file",
+            "show: 読み込んだ設定を表示する。example: 説明付きの設定ファイルの例を表示する",
+        ),
+    )
 
     versions = commands.add_parser(
         "versions",
@@ -425,6 +453,9 @@ def run(argv: Sequence[str], *, looks: Mapping[str, str] | None = None) -> int:
             return _report(args)
         settings = _settings(args.config)
         if args.command == "config":
+            if args.action == "example":
+                print(text("config.example", lang), end="")
+                return 0
             print(json.dumps(settings.as_json_object(), indent=2, sort_keys=True))
             return 0
         _check_output_folder(args.output)
@@ -439,7 +470,17 @@ def run(argv: Sequence[str], *, looks: Mapping[str, str] | None = None) -> int:
             rows, last_row = _validate_batch_input(args, settings)
         elif rows > settings.batch.max_rows:
             raise CliError("error.too_many", limit=number(settings.batch.max_rows))
-        job = _Job(lang=lang, format=result_format, rows=rows, last_row=last_row, looks=env)
+        active = args.command == "check" and args.mode == "active"
+        if active:
+            _check_active(args, settings, lang)
+        job = _Job(
+            lang=lang,
+            format=result_format,
+            rows=rows,
+            last_row=last_row,
+            looks=env,
+            active=active,
+        )
         return asyncio.run(check(args, settings, job))
     except KeyboardInterrupt:
         print(f"{prog}: {text('error.cancelled', lang)}", file=sys.stderr)
@@ -453,6 +494,27 @@ def run(argv: Sequence[str], *, looks: Mapping[str, str] | None = None) -> int:
         return _refuse(prog, CliError("error.io", detail=reason), lang)
     except ValueError:
         return _refuse(prog, CliError("error.generic"), lang)
+
+
+def _check_active(args: argparse.Namespace, settings: Settings, lang: Lang) -> None:
+    """Refuse Active Mode before anything touches the network (ADR 0022).
+
+    One address; an `[smtp]` section; and `acknowledged = true`, which the user
+    sets after reading the notice printed here. Then one line on stderr names
+    the server about to be contacted.
+    """
+    if len(args.addresses) != 1:
+        raise CliError("error.active_one")
+    if settings.smtp is None:
+        raise CliError("error.active_config")
+    if not settings.smtp.acknowledged:
+        print(text("active.notice", lang) + "\n", file=sys.stderr)
+        raise CliError("error.active_ack", path=args.config)
+    parsed = parse_address(RawAddressInput(args.addresses[0]))
+    if isinstance(parsed, AddressAccepted):
+        print(
+            text("active.running", lang, domain=parsed.address.domain.ascii_form), file=sys.stderr
+        )
 
 
 def _refuse(prog: str, refusal: CliError, lang: Lang) -> int:
@@ -705,6 +767,7 @@ class _Job:
     rows: int
     last_row: int
     looks: Mapping[str, str]
+    active: bool = False
 
 
 class _Progress:
@@ -741,6 +804,15 @@ async def check(args: argparse.Namespace, settings: Settings, job: _Job) -> int:
     else:
         rows = (InputRow(i, value) for i, value in enumerate(args.addresses, 1))
     deployment = settings.apply(_local_deployment())
+    if job.active:
+        # Checked by `_check_active` before the event loop started.
+        assert settings.smtp is not None
+        deployment = replace(
+            deployment,
+            profile=DeploymentProfile.LOCAL_ACTIVE,
+            active_probing=True,
+            sender_identity=settings.smtp.sender_identity(),
+        )
     versions = report_versions(
         package_version=__version__,
         aggregation_ruleset=aggregate_evidence(()).ruleset,
@@ -767,17 +839,21 @@ async def check(args: argparse.Namespace, settings: Settings, job: _Job) -> int:
             writer = None if as_text else ResultWriter(handle, job.format, args.include_address)
             if as_text and not single:
                 print(layout.header_line(screen))
-            stream = passive_rows(
-                rows,
-                service=stack.verification,
-                principal=principal,
-                limits=settings.batch,
-                duplicates=args.duplicates,
-                start_row=getattr(args, "start_row", 1),
-                # The text views need the input to show its redacted form; it
-                # is printed in full only with --include-address.
-                include_address=args.include_address or as_text,
-                progress=report,
+            stream = (
+                _active_rows(rows, stack.verification, principal, include=True)
+                if job.active
+                else passive_rows(
+                    rows,
+                    service=stack.verification,
+                    principal=principal,
+                    limits=settings.batch,
+                    duplicates=args.duplicates,
+                    start_row=getattr(args, "start_row", 1),
+                    # The text views need the input to show its redacted form; it
+                    # is printed in full only with --include-address.
+                    include_address=args.include_address or as_text,
+                    progress=report,
+                )
             )
             async with aclosing(stream):
                 async for result in stream:
@@ -786,7 +862,7 @@ async def check(args: argparse.Namespace, settings: Settings, job: _Job) -> int:
                         result["dataset_versions"] = dict(versions)
                         writer.write(result)
                     elif single:
-                        print(_single(result, args, lang, screen))
+                        print(_single(result, args, lang, screen, active=job.active))
                     else:
                         target = display_target(
                             str(result.get("email", "")), include_address=args.include_address
@@ -809,8 +885,27 @@ async def check(args: argparse.Namespace, settings: Settings, job: _Job) -> int:
     return 3 if tally.not_checked else 0
 
 
+async def _active_rows(
+    rows: Iterator[InputRow],
+    service: AddressVerificationService,
+    principal: Principal,
+    *,
+    include: bool,
+) -> AsyncGenerator[dict[str, object]]:
+    """The single Active Mode row. `_check_active` has refused anything else."""
+    for row in rows:
+        yield await check_row(
+            row, service=service, principal=principal, include_address=include, active=True
+        )
+
+
 def _single(
-    result: Mapping[str, object], args: argparse.Namespace, lang: Lang, style: Style
+    result: Mapping[str, object],
+    args: argparse.Namespace,
+    lang: Lang,
+    style: Style,
+    *,
+    active: bool = False,
 ) -> str:
     """The ladder for one address, or why there is no result."""
     target = display_target(str(result.get("email", "")), include_address=args.include_address)
@@ -819,4 +914,7 @@ def _single(
     published = public_result_from_json_object(
         {key: value for key, value in result.items() if key not in {"email", "row", "state"}}
     )
-    return ladder(published, lang=lang, style=style, target=target)
+    smtp: SmtpStep = "off"
+    if active:
+        smtp = "attempted" if result.get("smtp_executed") is True else "skipped"
+    return ladder(published, lang=lang, style=style, target=target, smtp=smtp)

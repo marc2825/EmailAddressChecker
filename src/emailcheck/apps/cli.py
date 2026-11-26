@@ -557,7 +557,7 @@ def _render(
         lang=_language() if lang is None else lang,
         style=Style.for_stream(sys.stdout, presentation_environment()) if style is None else style,
         target=target,
-        local=local,
+        smtp="off" if local else "remote",
         verbose=verbose,
     )
 

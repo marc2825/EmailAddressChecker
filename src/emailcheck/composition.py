@@ -57,6 +57,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Final
 
 from emailcheck.adapters.auth.api_keys import StaticApiKeyAuthenticator, build_authenticator
 from emailcheck.adapters.dns.cached_resolver import CachedDNSResolver
@@ -107,16 +108,26 @@ from emailcheck.security.identifiers import check_correlation_key
 
 
 class DeploymentProfile(StrEnum):
-    """The three profiles `docs/requirements.md` section 15 defines.
+    """The profiles `docs/requirements.md` section 15 defines.
 
     A field rather than a comment, because section 15's requirements differ per
     profile and `docs/architecture.md` asks for a configuration that refuses
     the unsafe combinations rather than one that documents them.
+
+    `LOCAL_ACTIVE` is the user's own machine running one explicitly requested
+    SMTP check from the CLI (ADR 0022). It is local-passive plus the restricted
+    SMTP pipeline: no jobs, no stores, no worker, and no service component.
     """
 
     LOCAL_PASSIVE = "local-passive"
+    LOCAL_ACTIVE = "local-active"
     LAB_ACTIVE = "lab-active"
     SERVICE_ACTIVE = "service-active"
+
+
+#: The profiles that run in the CLI's own process, answer synchronously, and
+#: own no job, queue, worker, store, or retention daemon.
+LOCAL_PROFILES: Final = frozenset({DeploymentProfile.LOCAL_PASSIVE, DeploymentProfile.LOCAL_ACTIVE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +243,20 @@ class Deployment:
             # Section 15's local-passive profile is "no active probes". A
             # deployment claiming both is a misconfiguration, not a preference.
             raise ValueError("the local-passive profile does not probe")
+        if self.profile is DeploymentProfile.LOCAL_ACTIVE:
+            # ADR 0022: one explicitly requested check from the user's own
+            # machine. It exists to probe, so a local-active deployment that
+            # does not is a misconfiguration, and it keeps nothing: a store
+            # here would be a retention and deletion obligation that no local
+            # command is built to honour.
+            if not self.active_probing:
+                raise ValueError("the local-active profile exists to probe; use local-passive")
+            if (
+                self.store_path is not None
+                or self.job_store_path is not None
+                or self.account_state_path is not None
+            ):
+                raise ValueError("the local-active profile keeps no store")
         if self.profile is DeploymentProfile.LAB_ACTIVE and self.active_probing:
             # Section 15's lab-active profile is "destination allowlist" and
             # "controlled SMTP server or owned domain". A deployment that would
@@ -530,10 +555,10 @@ def build_verification_stack(
     executor = None
     jobs = None
     job_store = None
-    if deployment.profile is not DeploymentProfile.LOCAL_PASSIVE:
-        # The local-passive profile answers synchronously and accepts no job:
-        # `docs/requirements.md` section 15 gives it no queue and no worker, and
-        # an executor nothing submits to is a pool of idle tasks.
+    if deployment.profile not in LOCAL_PROFILES:
+        # The local profiles answer synchronously and accept no job:
+        # `docs/requirements.md` section 15 gives them no queue and no worker,
+        # and an executor nothing submits to is a pool of idle tasks.
         executor = InMemoryJobExecutor(
             clock=monotonic, sleeper=sleeper, settings=deployment.executor
         )
@@ -637,7 +662,7 @@ def _build_retention_scheduler(
     profiles run a daemon" is a property of the object graph rather than of any
     class in it.
     """
-    if deployment.profile is DeploymentProfile.LOCAL_PASSIVE:
+    if deployment.profile in LOCAL_PROFILES:
         return None
     return RetentionScheduler(
         service=retention,

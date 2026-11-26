@@ -184,7 +184,7 @@ def test_the_ladder_explains_an_unknown_route_and_keeps_risk_apart() -> None:
     assert "says nothing about whether this recipient exists" in lines[1]
     assert any("Syntax" in line and "valid form" in line for line in lines)
     assert any("mail route found (MX)" in line and "mx_available" in line for line in lines)
-    assert any("does not connect to SMTP" in line for line in lines)
+    assert any("Passive Mode; --mode active checks over SMTP" in line for line in lines)
     assert any(line.strip().startswith("Note  role_account") for line in lines)
     assert "does not prove that a mailbox exists" in rendered
     assert "No message content was sent." in rendered
@@ -193,7 +193,7 @@ def test_the_ladder_explains_an_unknown_route_and_keeps_risk_apart() -> None:
 def test_the_ladder_in_japanese() -> None:
     rendered = ladder(route_result(), lang="ja", style=Style())
     assert rendered.startswith("unknown  判定できません（信頼度 低）")
-    assert "検査しません（SMTPに接続しないため）" in rendered
+    assert "検査しません（Passive Mode。SMTPで確かめるには --mode active）" in rendered
     assert "メールボックスの実在や利用を証明するものではありません" in rendered
 
 
@@ -496,7 +496,7 @@ def test_a_remote_result_cannot_put_control_characters_on_screen() -> None:
         no_message_data_sent=True,
         ruleset="\x1b[31mruleset",
     )
-    rendered = ladder(result, lang="en", style=Style(), local=False, verbose=True)
+    rendered = ladder(result, lang="en", style=Style(), smtp="remote", verbose=True)
     assert "\x1b" not in rendered
     assert "\x07" not in rendered
     assert "unrecognised result" in rendered

@@ -19,10 +19,17 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final, TextIO
+from typing import Final, Literal, TextIO
 
 from emailcheck.apps.messages import Lang, number, printable, text
-from emailcheck.apps.vocabulary import CONFIDENCE, REASONS, RISK_FLAGS, ROW_ERRORS, STATUSES
+from emailcheck.apps.vocabulary import (
+    CONFIDENCE,
+    HINTS,
+    REASONS,
+    RISK_FLAGS,
+    ROW_ERRORS,
+    STATUSES,
+)
 from emailcheck.domain.address import AddressAccepted, RawAddressInput, parse_address
 from emailcheck.ports.public_contract import PublicResult
 
@@ -125,7 +132,16 @@ def _reason_step(layer: str, code: str, lang: Lang) -> _Step:
     return _Step(term.mark, layer, term.label(lang), code)
 
 
-def _steps(result: PublicResult, lang: Lang, *, local: bool) -> list[_Step]:
+#: What happened at the SMTP step, as the caller knows it.
+#:
+#: - `off`: Passive Mode; SMTP was never allowed.
+#: - `attempted`: Active Mode, and a dialogue was attempted.
+#: - `skipped`: Active Mode, but there was nowhere to connect.
+#: - `remote`: a result from `--remote`, where only the result itself is known.
+SmtpStep = Literal["off", "attempted", "skipped", "remote"]
+
+
+def _steps(result: PublicResult, lang: Lang, *, smtp: SmtpStep) -> list[_Step]:
     checks = result.checks
     syntax_label = text("layer.syntax", lang)
     dns_label = text("layer.dns", lang)
@@ -152,7 +168,12 @@ def _steps(result: PublicResult, lang: Lang, *, local: bool) -> list[_Step]:
     elif stopped:
         steps.append(_Step("none", mailbox_label, text("step.not_reached", lang)))
     else:
-        key = "step.no_smtp" if local else "step.no_result"
+        key = {
+            "off": "step.no_smtp",
+            "attempted": "step.smtp_no_result",
+            "skipped": "step.smtp_skipped",
+            "remote": "step.no_result",
+        }[smtp]
         steps.append(_Step("none", mailbox_label, text(key, lang)))
     return steps
 
@@ -163,7 +184,7 @@ def ladder(
     lang: Lang,
     style: Style,
     target: str | None = None,
-    local: bool = True,
+    smtp: SmtpStep = "off",
     verbose: bool = False,
 ) -> str:
     """The evidence ladder: what was found at each step, and where it stopped."""
@@ -185,7 +206,7 @@ def ladder(
     lines.append(primary.meaning(lang) if primary else status.meaning(lang))
     lines.append("")
 
-    steps = _steps(result, lang, local=local)
+    steps = _steps(result, lang, smtp=smtp)
     layer_cells = max(width(step.layer) for step in steps) + 2
     coded = [width(step.summary) for step in steps if step.code]
     summary_cells = max(coded, default=0) + 2
@@ -196,6 +217,12 @@ def ladder(
         else:
             row += step.summary
         lines.append(row.rstrip())
+
+    hint = HINTS.get(result.checks["smtp"].result) if "smtp" in result.checks else None
+    if hint is not None and smtp in ("attempted", "skipped"):
+        lines.append("")
+        advice = hint[1] if lang == "ja" else hint[0]
+        lines.append(f"  {style.paint(text('hint.label', lang), 'warn')}  {advice}")
 
     if result.risk_flags:
         lines.append("")
@@ -230,6 +257,9 @@ def row_problem(record: Mapping[str, object], lang: Lang) -> str:
     if record.get("state") == "duplicate":
         return text("duplicate_of", lang, row=record.get("duplicate_of"))
     error = str(record.get("error") or "")
+    refusal = record.get("refusal")
+    if refusal in ("deadline", "limit", "capacity"):
+        return text(f"refusal.{refusal}", lang)
     term = ROW_ERRORS.get(error)
     return term.label(lang) if term else error
 

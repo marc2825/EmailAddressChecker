@@ -605,6 +605,47 @@ ROW_ERRORS: Final = _terms(
     ),
 )
 
+#: What a person can do about an SMTP outcome in Active Mode, as (English,
+#: Japanese). Advice about the user's own setup only: nothing here suggests a
+#: way around a server's refusal or a network's restriction.
+HINTS: Final[dict[str, tuple[str, str]]] = {
+    "smtp_connection_timeout": (
+        "Your network may block outbound port 25; many ISPs and cloud providers do. "
+        "The address was not judged.",
+        "接続元のネットワークがポート25への接続を遮断している可能性があります"
+        "（多くのISPやクラウドが遮断しています）。アドレスの判定ではありません。",
+    ),
+    "smtp_connection_refused": (
+        "The server or your network refused the connection on port 25. The address was not judged.",
+        "サーバーか接続元のネットワークが、ポート25への接続を拒否しました。"
+        "アドレスの判定ではありません。",
+    ),
+    "smtp_tls_failure": (
+        "This tool checks only over TLS with a valid certificate, and that was not "
+        "possible with this server.",
+        "このツールは証明書を検証できるTLSでしか検査しません。このサーバーとは、それができませんでした。",
+    ),
+    "smtp_policy_blocked": (
+        "Servers often refuse connections from home or cloud IP addresses, or from a "
+        "host whose reverse DNS and SPF do not match the configured sender.",
+        "家庭やクラウドのIPアドレスや、逆引きDNSとSPFが設定した送信者と一致しない"
+        "接続元は、拒否されることがよくあります。",
+    ),
+    "mail_from_rejected": (
+        "The server refused the configured sender. Check that its domain is yours and "
+        "that SPF allows this machine.",
+        "設定した送信者が拒否されました。自分のドメインか、SPFでこの機器が許可されているかを確認してください。",
+    ),
+    "rcpt_rejected_policy": (
+        "A policy refusal says nothing about whether the recipient exists.",
+        "ポリシーによる拒否からは、受信者の有無は分かりません。",
+    ),
+    "smtp_temporary_failure": (
+        "Some servers defer unknown senders at first (greylisting).",
+        "知らない送信元を最初は一時的に断るサーバーもあります（グレイリスティング）。",
+    ),
+}
+
 #: Every table, in the order `emailcheck explain` lists them.
 TABLES: Final[tuple[dict[str, Term], ...]] = (
     STATUSES,
