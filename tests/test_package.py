@@ -9,6 +9,6 @@ def test_package_imports() -> None:
     config = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert config["project"]["dynamic"] == ["version"]
     assert config["tool"]["hatch"]["version"]["path"] == "src/emailcheck/__init__.py"
-    assert __version__ == "0.1.0"
+    assert __version__ == "1.0.0"
     assert Status.UNKNOWN.value == "unknown"
     assert ConfidenceLevel.MEDIUM.value == "medium"

@@ -18,7 +18,7 @@ on:
         default: testpypi
         options: [testpypi, pypi]
       confirm:
-        description: 'For pypi: type the tag being published, e.g. v0.1.0'
+        description: 'For pypi: type the tag being published, e.g. v1.0.0'
         type: string
         required: false
         default: ''

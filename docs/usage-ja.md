@@ -212,13 +212,13 @@ emailcheck explain [CODE]
 
 ## 互換性の方針
 
-0.1.xの間、次の形を保ちます。
+1.xの間、次の形を保ちます。
 
 - 主な使い方はサブコマンド（`check`、`batch`、`expand`、`explain`、`config`、`versions`、`deployment`）です。`check --mode passive|active` は ADR 0022 で追加しました。
 - `emailcheck ADDRESS` も残します。`--remote` を使えるのはこの形だけです。`--json` の出力は1件の結果のオブジェクトで、APIの結果と同じ形です。`check --json` は行の配列で、行番号や処理状態を含みます。どちらも変えません。
 - `--report-versions` と `--check-deployment` は、`versions` と `deployment` の別名として残します。`--json` は `--output-format json` の短縮形として残します。
 - CSVの配列・オブジェクトの列はJSON文字列のままです。`dataset_versions` と `ruleset` は全行に入ります。
-- 削除や形の変更をするときは、0.2.0以降で、その前の版で警告を出してから行います。
+- 削除や形の変更は 2.0.0 で行い、その前の 1.x の版で警告を出します。
 
 | 終了コード | `emailcheck ADDRESS` での意味 |
 | --- | --- |
@@ -227,4 +227,4 @@ emailcheck explain [CODE]
 | `3` | 上限などで検査しなかった、またはリモートが拒否した。 |
 | `4` | `--remote` のジョブが完了していない。 |
 
-0.1.0より前にGitHubのソースから使っていた場合は、次の点が変わっています。画面（端末）への出力は人が読む形になりました。パイプやファイルへの出力は変わりません。CSVの真偽値は `true` / `false` になりました。エラーの文は具体的になりました。
+1.0.0より前にGitHubのソースから使っていた場合は、次の点が変わっています。画面（端末）への出力は人が読む形になりました。パイプやファイルへの出力は変わりません。CSVの真偽値は `true` / `false` になりました。エラーの文は具体的になりました。

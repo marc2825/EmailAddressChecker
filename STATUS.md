@@ -12,7 +12,7 @@ EmailAddressChecker estimates email deliverability conservatively. It does not v
 | Risk classification | Partial | Role-address data is included; the disposable-domain, free-mail, and provider datasets are empty. |
 | Active SMTP checks | Available, one address | `check --mode active` after the user configures and acknowledges `[smtp]` (ADR 0022). Service deployments still need the readiness checklist. |
 | Service components | Library only | API-key auth, the HTTP request handler, job/verdict/account stores, the executor, retention, active batch, the accept-all experiment, and the beta harness are tested but not reachable from the CLI. No HTTP server ships. See [component reachability](docs/architecture.md#component-reachability). |
-| Package release | Pending | 0.1.0 is unreleased. The package, the PyPI page, and the TestPyPI-first workflow are ready; the owner steps are in [docs/releasing.md](docs/releasing.md). |
+| Package release | Pending | 1.0.0 is unreleased. The package, the PyPI page, and the TestPyPI-first workflow are ready; the owner steps are in [docs/releasing.md](docs/releasing.md). |
 
 ## Roadmap
 

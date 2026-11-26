@@ -32,7 +32,7 @@ To validate syntax inside a Python program, a syntax-validation library such as 
 
 Several tools check recipients over SMTP. What differs here is the combination: local with no external API or account; SMTP off by default and one address per command, with no path from a file or from candidate generation; verified TLS with no plaintext fallback; evidence shown step by step with conservative statuses and categorical confidence, never a score; passive batches with machine-readable output and private defaults; Japanese and English; and a reproducible evaluation with open safety tests. It does not detect catch-all servers, and its TLS requirement means it finishes on fewer servers than most tools. The [comparison](docs/comparison.md) has the details and the limits of SMTP checks (as of 2026-11-26).
 
-> **Release status:** v0.1.0 is not yet published to PyPI. The supported local CLI is available from the repository; the service components are not a ready-to-deploy HTTP service.
+> **Release status:** v1.0.0 is not yet published to PyPI. The supported local CLI is available from the repository; the service components are not a ready-to-deploy HTTP service.
 
 ## Features
 
@@ -54,7 +54,7 @@ cd EmailAddressChecker
 python -m pip install .
 ```
 
-Once 0.1.0 is on PyPI, any of these works:
+Once 1.0.0 is on PyPI, any of these works:
 
 ```bash
 pipx install email-address-checker
@@ -189,7 +189,7 @@ Keep input/output files containing addresses private. Passing sensitive addresse
 
 ## Using it from Python
 
-In 0.1.0 the supported Python surface is the syntax parser (`emailcheck.parse_address`) and the published vocabulary (the names in `emailcheck.__all__`, such as `Status`, `ReasonCode`, and `RiskFlag`). There is no Python API for DNS checks; call the CLI and read its JSON. Other modules are internal and may change without notice.
+In 1.x the supported Python surface is the syntax parser (`emailcheck.parse_address`) and the published vocabulary (the names in `emailcheck.__all__`, such as `Status`, `ReasonCode`, and `RiskFlag`). There is no Python API for DNS checks; call the CLI and read its JSON. Other modules are internal and may change without notice.
 
 ## Privacy and acceptable use
 

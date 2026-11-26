@@ -46,7 +46,7 @@ def test_every_named_path_exists(row: str) -> None:
 def test_the_plan_is_in_the_roadmap_and_linked_from_the_table() -> None:
     text = ARCHITECTURE.read_text(encoding="utf-8")
     section = text.split("### Component reachability", 1)[1].split("\n## ", 1)[0]
-    assert "No public service surface is scheduled for 0.1.0" in section
+    assert "No public service surface is scheduled for 1.0.0" in section
     assert "](../ROADMAP.md)" in section
     roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
     plan = roadmap.split("## Service components", 1)[1].split("\n## ", 1)[0]

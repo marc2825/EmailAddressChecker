@@ -2,7 +2,7 @@
 
 A command-line tool that estimates conservatively, without sending any email, whether an address can receive mail.
 
-[Source](https://github.com/marc2825/EmailAddressChecker/tree/v0.1.0) | [README (Japanese)](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/README.md) | [README (English)](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/README.en.md) | 日本語の説明は末尾にあります。
+[Source](https://github.com/marc2825/EmailAddressChecker/tree/v1.0.0) | [README (Japanese)](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/README.md) | [README (English)](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/README.en.md) | 日本語の説明は末尾にあります。
 
 - **No email, ever.** The default Passive Mode checks syntax and DNS/MX and never connects to a mail server. The opt-in Active Mode asks the recipient's server about one address over SMTP (EHLO, STARTTLS, MAIL FROM, one RCPT TO, QUIT) and never sends a message. Neither can show that a mailbox exists or that a message will be delivered.
 - **Local.** No dedicated server, account, or API key; everything runs on your computer.
@@ -49,7 +49,7 @@ The domains you check are sent to your DNS resolver. Addresses typed on the comm
 
 From Python, only the syntax parser and the published vocabulary are supported (`emailcheck.parse_address`, `Status`, `ReasonCode`, `RiskFlag`, and the other names in `emailcheck.__all__`). Other modules are internal and may change.
 
-More: [CLI reference (Japanese)](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/docs/usage-ja.md) | [Status model](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/docs/status-model.md) | [Privacy](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/docs/privacy.md) | [Security policy](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/SECURITY.md) | [Changelog](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/CHANGELOG.md)
+More: [CLI reference (Japanese)](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/docs/usage-ja.md) | [Status model](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/docs/status-model.md) | [Privacy](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/docs/privacy.md) | [Security policy](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/SECURITY.md) | [Changelog](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/CHANGELOG.md)
 
 Licence: Apache-2.0.
 
@@ -64,4 +64,4 @@ pipx install email-address-checker
 emailcheck check alice@example.com
 ```
 
-詳しくは[日本語のREADME](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/README.md)と[CLIリファレンス](https://github.com/marc2825/EmailAddressChecker/blob/v0.1.0/docs/usage-ja.md)を参照してください。
+詳しくは[日本語のREADME](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/README.md)と[CLIリファレンス](https://github.com/marc2825/EmailAddressChecker/blob/v1.0.0/docs/usage-ja.md)を参照してください。

@@ -2,7 +2,7 @@
 
 This file records user-visible changes. Design reasons are in the [architecture decisions](docs/adr/), and past release checks are in the [release report](docs/release-report.md).
 
-## [0.1.0] — Unreleased
+## [1.0.0] — Unreleased
 
 First release candidate, for Python 3.12+.
 
@@ -73,4 +73,4 @@ Configurations that use HTTP, rely on proxies, or set the opportunistic library 
 - Neither a mail route nor an SMTP acceptance proves that a mailbox exists.
 - The disposable-domain, free-mail, and provider datasets are empty; the role-account list is included.
 - Active batch processing is internal and not exposed through the CLI or an API. Local Active Mode checks one address per command; a service deployment still needs the readiness checklist.
-- Packaging and publishing workflows are ready, but 0.1.0 has not been published to PyPI.
+- Packaging and publishing workflows are ready, but 1.0.0 has not been published to PyPI.

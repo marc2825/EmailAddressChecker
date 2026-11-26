@@ -60,7 +60,7 @@ cd EmailAddressChecker
 python -m pip install .
 ~~~
 
-PyPIへの公開（0.1.0、準備中）のあとは、次のどれでもインストールできます。
+PyPIへの公開（1.0.0、準備中）のあとは、次のどれでもインストールできます。
 
 ~~~bash
 pipx install email-address-checker
@@ -171,7 +171,7 @@ Passive Mode では `likely_deliverable` にはなりません。DNS/MXが正常
 
 ## Pythonから使う場合
 
-0.1.0で互換性を保つPythonの機能は、構文の解析（`emailcheck.parse_address`）と、判定・理由コード・注意フラグなどの語彙（`emailcheck.__all__` に含まれる名前）だけです。DNSを含む検査をPythonから呼ぶAPIはありません。その場合はCLIを呼び出し、JSONの出力を読んでください。これ以外のモジュールは内部実装で、予告なく変わることがあります。
+1.xで互換性を保つPythonの機能は、構文の解析（`emailcheck.parse_address`）と、判定・理由コード・注意フラグなどの語彙（`emailcheck.__all__` に含まれる名前）だけです。DNSを含む検査をPythonから呼ぶAPIはありません。その場合はCLIを呼び出し、JSONの出力を読んでください。これ以外のモジュールは内部実装で、予告なく変わることがあります。
 
 ## プライバシーと利用上の注意
 

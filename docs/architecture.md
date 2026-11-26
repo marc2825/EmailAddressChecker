@@ -18,7 +18,7 @@ The default local stack (`local-passive`) contains no SMTP component at all. `ch
 
 ### Component reachability
 
-Much of the code is service infrastructure that the installed `emailcheck` command does not use. It is tested and composed only through the library, because each piece is a prerequisite for a public service that 0.1.0 does not ship. This table is the authoritative list.
+Much of the code is service infrastructure that the installed `emailcheck` command does not use. It is tested and composed only through the library, because each piece is a prerequisite for a public service that 1.0.0 does not ship. This table is the authoritative list.
 
 | Component | Code | Installed `emailcheck` command | Library (`build_verification_stack`) |
 | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ Much of the code is service infrastructure that the installed `emailcheck` comma
 | Accept-all experiment | `application/accept_all.py` | Not reachable | Not composed; operator-run (see [Accept-all experiment](#accept-all-experiment)) |
 | Limited-beta harness | `application/beta.py` | Not reachable | Not composed; operator-run measurement tooling |
 
-No public service surface is scheduled for 0.1.0, and configuration alone never makes anything in this table reachable from the command line. The order and conditions for connecting these components are in [ROADMAP.md](../ROADMAP.md); until a step is done, its rows above stay "not reachable".
+No public service surface is scheduled for 1.0.0, and configuration alone never makes anything in this table reachable from the command line. The order and conditions for connecting these components are in [ROADMAP.md](../ROADMAP.md); until a step is done, its rows above stay "not reachable".
 
 ## 1. Dependency direction
 
