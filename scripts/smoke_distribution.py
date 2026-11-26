@@ -77,7 +77,8 @@ def smoke(dist: Path, extras: str = "") -> None:
                     "-m",
                     "emailcheck",
                     "check",
-                    "probe@example.com",
+                    # Fails syntax, so even a broken gate could reach no DNS.
+                    "probe@",
                     "--mode",
                     "active",
                     "--config",
@@ -94,6 +95,7 @@ def smoke(dist: Path, extras: str = "") -> None:
                 },
                 text=True,
                 capture_output=True,
+                timeout=60,
             )
             assert gated.returncode == 2, gated
             assert "acknowledged = true" in gated.stderr

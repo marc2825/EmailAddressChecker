@@ -111,22 +111,32 @@ GOOD: Final = (
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "message"),
     [
-        GOOD + 'acknowledged = "true"\n',
-        GOOD + "acknowledged = 1\n",
-        GOOD + 'sender_ip = "192.0.2.1"\n',
-        '[[smtp]]\nehlo_hostname = "probe.example.test"\n',
-        '[smtp]\nehlo_hostname = "probe.example.test"\n',
-        GOOD.replace("verify@probe.example.test", ""),
-        GOOD.replace('"probe.example.test"', "7"),
+        (GOOD + 'acknowledged = "true"\n', "acknowledged must be true or false"),
+        (GOOD + "acknowledged = 1\n", "acknowledged must be true or false"),
+        (GOOD + 'sender_ip = "192.0.2.1"\n', "unknown or malformed"),
+        ('[[smtp]]\nehlo_hostname = "probe.example.test"\n', "unknown or malformed"),
+        ('[smtp]\nehlo_hostname = "probe.example.test"\n', "as text"),
+        (GOOD.replace("verify@probe.example.test", ""), "cannot be empty"),
+        (GOOD.replace("verify@probe.example.test", "<>"), "not a supported mailbox"),
+        (GOOD.replace('"probe.example.test"', "7"), "as text"),
     ],
-    ids=["string-true", "integer", "unknown-key", "array", "no-sender", "null-sender", "number"],
+    ids=[
+        "string-true",
+        "integer",
+        "unknown-key",
+        "array",
+        "no-sender",
+        "empty-sender",
+        "null-sender",
+        "number",
+    ],
 )
-def test_a_malformed_smtp_section_is_refused(tmp_path: Path, text: str) -> None:
+def test_a_malformed_smtp_section_is_refused(tmp_path: Path, text: str, message: str) -> None:
     path = tmp_path / "emailcheck.toml"
     path.write_text(text, encoding="utf-8")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         load_settings(path)
 
 

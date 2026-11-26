@@ -125,8 +125,10 @@ class DeploymentProfile(StrEnum):
     SERVICE_ACTIVE = "service-active"
 
 
-#: Admission for local-active: one check in flight and nothing queued, so the
-#: profile itself refuses to run checks side by side, whatever calls it.
+#: Admission for local-active: one check in flight and the smallest queue the
+#: settings allow, so the profile itself refuses to run checks side by side,
+#: whatever calls it. It does not stop a caller running checks one after
+#: another; the one-address rule is the CLI's (ADR 0022).
 LOCAL_ACTIVE_ADMISSION: Final = AdmissionSettings(
     max_in_flight=1, max_waiting=1, max_per_principal=1
 )
