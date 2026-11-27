@@ -442,9 +442,10 @@ async def test_cancellation_cleans_bounded_workers(monkeypatch: pytest.MonkeyPat
     assert started == finished == consumed == 4
 
 
-def test_no_active_surface(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit):
-        cli.main(["batch", "whatever", "--mode", "active"])
+def test_no_remote_surface_on_expand(capsys: pytest.CaptureFixture[str]) -> None:
+    # `expand` has no --remote surface. (On the experiment branch
+    # experiment/wildcard-active, `batch --mode active` is allowed, so the
+    # former batch assertion here no longer applies.)
     with pytest.raises(SystemExit):
         cli.main(["expand", "a*@example.com", "--remote", "https://example.com"])
 

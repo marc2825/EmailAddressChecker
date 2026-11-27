@@ -24,7 +24,12 @@ from pathlib import Path
 from typing import Final, NoReturn, TextIO
 
 from emailcheck.application.aggregate import aggregate_evidence
-from emailcheck.application.expansion import MAX_POOL_BYTES, ExpansionError, plan_expansion
+from emailcheck.application.expansion import (
+    MAX_POOL_BYTES,
+    Expansion,
+    ExpansionError,
+    plan_expansion,
+)
 from emailcheck.application.local_batch import InputRow, check_row, passive_rows
 from emailcheck.application.public_result import public_result_from_json_object
 from emailcheck.application.readiness import report_versions
@@ -200,10 +205,20 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
             "入力形式（既定: 拡張子で判断し、.txt ならTXT）",
         ),
     )
-    # Batch is passive only. The option is accepted for symmetry and refuses
-    # every other value, so a file can never be checked over SMTP.
+    # EXPERIMENT (branch experiment/wildcard-active, not an ADR change):
+    # batch may run Active Mode over a whole file, so the output of
+    # `expand` can be checked over SMTP. Every row still goes through the
+    # same one-recipient SMTP pipeline as `check --mode active`.
     batch_options.add_argument(
-        "--mode", choices=("passive",), default="passive", help=argparse.SUPPRESS
+        "--mode",
+        choices=("passive", "active"),
+        default="passive",
+        help=say(
+            "passive (default): syntax and DNS only. active (experimental): "
+            "also check every row over SMTP; needs [smtp] in --config.",
+            "passive（既定）: 構文とDNSだけ。active（実験的）: 全行をSMTPでも確かめる。"
+            "--config に [smtp] が必要。",
+        ),
     )
     # ADR 0022: the only way into SMTP from the CLI. One address, and only with
     # an [smtp] section the user configured and acknowledged.
@@ -273,8 +288,11 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
         "expand",
         lang=lang,
         description=say(
-            "Generate candidate addresses offline from a pattern with *. Nothing is checked.",
-            "* を含むパターンから候補のアドレスを作ります。検査や通信はしません。",
+            "Generate candidate addresses from a pattern with *. By default this "
+            "is offline and nothing is checked; with --mode active (experimental) "
+            "every generated candidate is also checked over SMTP.",
+            "* を含むパターンから候補のアドレスを作ります。既定ではオフラインで検査しませんが、"
+            "--mode active（実験的）では生成した候補をすべてSMTPでも確かめます。",
         ),
         epilog=_examples(
             say,
@@ -332,6 +350,21 @@ def parser(lang: Lang = "en") -> argparse.ArgumentParser:
         help=say(
             "candidates for one *, one per line; once per *",
             "* ごとの候補ファイル（* の数だけ繰り返す）",
+        ),
+    )
+    # EXPERIMENT (branch experiment/wildcard-active): with --mode active the
+    # generated candidates are fed to the same one-recipient SMTP pipeline
+    # as `check --mode active`, one candidate at a time.
+    expand_options.add_argument(
+        "--mode",
+        choices=("passive", "active"),
+        default="passive",
+        help=say(
+            "passive (default): only generate candidates, offline. active "
+            "(experimental): also check every candidate over SMTP; needs "
+            "[smtp] in --config.",
+            "passive（既定）: 候補の生成だけをオフラインで行う。active（実験的）: "
+            "候補をすべてSMTPでも確かめる。--config に [smtp] が必要。",
         ),
     )
     expand_options.add_argument(
@@ -468,6 +501,8 @@ def run(argv: Sequence[str], *, looks: Mapping[str, str] | None = None) -> int:
             return 0
         _check_output_folder(args.output)
         if args.command == "expand":
+            if args.mode == "active":
+                return _expand_active(args, settings, lang, env)
             return expand(args, settings, lang)
         result_format = _result_format(args, sys.stdout)
         rows = len(args.addresses) if args.command == "check" else 0
@@ -478,7 +513,7 @@ def run(argv: Sequence[str], *, looks: Mapping[str, str] | None = None) -> int:
             rows, last_row = _validate_batch_input(args, settings)
         elif rows > settings.batch.max_rows:
             raise CliError("error.too_many", limit=number(settings.batch.max_rows))
-        active = args.command == "check" and args.mode == "active"
+        active = args.mode == "active"
         if active:
             _check_active(args, settings, lang)
         job = _Job(
@@ -504,25 +539,35 @@ def run(argv: Sequence[str], *, looks: Mapping[str, str] | None = None) -> int:
         return _refuse(prog, CliError("error.generic"), lang)
 
 
-def _check_active(args: argparse.Namespace, settings: Settings, lang: Lang) -> None:
-    """Refuse Active Mode before anything touches the network (ADR 0022).
-
-    One address; an `[smtp]` section; and `acknowledged = true`, which the user
-    sets after reading the notice printed here. Then one line on stderr names
-    the server about to be contacted.
-    """
-    if len(args.addresses) != 1:
-        raise CliError("error.active_one")
+def _require_smtp_ready(settings: Settings, lang: Lang, config: Path | None) -> None:
+    """An `[smtp]` section, acknowledged, before anything touches the network."""
     if settings.smtp is None:
         raise CliError("error.active_config")
     if not settings.smtp.acknowledged:
         print(text("active.notice", lang) + "\n", file=sys.stderr)
-        raise CliError("error.active_ack", path=args.config)
-    parsed = parse_address(RawAddressInput(args.addresses[0]))
-    if isinstance(parsed, AddressAccepted):
-        print(
-            text("active.running", lang, domain=parsed.address.domain.ascii_form), file=sys.stderr
-        )
+        raise CliError("error.active_ack", path=config)
+
+
+def _check_active(args: argparse.Namespace, settings: Settings, lang: Lang) -> None:
+    """Refuse Active Mode before anything touches the network (ADR 0022).
+
+    `check` takes one address; an `[smtp]` section; and `acknowledged = true`,
+    which the user sets after reading the notice printed here. Then one line
+    on stderr names the server about to be contacted.
+
+    EXPERIMENT (branch experiment/wildcard-active): `batch --mode active`
+    skips the one-address refusal and checks every row of the file instead.
+    """
+    if args.command == "check" and len(args.addresses) != 1:
+        raise CliError("error.active_one")
+    _require_smtp_ready(settings, lang, args.config)
+    if args.command == "check":
+        parsed = parse_address(RawAddressInput(args.addresses[0]))
+        if isinstance(parsed, AddressAccepted):
+            print(
+                text("active.running", lang, domain=parsed.address.domain.ascii_form),
+                file=sys.stderr,
+            )
 
 
 def _refuse(prog: str, refusal: CliError, lang: Lang) -> int:
@@ -661,7 +706,8 @@ def _slots(values: list[str]) -> list[list[str]]:
     return pools
 
 
-def expand(args: argparse.Namespace, settings: Settings, lang: Lang) -> int:
+def _expansion_plan(args: argparse.Namespace, settings: Settings) -> tuple[Expansion, int]:
+    """Build the candidate plan for `expand` (shared by passive and active)."""
     candidates = list(string.ascii_lowercase)
     if args.chars is not None:
         candidates = list(args.chars)
@@ -692,6 +738,14 @@ def expand(args: argparse.Namespace, settings: Settings, lang: Lang) -> int:
         plan = plan_expansion(
             args.pattern, candidates=candidates, positions=positions, max_candidates=maximum
         )
+    except ExpansionError as refusal:
+        raise CliError("error.expand", detail=str(refusal), translate=True) from None
+    return plan, maximum
+
+
+def expand(args: argparse.Namespace, settings: Settings, lang: Lang) -> int:
+    plan, maximum = _expansion_plan(args, settings)
+    try:
         if args.dry_run:
             if _is_terminal(sys.stdout):
                 print(text("expand.dry_run", lang, count=number(plan.count), limit=number(maximum)))
@@ -733,6 +787,57 @@ def expand(args: argparse.Namespace, settings: Settings, lang: Lang) -> int:
             file=sys.stderr,
         )
     return 0
+
+
+def _expand_active(
+    args: argparse.Namespace,
+    settings: Settings,
+    lang: Lang,
+    looks: Mapping[str, str],
+) -> int:
+    """EXPERIMENT: check every candidate `expand` generates, over SMTP.
+
+    The candidates are materialised (the plan is bounded by
+    `--max-candidates`), then handed to the ordinary Active Mode row
+    pipeline as if they had been typed into `check`, one candidate and one
+    `RCPT TO` at a time. The result format follows `check`: CSV for
+    `--output-format csv` or a `.csv` output file, text on a terminal,
+    JSON otherwise.
+    """
+    _require_smtp_ready(settings, lang, args.config)
+    plan, _maximum = _expansion_plan(args, settings)
+    try:
+        addresses = list(plan)
+    except ExpansionError as refusal:
+        raise CliError("error.expand", detail=str(refusal), translate=True) from None
+    if addresses:
+        parsed = parse_address(RawAddressInput(addresses[0]))
+        if isinstance(parsed, AddressAccepted):
+            print(
+                text("active.running", lang, domain=parsed.address.domain.ascii_form),
+                file=sys.stderr,
+            )
+    check_args = argparse.Namespace(
+        command="check",
+        addresses=addresses,
+        mode="active",
+        config=args.config,
+        output=args.output,
+        output_format="csv" if args.output_format == "csv" else None,
+        json=False,
+        include_address=False,
+        duplicates="keep",
+        progress=args.progress,
+    )
+    job = _Job(
+        lang=lang,
+        format=_result_format(check_args, sys.stdout),
+        rows=len(addresses),
+        last_row=len(addresses),
+        looks=looks,
+        active=True,
+    )
+    return asyncio.run(check(check_args, settings, job))
 
 
 # --- check and batch ------------------------------------------------------------

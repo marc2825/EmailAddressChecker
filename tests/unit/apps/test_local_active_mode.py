@@ -222,7 +222,7 @@ def test_the_notice_in_japanese(
     assert "自分が管理するか、検査の許可を得たアドレスだけ" in err
 
 
-def test_active_mode_checks_one_address_and_never_a_file(
+def test_active_mode_checks_one_address_per_check_but_batch_active_checks_a_file(
     monkeypatch: pytest.MonkeyPatch,
     network: Network,
     config: Path,
@@ -233,11 +233,37 @@ def test_active_mode_checks_one_address_and_never_a_file(
     argv = ["check", ADDRESS, f"second@{DOMAIN}", "--mode", "active", "--config", str(config)]
     assert commands.run(argv) == 2
     assert "one address at a time" in capsys.readouterr().err
+    assert network.transports == []
+    # EXPERIMENT (branch experiment/wildcard-active): batch --mode active is
+    # allowed and checks every row of the file over SMTP.
     source = tmp_path / "in.txt"
     source.write_text(f"{ADDRESS}\n", encoding="utf-8")
-    with pytest.raises(SystemExit):
-        commands.run(["batch", str(source), "--mode", "active", "--config", str(config)])
-    assert network.transports == []
+    assert commands.run(["batch", str(source), "--mode", "active", "--config", str(config)]) == 0
+    assert len(network.transports) == 1
+
+
+def test_expand_active_checks_every_generated_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    network: Network,
+    config: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # EXPERIMENT (branch experiment/wildcard-active): expand --mode active
+    # feeds the generated candidates to the Active Mode pipeline.
+    serve(monkeypatch, network)
+    argv = [
+        "expand",
+        f"probe.*@{DOMAIN}",
+        "--candidate",
+        "target",
+        "--mode",
+        "active",
+        "--config",
+        str(config),
+    ]
+    assert commands.run(argv) == 0
+    assert len(network.transports) == 1
+    assert network.peer_commands.count(SMTPCommand.RCPT_TO) == 1
 
 
 def test_an_unaligned_sender_is_refused_as_configuration(
@@ -481,7 +507,7 @@ def test_the_legacy_single_address_form_still_has_no_active_flag() -> None:
     assert "mode" not in options
 
 
-def test_only_check_accepts_active() -> None:
+def test_check_batch_and_expand_accept_active() -> None:
     root = commands.parser()
     modes: dict[str, tuple[str, ...]] = {}
     for action in root._actions:
@@ -489,7 +515,13 @@ def test_only_check_accepts_active() -> None:
             for option in getattr(sub, "_actions", ()):
                 if option.dest == "mode":
                     modes[name] = tuple(option.choices)
-    assert modes == {"check": ("passive", "active"), "batch": ("passive",)}
+    # EXPERIMENT (branch experiment/wildcard-active): batch and expand also
+    # accept active; on main only check does (ADR 0022).
+    assert modes == {
+        "check": ("passive", "active"),
+        "batch": ("passive", "active"),
+        "expand": ("passive", "active"),
+    }
 
 
 # --- privacy of the output (security review B1) ------------------------------------
